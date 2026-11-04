@@ -32,7 +32,26 @@ export function registerStudio(ctx: StudioContext): void {
   const p = () => paths(root());
   const studioDir = () => path.join(root(), 'studio');
   const musicDir = () => path.join(root(), 'music');
-  const reelsDir = () => path.join(root(), 'exports', 'reels');
+  const defaultReelsDir = () => path.join(root(), 'exports', 'reels');
+  // Studio's own preferences (the export folder), kept next to the projects.
+  const prefsFile = () => path.join(studioDir(), 'prefs.json');
+  const readPrefs = (): { exportDir?: string } => {
+    try {
+      const j = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'));
+      return j && typeof j === 'object' ? j : {};
+    } catch {
+      return {};
+    }
+  };
+  const writePrefs = (patch: { exportDir?: string }) => {
+    fs.mkdirSync(studioDir(), { recursive: true });
+    fs.writeFileSync(prefsFile(), JSON.stringify({ ...readPrefs(), ...patch }, null, 2));
+  };
+  /** Where exports go: the folder you picked, or <clips folder>\exports\reels. */
+  const reelsDir = () => {
+    const d = readPrefs().exportDir;
+    return typeof d === 'string' && path.isAbsolute(d) ? d : defaultReelsDir();
+  };
 
   const ffmpeg = async () => {
     const info = await findFfmpeg(ctx.ffmpegPath());
@@ -52,10 +71,12 @@ export function registerStudio(ctx: StudioContext): void {
   };
   const store = () => new ProjectStore(path.join(studioDir(), 'projects'));
   const analysisFor = (proj: ReelProject) => (proj.music ? music().get(proj.music.trackId)?.analysis ?? null : null);
-  const within = (file: string) => {
-    const rel = path.relative(path.resolve(root()), path.resolve(file));
-    return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  const inside = (dir: string, file: string) => {
+    const rel = path.relative(path.resolve(dir), path.resolve(file));
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
   };
+  // Files the Studio may open or upload: under the clips folder or the export folder.
+  const within = (file: string) => inside(root(), file) || inside(reelsDir(), file);
 
   const handle = (channel: string, fn: (e: IpcMainInvokeEvent, ...args: any[]) => unknown) => {
     ipcMain.removeHandler(channel);
@@ -365,6 +386,18 @@ export function registerStudio(ctx: StudioContext): void {
     const dir = which === 'music' ? musicDir() : reelsDir();
     fs.mkdirSync(dir, { recursive: true });
     return shell.openPath(dir);
+  });
+  handle('studio:exportDir:choose', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const r = await dialog.showOpenDialog(win!, { title: 'Save reels to', defaultPath: reelsDir(), properties: ['openDirectory', 'createDirectory'] });
+    if (r.canceled || !r.filePaths[0]) return reelsDir();
+    fs.mkdirSync(r.filePaths[0], { recursive: true });
+    writePrefs({ exportDir: r.filePaths[0] });
+    return reelsDir();
+  });
+  handle('studio:exportDir:reset', () => {
+    writePrefs({ exportDir: undefined });
+    return reelsDir();
   });
   handle('studio:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && /^https:\/\/[^\s]+$/i.test(url)) return shell.openExternal(url);

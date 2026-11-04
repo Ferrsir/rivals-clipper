@@ -59,7 +59,7 @@ Open the **Studio** tab to turn clips into a TikTok, Reel, Short or YouTube edit
 3. **Style**: pick a preset (Story edit, Velocity, Beat cuts, Cinematic, Raw) or type a change in plain English and the AI adjusts the recipe. Every kill and cut lands on a beat, and your best kill lands on the drop.
 4. **Clip**: trim, nudge kill markers, drag the vertical crop box, punch in, and turn **your mic on or off per clip** (it lives on its own audio track).
 5. **Text**: hook card at the start, story captions that change on the beat, and an AI-written post caption.
-6. **Preview** renders a quick low-res version. **Export** saves full-quality files to `F:\RivalsClips\exports\reels`, for several formats at once if you like, plus an optional copy without music so you can add the same song inside TikTok or Instagram (the app tells you where the song should start).
+6. **Preview** renders a quick low-res version. **Export** saves full-quality files to `F:\RivalsClips\exports\reels`, or any folder you pick with *Change folder* in the export window, for several formats at once if you like, plus an optional copy without music so you can add the same song inside TikTok or Instagram (the app tells you where the song should start).
 
 ### Reel ideas
 
@@ -69,9 +69,9 @@ The **Ideas** tab suggests reels in the style of the reference edits (hook card,
 
 *Find free music* (Music tab) and *Find a picture* (Text tab, hook card) search [Openverse](https://openverse.org) for Creative Commons and public-domain songs and images. Only licences that allow commercial use and editing are shown (CC0, public domain, CC BY, CC BY-SA). CC BY and BY-SA need a credit, so the Studio shows it under the post caption and adds it when you upload. Trending songs are still best added inside TikTok or Instagram, using the copy without music.
 
-### Uploading
+### Uploading (optional, for later)
 
-After an export, each file has an upload button. The platforms only allow uploads through a developer app of your own, which is free to make. Open **Accounts** in the Studio for step-by-step setup. Your keys and sign-ins are stored on this PC, encrypted by Windows.
+Exporting to a folder is all you need. If you want one-click uploads later, each exported file can also get an upload button. The platforms only allow uploads through a developer app of your own, which is free to make. Open **Accounts** in the Studio for step-by-step setup. Your keys and sign-ins are stored on this PC, encrypted by Windows.
 
 | Platform | What it does | What you need |
 | --- | --- | --- |

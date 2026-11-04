@@ -243,3 +243,6 @@
 .st-upload.error { border-color: color-mix(in srgb, var(--st-bad) 50%, var(--line)); }
 .st-upload .st-row { flex-wrap: nowrap; }
 .st-upload .st-clip-sub { min-width: 0; }
+
+.st-export-folder { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.st-export-folder [hidden] { display: none; }

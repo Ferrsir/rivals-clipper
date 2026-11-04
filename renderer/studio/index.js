@@ -771,7 +771,7 @@ function exportDone(job) {
       );
     }),
     job.files.some((f) => f.includes('_nomusic')) && S.project.music ? h('p', { class: 'st-note' }, `For the no-music copy: add "${S.project.music.title}" in the app and set the sound to start at ${fmtTime(startAt, true)}.`) : null,
-    !S.publish.some((x) => x.connected) ? h('p', { class: 'st-note' }, 'Want one-click uploads? ', h('a', { href: '#', onclick: (e) => (e.preventDefault(), openAccounts(root, S, () => (renderTop(), renderCenter()))) }, 'Connect your accounts'), '.') : null,
+    h('div', { class: 'st-row' }, h('span', { class: 'st-note st-wrap' }, `In ${S.init.paths.reels}`), h('div', { class: 'st-spacer' }), h('button', { class: 'st-btn small ghost', onclick: () => api.openFolder('reels') }, 'Open folder')),
   );
 }
 
@@ -808,8 +808,7 @@ async function startUpload(project, file, platform) {
 }
 
 async function autoUploadAfterExport(job, files) {
-  const proj = job.projectId === S.project.id ? S.project : await api.projects.get(job.projectId).catch(() => null);
-  if (!proj) return;
+  const proj = job.snapshot;
   for (const platform of job.autoUpload) {
     const mine = files.filter((f) => PLATFORM_OF_FORMAT[formatOfFile(f).format] === platform);
     if (!mine.length) {
@@ -1274,12 +1273,38 @@ function drawTL(playhead) {
 
 // ---------- rendering ----------
 
+/** "Saved to <folder>" with buttons to pick another folder on this PC, open it, or go back to the default. */
+function exportFolderRow() {
+  const label = h('span', { class: 'st-wrap' }, S.init.paths.reels);
+  const isDefault = () => /[\\/]exports[\\/]reels$/i.test(S.init.paths.reels) && S.init.paths.reels.startsWith(S.init.paths.root);
+  const reset = h('button', { class: 'st-btn small ghost', hidden: isDefault(), onclick: async () => update(await api.exportDir.reset()) }, 'Use default');
+  const update = (dir) => {
+    S.init.paths.reels = dir;
+    label.textContent = dir;
+    reset.hidden = isDefault();
+  };
+  return h(
+    'div',
+    { class: 'st-export-folder' },
+    h('div', { class: 'st-note' }, 'Saved to ', label),
+    h(
+      'div',
+      { class: 'st-row' },
+      h('button', { class: 'st-btn small', onclick: async () => update(await api.exportDir.choose()) }, 'Change folder'),
+      h('button', { class: 'st-btn small ghost', onclick: () => api.openFolder('reels') }, 'Open folder'),
+      reset,
+    ),
+  );
+}
+
 async function startRender(req) {
   saveSoon.flush(S.project);
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
   try {
-    const { jobId } = await api.render(S.project, request);
-    S.job = { jobId, autoUpload: req.autoUpload ?? [], projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+    // Uploads use the reel as it was rendered, even if it is edited while the export runs.
+    const snapshot = structuredClone(S.project);
+    const { jobId } = await api.render(snapshot, request);
+    S.job = { jobId, autoUpload: req.autoUpload ?? [], snapshot, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
   } catch (err) {
     toast(root, err.message, 'error', 7000);
   }
@@ -1339,7 +1364,7 @@ function openExport() {
       'div',
       { class: 'st-dialog' },
       h('h2', {}, 'Export'),
-      h('p', { class: 'st-note' }, `Saved to ${S.init.paths.reels}`),
+      exportFolderRow(),
       rows,
       h('hr'),
       p.music ? toggle({ label: 'Also save a copy without music', checked: noMusic, onChange: (v) => (noMusic = v), hint: 'Add the same song in TikTok or Instagram for full reach and no mute' }) : null,
@@ -1352,7 +1377,7 @@ function openExport() {
             h('div', { class: 'st-label' }, 'Upload when it\'s done'),
             connected.map((st) => toggle({ label: st.platform === 'tiktok' && st.tiktokMode !== 'direct' ? `Send to TikTok drafts (${st.account ?? 'TikTok'})` : `Upload to ${st.label} (${st.account ?? st.label})`, checked: false, onChange: (v) => (v ? autoUpload.add(st.platform) : autoUpload.delete(st.platform)), hint: 'Uses the matching export: TikTok for TikTok, Reels for Instagram, Shorts or YouTube for YouTube' })),
           ]
-        : h('p', { class: 'st-note' }, 'To upload straight to YouTube, TikTok or Instagram, ', h('a', { href: '#', onclick: (e) => (e.preventDefault(), close(), openAccounts(root, S, () => (renderTop(), renderCenter()))) }, 'connect your accounts'), '.'),
+        : null,
       toggle({ label: gpuOk ? `Faster export on the graphics card (${S.init.ffmpeg.gpuEncoders[0].replace('h264_', '').toUpperCase()})` : 'Faster export on the graphics card (not available)', checked: gpu, disabled: !gpuOk, onChange: (v) => (gpu = v) }),
       h(
         'div',

@@ -95,6 +95,29 @@ function safeBase(s: string): string {
   return s.replace(/[^a-z0-9 _-]+/gi, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'download';
 }
 
+/** Read a response body, stopping as soon as it passes `max` bytes (chunked responses too). */
+export async function readCapped(res: Response, max: number): Promise<Buffer> {
+  if (Number(res.headers.get('content-length')) > max) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('The file is too big.');
+  }
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const parts: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error('The file is too big.');
+    }
+    parts.push(Buffer.from(value));
+  }
+  return Buffer.concat(parts, total);
+}
+
 /** Download a search result into `dir`. Checks the type and caps the size. */
 export async function download(m: FreeMedia, dir: string, fetchFn: Fetch = fetch): Promise<string> {
   if (!/^https:\/\//i.test(m.url)) throw new Error('Only https downloads are allowed.');
@@ -105,8 +128,7 @@ export async function download(m: FreeMedia, dir: string, fetchFn: Fetch = fetch
   const urlExt = path.extname(new URL(m.url).pathname).toLowerCase();
   if (!type.startsWith(want) && !(type === 'application/octet-stream' && urlExt)) throw new Error(`That link isn't ${m.kind === 'audio' ? 'an audio file' : 'a picture'} (${type || 'unknown type'}).`);
   const max = m.kind === 'audio' ? 60 * 1024 * 1024 : 20 * 1024 * 1024;
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > max) throw new Error('The file is too big.');
+  const buf = await readCapped(res, max);
   if (buf.length < 512) throw new Error('The download was empty.');
   const ext = EXT[type] ?? (urlExt && urlExt.length <= 5 ? urlExt : m.kind === 'audio' ? '.mp3' : '.jpg');
   fs.mkdirSync(dir, { recursive: true });
