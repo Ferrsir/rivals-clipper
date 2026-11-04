@@ -7,10 +7,10 @@
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Settings, defaultBitrate, localOptions } from '../settings';
+import { Settings, localOptions } from '../settings';
 import { wavHeader } from './audio-buffer';
 import { AUDIO_FORMAT, AudioCapture, helperPath, listAudioDevices } from './audio-helper';
-import { ENCODER_LABEL, describeProbe, muxArgs, probeCapture, recordArgs, type EncoderId, type ProbeResult } from './encoder';
+import { ENCODER_LABEL, describeProbe, muxArgs, planRecording, probeCapture, recordArgs, type EncoderId, type ProbeResult } from './encoder';
 import { TsReplayBuffer, type CaptureHandle } from './ts-buffer';
 import type { BufferInfo, ClipRecorder, GameProcess, MicDevice, SavedVideo } from './types';
 
@@ -102,17 +102,14 @@ export class LocalRecorder implements ClipRecorder {
 
     const width = probe.width ?? 1920;
     const height = probe.height ?? 1080;
-    const fps = settings.fps;
+    const format = planRecording(settings, { width, height }, probe.encoder);
+    const { fps } = format;
     const bufferMs = settings.bufferSeconds * 1000;
     // Audio is held a little longer than video; a clip being recorded also pins its own audio (startClip).
     const audioMs = bufferMs + 5000;
-    // CPU encoding is capped at 1080p so it doesn't eat the game's frame time.
-    const scaleHeight = probe.encoder.id === 'x264' ? Math.min(1080, height) : undefined;
-    const outH = scaleHeight ?? height;
-    const kbps = settings.bitrateKbps || defaultBitrate(outH, fps);
-
     this.ts = new TsReplayBuffer({ maxMs: bufferMs, frameTicks: Math.round(90000 / fps) });
-    const args = recordArgs({ outputIdx: captureMonitor, fps, bitrateKbps: kbps, encoder: probe.encoder, scaleHeight, width, height });
+    const args = recordArgs({ ...format, outputIdx: captureMonitor, width, height });
+    this.log(`Recording at ${format.width}x${format.height}, ${fps} fps${format.scaleHeight ? ' (resized to your recording limit)' : ''}`);
     this.spawnFfmpeg(ffmpeg, args);
 
     // Audio: the game's own sound (or the whole desktop) and the mic, each on its own track.
@@ -146,8 +143,8 @@ export class LocalRecorder implements ClipRecorder {
       throw err;
     }
     this.info = {
-      width: scaleHeight ? Math.round((width * scaleHeight) / height / 2) * 2 : width,
-      height: outH,
+      width: format.width,
+      height: format.height,
       fps,
       micRecorded,
       engine: 'local',

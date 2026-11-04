@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { AudioChunkParser, PcmRing, encodeChunk, wavHeader } from '../src/main/capture/audio-buffer';
 import { TS_PACKET, TsReplayBuffer } from '../src/main/capture/ts-buffer';
-import { ddagrabSource, encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
+import { ddagrabSource, encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, planRecording, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
 import { parseTasklist, GameWatcher } from '../src/main/capture/game-watcher';
 import { chooseEngine, lateBy } from '../src/main/engine';
 import { DEFAULT_SETTINGS, localOptions } from '../src/main/settings';
@@ -145,6 +145,45 @@ test('wav header describes 16-bit PCM', () => {
 });
 
 // ---------- encoder choice ----------
+
+test('local GPU recording honors a lower resolution and reports the encoded dimensions', () => {
+  const native = { width: 3840, height: 2160 };
+  const format = planRecording({ ...DEFAULT_SETTINGS, resolution: '1080p' }, native, { id: 'nvenc', gpuFrames: true });
+  assert.equal(format.width, 1920);
+  assert.equal(format.height, 1080);
+  assert.equal(format.bitrateKbps, 20000);
+  assert.deepEqual(format.encoder, { id: 'nvenc', gpuFrames: false });
+  const args = recordArgs({ ...format, ...native, outputIdx: 0 });
+  assert.match(args[args.indexOf('-vf') + 1], /hwdownload.*scale=-2:1080/);
+  assert.equal(args[args.indexOf('-c:v') + 1], 'h264_nvenc');
+});
+
+test('native GPU recording stays on GPU and never upscales a smaller monitor', () => {
+  for (const resolution of ['native', '2160p'] as const) {
+    const format = planRecording({ ...DEFAULT_SETTINGS, resolution, fps: 120 }, { width: 1920, height: 1080 }, { id: 'amf', gpuFrames: true });
+    assert.equal(format.width, 1920);
+    assert.equal(format.height, 1080);
+    assert.equal(format.fps, 120);
+    assert.equal(format.encoder.gpuFrames, true);
+    assert.equal(format.scaleHeight, undefined);
+  }
+});
+
+test('CPU fallback fits within 1920x1080 at 60 fps even on ultrawide monitors', () => {
+  const format = planRecording({ ...DEFAULT_SETTINGS, fps: 120 }, { width: 3840, height: 1080 }, { id: 'x264', gpuFrames: false });
+  assert.equal(format.width, 1920);
+  assert.equal(format.height, 540);
+  assert.equal(format.fps, 60);
+  const portrait = planRecording(DEFAULT_SETTINGS, { width: 2160, height: 3840 }, { id: 'x264', gpuFrames: false });
+  assert.ok(portrait.width <= 1920 && portrait.height <= 1080);
+});
+
+test('recording preserves aspect ratio and the chosen bitrate', () => {
+  const format = planRecording({ ...DEFAULT_SETTINGS, resolution: '1080p', bitrateKbps: 12345 }, { width: 3440, height: 1440 }, { id: 'nvenc', gpuFrames: true });
+  assert.equal(format.width, 2580);
+  assert.equal(format.height, 1080);
+  assert.equal(format.bitrateKbps, 12345);
+});
 
 test('screen capture options exist in the Windows ffmpeg build', { skip: process.platform !== 'win32' }, () => {
   const bundled = require('ffmpeg-static') as string;
