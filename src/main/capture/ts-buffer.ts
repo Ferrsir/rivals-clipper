@@ -159,6 +159,12 @@ export class TsReplayBuffer {
     return handle;
   }
 
+  /** Wall-clock time of a capture's first frame, or undefined before any video has arrived. */
+  captureStart(handle: CaptureHandle): number | undefined {
+    const first = handle.gops[0];
+    return first ? this.wallOf(first.pts) : undefined;
+  }
+
   /** Finish a clip. Returns the TS bytes and exact wall-clock bounds. */
   endCapture(handle: CaptureHandle, untilEpoch?: number): CaptureResult | undefined {
     handle.active = false;

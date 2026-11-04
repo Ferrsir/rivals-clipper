@@ -15,9 +15,14 @@ interface PcmChunk {
   data: Buffer;
 }
 
+/** A pin never holds more than this beyond the normal window, so a pin that is never released can't eat RAM. */
+const PIN_LIMIT_MS = 10 * 60_000;
+
 export class PcmRing {
   private chunks: PcmChunk[] = [];
   private lastEpoch = 0;
+  private pins = new Map<number, number>();
+  private nextPin = 1;
 
   constructor(
     public readonly format: AudioFormat,
@@ -26,6 +31,18 @@ export class PcmRing {
 
   setMaxMs(ms: number): void {
     this.maxMs = ms;
+  }
+
+  /**
+   * Keep everything from `fromEpoch` on, even once it is older than the window, until the returned
+   * function is called. Used while a clip is being recorded, since a clip can be longer than the window.
+   */
+  pin(fromEpoch: number): () => void {
+    const id = this.nextPin++;
+    this.pins.set(id, fromEpoch);
+    return () => {
+      this.pins.delete(id);
+    };
   }
 
   get bytesPerFrame(): number {
@@ -47,7 +64,9 @@ export class PcmRing {
     if (!frames) return;
     this.chunks.push({ epochMs, frames, data: Buffer.from(data.subarray(0, frames * this.bytesPerFrame)) });
     this.lastEpoch = epochMs;
-    const cutoff = this.endEpoch - this.maxMs;
+    let cutoff = this.endEpoch - this.maxMs;
+    for (const from of this.pins.values()) cutoff = Math.min(cutoff, from);
+    cutoff = Math.max(cutoff, this.endEpoch - this.maxMs - PIN_LIMIT_MS);
     while (this.chunks.length > 1) {
       const c = this.chunks[0];
       if (c.epochMs + (c.frames * 1000) / this.format.sampleRate < cutoff) this.chunks.shift();

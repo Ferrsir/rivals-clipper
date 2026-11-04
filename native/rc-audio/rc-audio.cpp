@@ -599,7 +599,16 @@ static int cmdCapture(int argc, wchar_t **argv) {
     a.source = (pid && !loopback && processLoopbackSupported()) ? Source::ProcessLoopback : Source::EndpointLoopback;
     if (a.source == Source::EndpointLoopback && pid && !loopback)
       status("{\"event\":\"notice\",\"message\":\"per-app audio needs Windows 11; recording all desktop sound instead\"}");
-    threads.emplace_back(captureThread, a);
+    // The game track runs on its own thread, fallback included, so it never waits for the mic thread
+    // (which only ends on stop). A capture thread returns early only when per-app capture keeps failing.
+    threads.emplace_back([a]() {
+      captureThread(a);
+      if (g_stop || a.source != Source::ProcessLoopback) return;
+      CaptureArgs fb = a;
+      fb.source = Source::EndpointLoopback;
+      status("{\"event\":\"notice\",\"message\":\"falling back to all desktop sound for the game track\"}");
+      captureThread(fb);
+    });
   }
   if (mic) {
     CaptureArgs a;
@@ -612,15 +621,6 @@ static int cmdCapture(int argc, wchar_t **argv) {
   watcher.detach();  // ReadFile on a pipe can't be cancelled portably; the process exit ends it
   std::thread writer(writerLoop);
   for (auto &t : threads) t.join();
-  // Capture threads only end on stop, or when per-app capture keeps failing: switch to desktop sound.
-  if (!g_stop && game && pid && !loopback) {
-    CaptureArgs a;
-    a.track = 0;
-    a.source = Source::EndpointLoopback;
-    status("{\"event\":\"notice\",\"message\":\"falling back to all desktop sound for the game track\"}");
-    std::thread fb(captureThread, a);
-    fb.join();
-  }
   g_stop = true;
   writer.join();
   status("{\"event\":\"stopped\"}");

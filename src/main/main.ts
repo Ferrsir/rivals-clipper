@@ -15,7 +15,7 @@ import { exportClip } from './ffmpeg';
 import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
 import type { BufferInfo, ClipRecorder, SavedVideo } from './capture/types';
-import { LocalRecorder } from './capture/local-recorder';
+import { LocalRecorder, StartCancelled } from './capture/local-recorder';
 import { GameWatcher } from './capture/game-watcher';
 import { chooseEngine, lateBy, type Engine } from './engine';
 import { findFfmpeg } from './studio/ffmpeg-bin';
@@ -328,14 +328,22 @@ function setupGep() {
 
 // ---------- recorder ----------
 
+let bufferStarts = 0;
+
 async function startBuffer() {
   gameRunning = true;
   const rec = recorder;
+  const run = ++bufferStarts;
+  // The game can close, the engine can change or a newer start can begin while this one waits.
+  const overtaken = () => run !== bufferStarts || !gameRunning || recorder !== rec;
   try {
-    lastBufferInfo = await rec.start(settings, gameProcess ?? {}, paths(settings.rootFolder).clips);
-    const how = rec.kind === 'local' && lastBufferInfo.encoder ? ` (${lastBufferInfo.encoder}${lastBufferInfo.gpu ? ` on ${lastBufferInfo.gpu}` : ''})` : '';
+    const info = await rec.start(settings, gameProcess ?? {}, paths(settings.rootFolder).clips);
+    if (overtaken()) return;
+    lastBufferInfo = info;
+    const how = rec.kind === 'local' && info.encoder ? ` (${info.encoder}${info.gpu ? ` on ${info.gpu}` : ''})` : '';
     status(`Replay buffer running${how}. Go get some kills.`);
   } catch (err) {
+    if (err instanceof StartCancelled || overtaken()) return;
     status(`Replay buffer failed to start: ${(err as Error).message}`);
     return;
   }

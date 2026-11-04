@@ -21,6 +21,16 @@ interface ActiveClip {
   folder: string;
   handle: CaptureHandle;
   onDone: (v: SavedVideo) => void;
+  /** Lets the audio buffers drop this clip's audio again once it is saved. */
+  releaseAudio: () => void;
+}
+
+/** start() was overtaken by stop() or a newer start(). Not a failure: nothing to report. */
+export class StartCancelled extends Error {
+  constructor() {
+    super('Recorder start was cancelled');
+    this.name = 'StartCancelled';
+  }
 }
 
 export interface LocalRecorderOptions {
@@ -42,6 +52,8 @@ export class LocalRecorder implements ClipRecorder {
   private lastStart?: { settings: Settings; game: GameProcess; clipsFolder: string };
   private stderrTail: string[] = [];
   private saving = new Set<Promise<void>>();
+  /** Bumped by every start() and stop(), so a start that is still probing knows it was overtaken. */
+  private gen = 0;
 
   constructor(private log: Log, private opts: LocalRecorderOptions) {}
 
@@ -60,16 +72,25 @@ export class LocalRecorder implements ClipRecorder {
   }
 
   async start(settings: Settings, game: GameProcess, clipsFolder: string): Promise<BufferInfo> {
-    await this.stop();
+    const gen = ++this.gen;
+    // stop() (the game closed, the engine changed) or another start() can land during any await below.
+    // Check after each one, and before spawning anything, so nothing is left running after a stop.
+    const check = () => {
+      if (gen !== this.gen) throw new StartCancelled();
+    };
+    await this.teardown();
+    check();
     this.stopping = false;
     this.lastStart = { settings, game, clipsFolder };
     const ffmpeg = await this.opts.ffmpeg();
+    check();
     this.ffBin = ffmpeg;
 
     const { localEncoder, captureMonitor } = localOptions(settings);
     const prefer: EncoderId | 'auto' = localEncoder;
     // After a crash, probe again: the screen resolution may have changed.
     const probe = await probeCapture(ffmpeg, captureMonitor, prefer, this.restarts > 0);
+    check();
     this.probe = probe;
     if (!probe.ok || !probe.encoder) throw new Error(probe.problem ?? 'Screen capture is not available');
     this.log(`Local recorder: ${describeProbe(probe)}`, { adapters: probe.adapters, tried: probe.tried });
@@ -83,6 +104,8 @@ export class LocalRecorder implements ClipRecorder {
     const height = probe.height ?? 1080;
     const fps = settings.fps;
     const bufferMs = settings.bufferSeconds * 1000;
+    // Audio is held a little longer than video; a clip being recorded also pins its own audio (startClip).
+    const audioMs = bufferMs + 5000;
     // CPU encoding is capped at 1080p so it doesn't eat the game's frame time.
     const scaleHeight = probe.encoder.id === 'x264' ? Math.min(1080, height) : undefined;
     const outH = scaleHeight ?? height;
@@ -96,7 +119,7 @@ export class LocalRecorder implements ClipRecorder {
     let micRecorded = false;
     const bin = helperPath();
     if (bin) {
-      const audio = new AudioCapture(bin, bufferMs + 5000);
+      const audio = new AudioCapture(bin, audioMs);
       audio.on('status', (m: string) => this.log(m));
       audio.on('track', (name: string, st: { mode: string; device: string }) =>
         this.log(`${name === 'mic' ? 'Mic' : 'Game audio'} recording from ${st.mode === 'process' ? 'Marvel Rivals only' : st.device || st.mode}`),
@@ -106,7 +129,7 @@ export class LocalRecorder implements ClipRecorder {
         gamePid: settings.gameAudio === 'game-only' ? game.pid : undefined,
         desktopAudio: settings.gameAudio === 'desktop',
         mic: settings.recordMic ? settings.micDeviceId || 'default' : undefined,
-        bufferMs: bufferMs + 5000,
+        bufferMs: audioMs,
       });
       this.audio = audio;
       micRecorded = settings.recordMic;
@@ -114,7 +137,7 @@ export class LocalRecorder implements ClipRecorder {
       this.log('Audio helper (rc-audio.exe) is missing, so local clips will have no sound. Reinstall Rivals Clipper to fix this.');
     }
 
-    await this.waitForVideo(10_000);
+    await this.waitForVideo(10_000, check);
     this.info = {
       width: scaleHeight ? Math.round((width * scaleHeight) / height / 2) * 2 : width,
       height: outH,
@@ -129,6 +152,11 @@ export class LocalRecorder implements ClipRecorder {
   }
 
   async stop(): Promise<void> {
+    this.gen++;
+    await this.teardown();
+  }
+
+  private async teardown(): Promise<void> {
     this.stopping = true;
     if (this.active) this.stopClip();
     // Let a clip that is being saved finish before the buffers are torn down.
@@ -156,7 +184,13 @@ export class LocalRecorder implements ClipRecorder {
     if (this.active) return;
     if (!this.ff || !this.lastStart) throw new Error('Local recorder is not running');
     const handle = this.ts.beginCapture(pastDurationMs);
-    this.active = { fileName, folder: this.lastStart.clipsFolder, handle, onDone };
+    // The audio rings only hold about the pre-roll. A clip can run for maxClipSeconds, so keep its audio
+    // from the clip's first frame (less a second of slack) until it is saved.
+    const from = (this.ts.captureStart(handle) ?? Date.now() - pastDurationMs) - 1000;
+    const audio = this.audio;
+    const releases = audio ? [audio.game.pin(from), audio.mic.pin(from)] : [];
+    const releaseAudio = () => releases.forEach((r) => r());
+    this.active = { fileName, folder: this.lastStart.clipsFolder, handle, onDone, releaseAudio };
   }
 
   stopClip(): void {
@@ -194,16 +228,23 @@ export class LocalRecorder implements ClipRecorder {
         const { settings, game, clipsFolder } = this.lastStart;
         setTimeout(() => {
           if (this.stopping) return;
-          this.start(settings, game, clipsFolder).catch((err) => this.log(`Recorder restart failed: ${(err as Error).message}`));
+          this.start(settings, game, clipsFolder).catch((err) => {
+            if (!(err instanceof StartCancelled)) this.log(`Recorder restart failed: ${(err as Error).message}`);
+          });
         }, 2000 * this.restarts);
       }
     });
   }
 
-  private waitForVideo(timeoutMs: number): Promise<void> {
+  private waitForVideo(timeoutMs: number, check: () => void): Promise<void> {
     const started = Date.now();
     return new Promise((resolve, reject) => {
       const tick = () => {
+        try {
+          check();
+        } catch (err) {
+          return reject(err);
+        }
         if (this.ts.ready) return resolve();
         if (!this.ff) return reject(new Error(`ffmpeg exited: ${this.stderrTail.slice(-3).join(' | ') || 'no output'}`));
         if (Date.now() - started > timeoutMs) return reject(new Error('No video from the screen recorder after 10 seconds'));
@@ -214,6 +255,14 @@ export class LocalRecorder implements ClipRecorder {
   }
 
   private async saveClip(clip: ActiveClip, until: number): Promise<void> {
+    try {
+      await this.writeClip(clip, until);
+    } finally {
+      clip.releaseAudio();
+    }
+  }
+
+  private async writeClip(clip: ActiveClip, until: number): Promise<void> {
     const result = this.ts.endCapture(clip.handle, until);
     if (!result) {
       clip.onDone({ duration: 0, startTimeEpoch: until, error: 'No video in the replay buffer yet' });

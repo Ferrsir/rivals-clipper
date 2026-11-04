@@ -7,7 +7,8 @@ import { TS_PACKET, TsReplayBuffer } from '../src/main/capture/ts-buffer';
 import { encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
 import { parseTasklist, GameWatcher } from '../src/main/capture/game-watcher';
 import { chooseEngine, lateBy } from '../src/main/engine';
-import { localOptions } from '../src/main/settings';
+import { DEFAULT_SETTINGS, localOptions } from '../src/main/settings';
+import { LocalRecorder, StartCancelled } from '../src/main/capture/local-recorder';
 
 // 4 s of 10 fps H.264 in MPEG-TS, a keyframe every second (made with ffmpeg, see test name).
 const FIXTURE = fs.readFileSync(path.join(__dirname, '..', '..', 'test', 'fixtures', 'gop10.mpegts'));
@@ -60,6 +61,14 @@ test('ts buffer only keeps about maxMs of video', () => {
   assert.ok(b.durationMs >= 1500);
 });
 
+test('ts buffer reports when a capture starts', () => {
+  const b = new TsReplayBuffer({ maxMs: 60_000, frameTicks: 9000 });
+  const now = 1_000_000;
+  b.push(FIXTURE, now);
+  assert.equal(Math.round(b.captureStart(b.beginCapture(1500, now))!), now - 2000);
+  assert.equal(new TsReplayBuffer({ maxMs: 1000 }).captureStart({ gops: [], active: true }), undefined);
+});
+
 test('ts buffer end time cuts whole GOPs that start after it', () => {
   const b = new TsReplayBuffer({ maxMs: 60_000, frameTicks: 9000 });
   const now = 1_000_000;
@@ -91,6 +100,27 @@ test('pcm ring drops audio older than its window', () => {
   for (let t = 0; t < 200; t += 10) ring.push(t, Buffer.alloc(480 * 4, 2));
   const out = ring.extract(0, 100);
   assert.equal(out[0], 0); // evicted
+});
+
+test('pcm ring keeps pinned audio past its window until the pin is released', () => {
+  const ring = new PcmRing(FMT, 50);
+  const release = ring.pin(0);
+  for (let t = 0; t < 200; t += 10) ring.push(t, Buffer.alloc(480 * 4, 3));
+  // A clip that started at 0 still has its opening audio after 200 ms, with a 50 ms window.
+  assert.equal(ring.extract(0, 10)[0], 3);
+  release();
+  ring.push(200, Buffer.alloc(480 * 4, 3));
+  assert.equal(ring.extract(0, 10)[0], 0);
+  assert.equal(ring.extract(170, 180)[0], 3);
+});
+
+test('a pin that is never released stops holding audio after ten minutes', () => {
+  const ring = new PcmRing({ sampleRate: 1000, channels: 1 }, 1000); // a tiny format keeps the test light
+  ring.pin(0);
+  const second = Buffer.alloc(1000 * 2, 4);
+  for (let t = 0; t <= 12 * 60_000; t += 1000) ring.push(t, second);
+  assert.equal(ring.extract(0, 10)[0], 0);
+  assert.equal(ring.extract(12 * 60_000 - 10 * 60_000, 12 * 60_000 - 10 * 60_000 + 10)[0], 4);
 });
 
 test('audio chunk parser reads the helper format across split reads and resyncs after junk', () => {
@@ -196,4 +226,56 @@ test('late screen events stretch the pre-roll by how late they are', () => {
 test('local settings are cleaned up', () => {
   const o = localOptions({ hudScale: 'abc' as unknown as number, captureMonitor: -3, detectionFps: 99, localEncoder: 'foo' as never, engine: 'local', playerName: '  Leithl  ' });
   assert.deepEqual(o, { engine: 'local', captureMonitor: 0, localEncoder: 'auto', playerName: 'Leithl', hudScale: 1, detectionFps: 20, readScreenText: true });
+});
+
+// ---------- recorder start and stop ----------
+
+/** An ffmpeg lookup that only answers when the test says so, so a stop can land while start() waits. */
+function controlledFfmpeg() {
+  const pending: Array<(bin: string) => void> = [];
+  return {
+    get calls() {
+      return pending.length;
+    },
+    answer: (call: number) => pending[call]('/nonexistent/ffmpeg'),
+    ffmpeg: () => new Promise<string>((r) => pending.push(r)),
+  };
+}
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('stopping the recorder while it starts cancels the start before anything runs', async () => {
+  const ff = controlledFfmpeg();
+  const rec = new LocalRecorder(() => undefined, { ffmpeg: ff.ffmpeg });
+  const starting = rec.start(DEFAULT_SETTINGS, { pid: 1 }, '/nonexistent');
+  // Let start() reach the point where it waits for ffmpeg, then close the game.
+  while (!ff.calls) await tick();
+  await rec.stop();
+  ff.answer(0);
+  await assert.rejects(starting, StartCancelled);
+  assert.equal(rec.probe, undefined); // it never got as far as probing the screen
+  assert.equal(rec.info, undefined);
+});
+
+test('a stop right after start, before the old recorder is torn down, still cancels it', async () => {
+  const ff = controlledFfmpeg();
+  const rec = new LocalRecorder(() => undefined, { ffmpeg: ff.ffmpeg });
+  const starting = rec.start(DEFAULT_SETTINGS, { pid: 1 }, '/nonexistent');
+  await rec.stop();
+  await assert.rejects(starting, StartCancelled);
+  assert.equal(ff.calls, 0);
+});
+
+test('a newer start overtakes an older one', async () => {
+  const ff = controlledFfmpeg();
+  const rec = new LocalRecorder(() => undefined, { ffmpeg: ff.ffmpeg });
+  const first = rec.start(DEFAULT_SETTINGS, { pid: 1 }, '/nonexistent');
+  while (ff.calls < 1) await tick();
+  const second = rec.start(DEFAULT_SETTINGS, { pid: 1 }, '/nonexistent');
+  ff.answer(0);
+  await assert.rejects(first, StartCancelled);
+  while (ff.calls < 2) await tick();
+  await rec.stop();
+  ff.answer(1);
+  await assert.rejects(second, StartCancelled);
 });
