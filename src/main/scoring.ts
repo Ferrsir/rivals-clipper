@@ -20,13 +20,15 @@ export const DEFAULT_WEIGHTS = {
   survived: 5,
   /** Each star above/below 3 adds/removes this much. */
   perStar: 25,
+  /** AI hype score: each point above/below 5 adds/removes this much. */
+  perHype: 4,
 };
 
 export type Weights = typeof DEFAULT_WEIGHTS;
 
 const MULTI_NAMES: Record<number, string> = { 2: 'double', 3: 'triple', 4: 'quad', 5: 'penta', 6: 'hexa' };
 
-type Scorable = Pick<ClipSidecar, 'events' | 'match' | 'trigger' | 'ultUsedBeforeKills' | 'endedMatch' | 'rating' | 'hero'>;
+type Scorable = Pick<ClipSidecar, 'events' | 'match' | 'trigger' | 'ultUsedBeforeKills' | 'endedMatch' | 'rating' | 'hero'> & Partial<Pick<ClipSidecar, 'ai'>>;
 
 export function scoreClip(clip: Scorable, w: Weights = DEFAULT_WEIGHTS): { score: number; tags: string[]; breakdown: Record<string, number> } {
   const kills = clip.events.filter((e) => e.type === 'kill').sort((a, b) => a.at - b.at);
@@ -92,6 +94,11 @@ export function scoreClip(clip: Scorable, w: Weights = DEFAULT_WEIGHTS): { score
   if (deaths.length) tags.add('died');
 
   if (clip.rating !== undefined) add('rating', (clip.rating - 3) * w.perStar);
+
+  if (clip.ai && !clip.ai.error) {
+    for (const t of clip.ai.tags) tags.add(t);
+    if (clip.ai.hype) add('aiHype', (clip.ai.hype - 5) * w.perHype);
+  }
 
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
   return { score, tags: [...tags], breakdown };

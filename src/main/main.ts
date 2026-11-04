@@ -16,6 +16,8 @@ import { GameProcess, Recorder } from './recorder';
 import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
 import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
+import { findFfmpeg } from './studio/ffmpeg-bin';
+import { AiTagger, untagged } from './ai-tagger';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -49,6 +51,8 @@ let pending: PendingClip | undefined;
 let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
+/** Between match_start and match_end. AI tagging waits until this is false. */
+let inMatch = false;
 let lastStatus = 'Waiting for Marvel Rivals';
 /** Set when Overwolf's game events or recorder never loaded, so the window can say why instead of "waiting". */
 let packagesProblem: string | undefined;
@@ -57,6 +61,34 @@ const readyPackages = new Set<string>();
 export const ai = createAiClient(() => settings.aiProvider);
 /** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
 export const library = new Library(() => paths(settings.rootFolder).clips);
+/** Any ffmpeg that works: the recorder's copy, else the bundled one the Studio uses. */
+async function anyFfmpeg(): Promise<string | undefined> {
+  if (recorder.ffmpegPath) return recorder.ffmpegPath;
+  const f = await findFfmpeg(undefined).catch(() => undefined);
+  return f?.ok ? f.path : undefined;
+}
+
+const tagger = new AiTagger({
+  ai,
+  ffmpeg: anyFfmpeg,
+  read: (videoFile) => {
+    try {
+      return JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
+    } catch {
+      return undefined;
+    }
+  },
+  save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
+  canRun: () => !inMatch && !pending,
+  enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
+  onTagged: (clip) => {
+    pushClip(clip);
+    if (clip.ai?.error) status(`AI tagging failed: ${clip.ai.error}`);
+    else status(`AI tagged a clip: ${clip.ai?.summary || clip.ai?.tags.join(', ')}`);
+  },
+  onStatus: (msg) => status(msg),
+});
+
 /** Clips saved during the current match, so the match outcome can be added when it ends. */
 let matchClips: string[] = [];
 
@@ -162,6 +194,7 @@ function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoc
   matchClips.push(saved.videoFile);
   status(`Saved ${kills}-kill clip (score ${saved.score})`);
   pushClip(saved);
+  tagger.enqueue(saved.videoFile);
 }
 
 let practiceNoticeShown = false;
@@ -211,6 +244,7 @@ function onGameEvent(feature: string, key: string, value: unknown) {
       state.onKillFeed(value, now);
       break;
     case 'match_start':
+      inMatch = true;
       state.onMatchStart();
       matchClips = [];
       practiceNoticeShown = false;
@@ -220,6 +254,8 @@ function onGameEvent(feature: string, key: string, value: unknown) {
       state.onRoundStart();
       break;
     case 'match_end':
+      inMatch = false;
+      tagger.kick();
       if (pending) recorder.stopClip();
       status('Match ended');
       break;
@@ -269,6 +305,8 @@ function setupGep() {
   gep.on('new-info-update', (_e, _gameId, data) => onInfoUpdate(data.feature, data.key, data.value));
   gep.on('game-exit', () => {
     gameRunning = false;
+    inMatch = false;
+    tagger.kick();
     void recorder.stop().then(() => status('Marvel Rivals closed'));
   });
   gep.on('error', (_e, _gameId, err) => status('GEP error', err));
@@ -296,6 +334,8 @@ function setupRecorder() {
   });
   rec.on('game-exit', () => {
     gameRunning = false;
+    inMatch = false;
+    tagger.kick();
     gameProcess = undefined;
   });
   rec.on('performance-warning', (w) => status('Recording is struggling to keep up', w));
@@ -335,10 +375,16 @@ function setupIpc() {
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
   ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(videoFile, { useMic }));
   ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
+  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagOne(videoFile));
+  ipcMain.handle('clips:aiTagUntagged', () => {
+    const list = untagged(library.query({ limit: 100_000 }).items);
+    for (const c of list) tagger.enqueue(c.videoFile);
+    return list.length;
+  });
   ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(videoFile));
   ipcMain.handle('clip:export', async (_e, videoFile: string, withMic: boolean) => {
-    const ff = recorder.ffmpegPath;
-    if (!ff) throw new Error('ffmpeg not available yet (recorder package still loading)');
+    const ff = await anyFfmpeg();
+    if (!ff) throw new Error('No ffmpeg found to export with. Reinstall the app or set FFMPEG_PATH.');
     const c = JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
     const out = await exportClip(ff, videoFile, paths(settings.rootFolder).exports, { withMic, hasMicTrack: c.audioTracks.length > 1 });
     shell.showItemInFolder(out);
