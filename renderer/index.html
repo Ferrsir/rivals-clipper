@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; media-src file:; style-src 'self'">
+  <title>Rivals Clipper</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Rivals Clipper</h1>
+    <div id="status" class="status">Starting…</div>
+  </header>
+
+  <main>
+    <section class="panel settings">
+      <h2>Recording</h2>
+      <label>Library folder
+        <span class="row"><input id="rootFolder" readonly><button id="pickFolder">Change</button><button id="openFolder">Open</button></span>
+      </label>
+      <label>Resolution
+        <select id="resolution">
+          <option value="native">Match my monitor (recommended)</option>
+          <option value="1080p">1080p</option>
+          <option value="1440p">1440p</option>
+          <option value="2160p">4K</option>
+        </select>
+      </label>
+      <label>Frame rate
+        <select id="fps"><option value="60">60 fps</option><option value="120">120 fps</option></select>
+      </label>
+      <label>Game audio
+        <select id="gameAudio">
+          <option value="game-only">Marvel Rivals only (no Discord or music)</option>
+          <option value="desktop">Everything I hear</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="recordMic"> Record my mic on its own track</label>
+      <label>Mic
+        <select id="micDeviceId"><option value="default">Windows default</option></select>
+      </label>
+      <label class="check"><input type="checkbox" id="useMicInReelsByDefault"> Use mic in reels by default</label>
+      <label>Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="40"></label>
+      <label>Seconds to wait for the next kill <input type="number" id="postRollSeconds" min="2" max="15"></label>
+      <label>Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>
+      <button id="save" class="primary">Save settings</button>
+    </section>
+
+    <section class="panel clips">
+      <h2>Clips <span id="count" class="muted"></span></h2>
+      <div class="sort">Sort:
+        <select id="sort"><option value="new">Newest</option><option value="score">Best score</option></select>
+      </div>
+      <ul id="clipList"></ul>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

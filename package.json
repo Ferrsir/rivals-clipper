@@ -1,0 +1,43 @@
+{
+  "name": "rivals-clipper",
+  "productName": "Rivals Clipper",
+  "version": "0.1.0",
+  "description": "Auto-clips Marvel Rivals kills and streaks, stores and ranks highlights, and (soon) turns them into reels.",
+  "author": {
+    "name": "Ferris"
+  },
+  "license": "MIT",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && ow-electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "dist": "npm run build && ow-electron-builder --publish=never"
+  },
+  "overwolf": {
+    "packages": [
+      "gep",
+      "recorder"
+    ]
+  },
+  "build": {
+    "appId": "com.ferris.rivalsclipper",
+    "productName": "Rivals Clipper",
+    "files": [
+      "dist/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "@overwolf/ow-electron": "44.9.0",
+    "@overwolf/ow-electron-builder": "26.18.0",
+    "@overwolf/ow-electron-packages-types": "1.1.14",
+    "@types/node": "22.15.0",
+    "typescript": "5.8.3"
+  }
+}
