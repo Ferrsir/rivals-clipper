@@ -28,6 +28,8 @@ export interface Settings {
   manualClipHotkey: string;
   /** Also count assists as keeping a streak clip alive. */
   assistsExtendClip: boolean;
+  /** Auto-clip kills in the Practice Range too. Off by default; the manual hotkey always works. */
+  clipPractice: boolean;
   /** Which AI you signed in with. 'none' = skipped the sign-in screen. */
   aiProvider: 'claude' | 'codex' | 'none';
   /** Set once the first-launch sign-in screen has been completed or skipped. */
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   useMicInReelsByDefault: false,
   manualClipHotkey: 'F9',
   assistsExtendClip: false,
+  clipPractice: false,
   aiProvider: 'none',
   onboarded: false,
 };

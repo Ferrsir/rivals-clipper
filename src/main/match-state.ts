@@ -81,6 +81,12 @@ export const DEFAULT_HERO_ROLES: Record<string, HeroRole> = {
   Ultron: 'Strategist',
 };
 
+/** True for the Practice Range / training modes, where auto-clips are off by default. */
+export function isPracticeMode(ctx: MatchContext): boolean {
+  if (ctx.gameType && /practice/i.test(ctx.gameType)) return true;
+  return [ctx.gameMode, ctx.map].some((v) => !!v && /practice|training|tutorial/i.test(v));
+}
+
 export class MatchState {
   localName?: string;
   roster = new Map<number, RosterEntry>();

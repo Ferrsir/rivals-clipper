@@ -14,6 +14,8 @@ export interface ProviderStatus {
   installed: boolean;
   loggedIn: boolean;
   detail?: string;
+  /** Which account is signed in, when the CLI reports it (e.g. an email). */
+  account?: string;
 }
 
 interface ProviderDef {
@@ -111,13 +113,25 @@ async function run(bin: string, args: string[], opts: { timeoutMs?: number; inpu
   });
 }
 
+/** Best-effort account label from the CLI's status output (fields vary by version). */
+export function accountOf(stdout: string): string | undefined {
+  try {
+    const j = JSON.parse(stdout);
+    const v = j.email ?? j.account?.email ?? j.accountEmail ?? j.user?.email ?? j.organization?.name ?? j.orgName;
+    return typeof v === 'string' && v ? v : undefined;
+  } catch {
+    const m = stdout.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    return m?.[0];
+  }
+}
+
 export async function checkStatus(provider: AiProvider): Promise<ProviderStatus> {
   const def = PROVIDERS[provider];
   resolved.delete(def.bin); // re-detect, e.g. right after the user installed it
   const version = await run(def.bin, ['--version']);
   if (version.code !== 0) return { provider, installed: false, loggedIn: false };
   const st = await run(def.bin, def.status);
-  return { provider, installed: true, loggedIn: def.parseLoggedIn(st.stdout + st.stderr), detail: version.stdout.trim() };
+  return { provider, installed: true, loggedIn: def.parseLoggedIn(st.stdout + st.stderr), detail: version.stdout.trim(), account: accountOf(st.stdout) };
 }
 
 /** Opens a visible PowerShell window that installs the CLI, so you can see exactly what runs. */
