@@ -68,6 +68,10 @@ export interface MusicTrack {
   analysis?: MusicAnalysis;
   analysisError?: string;
   lastUsedAt?: number;
+  /** Attribution the licence asks for, e.g. "Song" by Artist (CC BY 4.0) via Jamendo. Put it in the post caption. */
+  credit?: string;
+  /** Where the file came from, when it was downloaded through the Studio. */
+  sourceUrl?: string;
 }
 
 export interface MusicSuggestion {
@@ -243,6 +247,8 @@ export interface IntroCard {
   image?: string;
   text: string;
   seconds: number;
+  /** Attribution for a downloaded Creative Commons picture. */
+  imageCredit?: string;
 }
 
 // ---------- the planned edit ----------
@@ -309,6 +315,107 @@ export interface RenderProgress {
   pct: number;
   message: string;
   files?: string[];
+  error?: string;
+}
+
+// ---------- free media (Openverse: Creative Commons and public domain) ----------
+
+export interface FreeMedia {
+  id: string;
+  kind: 'audio' | 'image';
+  title: string;
+  creator?: string;
+  /** cc0, pdm, by, by-sa: all allow commercial use and editing. */
+  license: string;
+  licenseVersion?: string;
+  licenseUrl?: string;
+  /** Page to credit and to check the licence on. */
+  landingUrl?: string;
+  /** Direct file URL. */
+  url: string;
+  thumbnail?: string;
+  provider?: string;
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  /** Ready-to-paste attribution. Empty for public domain. */
+  credit: string;
+  needsCredit: boolean;
+}
+
+// ---------- reel ideas ----------
+
+export interface ReelIdea {
+  id: string;
+  title: string;
+  /** One sentence: what the edit is about. */
+  concept: string;
+  /** Big text on the hook card. Empty for no hook card. */
+  hook: string;
+  /** What the hook card picture should show, and words to search for one. */
+  imageIdea: string;
+  imageSearch: string;
+  captions: string[];
+  styleId: string;
+  format: FormatId;
+  /** Library clip ids in reel order. */
+  clipIds: string[];
+  music: {
+    /** A song already in your library, if one fits. */
+    trackId?: string;
+    mood: string;
+    bpm?: [number, number];
+    /** Words to search royalty-free music with. */
+    search: string;
+  };
+  postCaption?: string;
+  /** Why this would do well. */
+  why: string;
+  source: 'ai' | 'quick';
+}
+
+// ---------- publishing ----------
+
+export type PublishPlatform = 'youtube' | 'tiktok' | 'instagram';
+
+export interface PublishStatus {
+  platform: PublishPlatform;
+  label: string;
+  /** Your developer app's keys are saved. */
+  configured: boolean;
+  /** Signed in and ready to upload. */
+  connected: boolean;
+  account?: string;
+  /** What uploading does on this platform, in plain words. */
+  note: string;
+  /** Where to create the developer app. */
+  setupUrl: string;
+  /** The platform's own upload page, for posting by hand. */
+  uploadPageUrl: string;
+  /** Labels for the key fields this platform needs. */
+  fields: Array<{ key: 'clientId' | 'clientSecret'; label: string }>;
+  /** The redirect address to register in the developer app. */
+  redirectUri?: string;
+  tiktokMode?: 'inbox' | 'direct';
+}
+
+export interface PublishRequest {
+  platform: PublishPlatform;
+  file: string;
+  title: string;
+  description: string;
+  tags: string[];
+  privacy: 'public' | 'unlisted' | 'private';
+  shorts?: boolean;
+}
+
+export interface PublishProgress {
+  uploadId: string;
+  platform: PublishPlatform;
+  stage: 'uploading' | 'processing' | 'done' | 'error';
+  pct: number;
+  message: string;
+  url?: string;
   error?: string;
 }
 

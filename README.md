@@ -61,6 +61,26 @@ Open the **Studio** tab to turn clips into a TikTok, Reel, Short or YouTube edit
 5. **Text**: hook card at the start, story captions that change on the beat, and an AI-written post caption.
 6. **Preview** renders a quick low-res version. **Export** saves full-quality files to `F:\RivalsClips\exports\reels`, for several formats at once if you like, plus an optional copy without music so you can add the same song inside TikTok or Instagram (the app tells you where the song should start).
 
+### Reel ideas
+
+The **Ideas** tab suggests reels in the style of the reference edits (hook card, short story in captions, the best play on the drop). *Quick ideas* works instantly from your clip tags. *Get AI ideas* asks Claude or ChatGPT (your own sign-in) for five different angles, and you can type your own idea first. Each idea picks clips from your library, ordered so the best play comes last, and says what kind of song and hook picture fit. *Find music* and *Find picture* search free sources for them, and *Make this reel* builds the whole project in one go.
+
+### Free music and pictures
+
+*Find free music* (Music tab) and *Find a picture* (Text tab, hook card) search [Openverse](https://openverse.org) for Creative Commons and public-domain songs and images. Only licences that allow commercial use and editing are shown (CC0, public domain, CC BY, CC BY-SA). CC BY and BY-SA need a credit, so the Studio shows it under the post caption and adds it when you upload. Trending songs are still best added inside TikTok or Instagram, using the copy without music.
+
+### Uploading
+
+After an export, each file has an upload button. The platforms only allow uploads through a developer app of your own, which is free to make. Open **Accounts** in the Studio for step-by-step setup. Your keys and sign-ins are stored on this PC, encrypted by Windows.
+
+| Platform | What it does | What you need |
+| --- | --- | --- |
+| YouTube | Uploads videos and Shorts straight to your channel | A Google Cloud project with the YouTube Data API and an OAuth "Desktop app" client. While the project is in testing, Google asks you to sign in again about once a week. |
+| TikTok | *Send to drafts* (recommended) puts the video in your TikTok inbox to add a sound and post. *Post directly* posts it, but stays private until TikTok audits your app. | A TikTok developer app with Login Kit and the Content Posting API, approved by TikTok (can take a few days). |
+| Instagram | Posts a Reel | An Instagram Creator or Business account linked to a Facebook Page, and a Meta app (it works for you as the app's admin without review). Sign-in lasts about 60 days. |
+
+Tick *Upload when it's done* in the export window to upload as soon as the export finishes. Without accounts set up, *Post on…* opens the platform's upload page, shows the file and copies your caption.
+
 Exports use the ffmpeg build bundled with the app (from the `ffmpeg-static` package, GPL licensed), and can use your graphics card (NVENC, AMF or Quick Sync) when available.
 
 ## Settings worth knowing
@@ -85,7 +105,7 @@ Code map:
 | `src/main/recorder.ts` | Overwolf recorder setup: game capture, audio tracks, replay buffer |
 | `src/main/clip-store.ts` | Clip sidecar JSON read/write |
 | `src/main/ffmpeg.ts` | Exports with or without the mic track |
-| `src/main/studio/` | The Studio: beat detection (`beats.ts`), edit planner (`planner.ts`), ffmpeg graph builder (`render.ts`, `pipeline.ts`), music library and suggestions, AI helpers, IPC (`register.ts`) |
+| `src/main/studio/` | The Studio: beat detection (`beats.ts`), edit planner (`planner.ts`), ffmpeg graph builder (`render.ts`, `pipeline.ts`), music library and suggestions, reel ideas (`ideas.ts`), free media search (`openverse.ts`), uploads (`publish/`), AI helpers, IPC (`register.ts`) |
 | `renderer/studio/` | The Studio screen (plain ES modules) |
 | `renderer/` | The app window |
 
@@ -97,7 +117,8 @@ Code map:
 4. Phase 3: AI style tags (Claude or ChatGPT through your own sign-in)
 5. ~~Phase 4: Reel Maker: pick clips and music, beat-synced cuts, 9:16 and 16:9 export~~ (first version, needs testing on Windows)
 6. ~~Phase 5: edit-style recipes (speed ramps, zoom punches, shake, flashes, text)~~ (first version)
-7. Phase 6: polish
+7. ~~Reel ideas, free music and pictures, uploads to YouTube, TikTok and Instagram~~ (first version, needs testing with real accounts)
+8. Phase 6: polish
 
 ## License
 

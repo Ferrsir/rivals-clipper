@@ -1,15 +1,19 @@
 // The Studio's main-process side: IPC handlers on "studio:*" channels (see docs/studio-interface.md).
 
-import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, type IpcMainInvokeEvent } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AiClient } from '../ai-auth';
 import { listClips } from '../clip-store';
 import { Settings, paths } from '../settings';
 import type { ClipSidecar } from '../../shared/types';
-import type { FormatId, ReelClip, ReelProject, RenderRequest, StudioInit } from '../../shared/studio';
+import type { FormatId, FreeMedia, PublishPlatform, PublishRequest, ReelClip, ReelIdea, ReelProject, RenderRequest, StudioInit } from '../../shared/studio';
 import { musicIdeas, pickClips, postCaption, tweakStyle, writeCaptions } from './ai';
 import { findFfmpeg } from './ffmpeg-bin';
+import { aiIdeas, quickIdeas } from './ideas';
+import * as openverse from './openverse';
+import { PublishService } from './publish';
+import { Vault } from './publish/vault';
 import { FORMATS, FORMAT_LIST, getFormat } from './formats';
 import { MusicLibrary } from './music-library';
 import { findFont, planFor, renderProject } from './pipeline';
@@ -238,6 +242,111 @@ export function registerStudio(ctx: StudioContext): void {
     const ids = await pickClips(ctx.ai, all, fmt, project.style.name, Number(seconds) || fmt.idealSeconds[1]);
     const byId = new Map<string, ClipSidecar>(all.map((c) => [c.id, c]));
     return ids.map((id) => reelClipFromSidecar(byId.get(id)!));
+  });
+
+  // ---------- ideas ----------
+  const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
+  handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
+  handle('studio:ideas:ai', (_e, format: FormatId, request: string) =>
+    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? '').slice(0, 400), count: 5 }),
+  );
+  handle('studio:ideas:apply', (_e, idea: ReelIdea) => {
+    if (!idea || typeof idea !== 'object' || !Array.isArray(idea.clipIds)) throw new Error('Not an idea');
+    const byId = new Map<string, ClipSidecar>(libraryClips().map((c) => [c.id, c]));
+    const clips = idea.clipIds.map((id) => byId.get(id)).filter((c): c is ClipSidecar => !!c).map(reelClipFromSidecar);
+    if (!clips.length) throw new Error('The clips for this idea are no longer in your library.');
+    const fmt = getFormat(idea.format);
+    const proj = createProject({ name: String(idea.title ?? 'Reel idea').slice(0, 60), format: fmt.id, styleId: idea.styleId });
+    proj.clips = clips;
+    proj.order = 'manual';
+    proj.captions = (Array.isArray(idea.captions) ? idea.captions : []).filter((x) => typeof x === 'string' && x.trim()).slice(0, 14).map((text) => ({ text }));
+    proj.intro = typeof idea.hook === 'string' && idea.hook.trim() ? { text: idea.hook.trim().slice(0, 120), seconds: 4 } : null;
+    if (typeof idea.postCaption === 'string') proj.caption = idea.postCaption.slice(0, 2200);
+    const t = idea.music?.trackId ? music().get(idea.music.trackId) : undefined;
+    if (t) proj.music = { trackId: t.id, file: t.file, title: t.title, start: 'auto' };
+    return store().save(proj);
+  });
+
+  // ---------- royalty-free music and pictures ----------
+  const imagesDir = () => path.join(studioDir(), 'images');
+  handle('studio:free:search', (_e, kind: 'audio' | 'image', q: string) => openverse.search(kind === 'image' ? 'image' : 'audio', String(q ?? ''), { pageSize: 20, minSeconds: kind === 'image' ? undefined : 20 }));
+  const freeItem = (m: FreeMedia, kind: FreeMedia['kind']): FreeMedia => {
+    if (!m || typeof m !== 'object' || typeof m.url !== 'string' || !/^https:\/\//i.test(m.url)) throw new Error('Not a download');
+    return { ...m, kind, credit: openverse.creditFor(m) };
+  };
+  handle('studio:free:downloadMusic', async (e, item: FreeMedia) => {
+    const m = freeItem(item, 'audio');
+    if (!e.sender.isDestroyed()) e.sender.send('studio:music:progress', { message: `Downloading ${m.title}` });
+    const file = await openverse.download(m, musicDir());
+    return music().addDownloaded(file, { title: m.title, artist: m.creator, credit: m.credit, sourceUrl: m.landingUrl ?? m.url, tags: ['free', m.license] });
+  });
+  handle('studio:free:downloadImage', async (_e, item: FreeMedia) => {
+    const m = freeItem(item, 'image');
+    const file = await openverse.download(m, imagesDir());
+    return { file, credit: m.credit };
+  });
+
+  // ---------- publishing ----------
+  const vault = new Vault(path.join(app.getPath('userData'), 'studio-accounts.bin'), {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (t) => safeStorage.encryptString(t),
+    decrypt: (b) => safeStorage.decryptString(b),
+  });
+  const publisher = new PublishService({
+    vault,
+    openBrowser: (url) => void shell.openExternal(url),
+    loginWindow: (url, isDone) =>
+      new Promise((resolve, reject) => {
+        const win = new BrowserWindow({ width: 520, height: 720, title: 'Connect Instagram', autoHideMenuBar: true, webPreferences: { partition: 'persist:studio-meta-login', sandbox: true } });
+        let finished = false;
+        const check = (u: string) => {
+          if (finished || !isDone(u)) return;
+          finished = true;
+          resolve(u);
+          win.close();
+        };
+        win.webContents.on('will-redirect', (_ev, u) => check(u));
+        win.webContents.on('did-navigate', (_ev, u) => check(u));
+        win.webContents.on('did-redirect-navigation', (_ev, u) => check(u));
+        win.on('closed', () => !finished && reject(new Error('Sign-in window was closed.')));
+        void win.loadURL(url);
+      }),
+  });
+  const platformOf = (x: unknown): PublishPlatform => {
+    if (x === 'youtube' || x === 'tiktok' || x === 'instagram') return x;
+    throw new Error('Unknown platform');
+  };
+  handle('studio:publish:status', () => publisher.status());
+  handle('studio:publish:configure', (_e, pl: string, cfg: object) => publisher.configure(platformOf(pl), (cfg ?? {}) as never));
+  handle('studio:publish:connect', (_e, pl: string) => publisher.connect(platformOf(pl)));
+  handle('studio:publish:disconnect', (_e, pl: string, forget: boolean) => publisher.disconnect(platformOf(pl), !!forget));
+  handle('studio:publish:upload', (e, req: PublishRequest) => {
+    const platform = platformOf(req?.platform);
+    const file = String(req?.file ?? '');
+    if (!within(file) || !/\.mp4$/i.test(file)) throw new Error('Only exported reels can be uploaded.');
+    const clean: PublishRequest = {
+      platform,
+      file,
+      title: String(req.title ?? '').slice(0, 200),
+      description: String(req.description ?? '').slice(0, 5000),
+      tags: (Array.isArray(req.tags) ? req.tags : []).filter((t) => typeof t === 'string').slice(0, 30),
+      privacy: req.privacy === 'private' || req.privacy === 'unlisted' ? req.privacy : 'public',
+      shorts: !!req.shorts,
+    };
+    const uploadId = newId();
+    const send = (msg: object) => {
+      if (!e.sender.isDestroyed()) e.sender.send('studio:publish:progress', { uploadId, platform, ...msg });
+    };
+    void (async () => {
+      send({ stage: 'uploading', pct: 0, message: 'Starting upload' });
+      try {
+        const r = await publisher.upload(clean, (pr) => send(pr));
+        send({ stage: 'done', pct: 1, message: r.message, url: r.url });
+      } catch (err) {
+        send({ stage: 'error', pct: 0, message: 'Upload failed', error: (err as Error).message });
+      }
+    })();
+    return { uploadId };
   });
 
   // ---------- files ----------
