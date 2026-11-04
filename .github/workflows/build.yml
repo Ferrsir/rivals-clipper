@@ -50,6 +50,7 @@ jobs:
           name: rc-audio
           path: native/bin/rc-audio.exe
       - run: npm run dist
+      - run: node scripts/verify-package.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: RivalsClipper-Setup
