@@ -25,7 +25,15 @@ F:\RivalsClips\
   hero-roles.json
 ```
 
-## Run it (Windows)
+## Install (Windows)
+
+Download `RivalsClipper-Setup-x.y.z.exe` from the [Releases page](../../releases) (or the latest "Build Windows installer" run under Actions), run it, and open Rivals Clipper from the Start menu or desktop.
+
+On first launch it asks you to sign in with **Claude** or **ChatGPT**. That runs through the official Claude Code or Codex app on your PC: you log in on Anthropic's or OpenAI's own page, and Rivals Clipper never sees your password. If the helper app isn't installed yet, the button installs it in a visible PowerShell window. You can skip sign-in; clipping works without it.
+
+The app has three tabs: **Clipper** (live status and your ranked clips), **Studio** (the reel editor), and **Settings** (recording options and your account).
+
+## Run from source (developers)
 
 1. Install [Node.js 22 LTS](https://nodejs.org/) and [Git](https://git-scm.com/download/win).
 2. In a terminal:
@@ -40,7 +48,7 @@ F:\RivalsClips\
 
 The first launch downloads Overwolf's `gep` and `recorder` packages, which can take a minute. If Marvel Rivals runs as administrator, run Rivals Clipper as administrator too, or game events won't arrive.
 
-To build an installer: `npm run dist` (output in `release/`). Publishing it to other people requires registering the app with Overwolf; personal use does not.
+To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main`, and publishes a Release when you push a tag like `v0.2.0`. Publishing it to other people requires registering the app with Overwolf; personal use does not.
 
 ## Settings worth knowing
 

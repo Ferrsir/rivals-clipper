@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from 'elec
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipEvent, ClipSidecar, HeroRole } from '../shared/types';
+import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller } from './ai-auth';
 import { clipFileName, listClips, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
@@ -47,6 +48,8 @@ let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
 let lastStatus = 'Waiting for Marvel Rivals';
+/** Shared AI client: the Studio and AI tagging call this. */
+export const ai = createAiClient(() => settings.aiProvider);
 /** Clips saved during the current match, so the match outcome can be added when it ends. */
 let matchClips: string[] = [];
 
@@ -327,6 +330,36 @@ function setupIpc() {
     return r.canceled ? undefined : r.filePaths[0];
   });
   ipcMain.handle('folder:open', () => shell.openPath(settings.rootFolder));
+
+  // ---- AI sign-in (Claude Code or Codex, on the user's own account) ----
+  ipcMain.handle('ai:status', async () => ({
+    provider: settings.aiProvider,
+    onboarded: settings.onboarded,
+    claude: await checkStatus('claude'),
+    codex: await checkStatus('codex'),
+  }));
+  ipcMain.handle('ai:install', (_e, provider: AiProvider) => openInstaller(provider));
+  ipcMain.handle('ai:login', async (_e, provider: AiProvider) => {
+    const result = await login(provider, (s) => win?.webContents.send('ai-status', s));
+    if (result.loggedIn) {
+      settings = { ...settings, aiProvider: provider, onboarded: true };
+      saveSettings(settings);
+    }
+    return result;
+  });
+  ipcMain.handle('ai:use', (_e, provider: AiProvider | 'none') => {
+    settings = { ...settings, aiProvider: provider, onboarded: true };
+    saveSettings(settings);
+    return settings;
+  });
+  ipcMain.handle('ai:logout', async (_e, provider: AiProvider) => {
+    await logout(provider);
+    if (settings.aiProvider === provider) settings = { ...settings, aiProvider: 'none' };
+    saveSettings(settings);
+    return checkStatus(provider);
+  });
+  ipcMain.handle('ai:ask', (_e, opts: Parameters<typeof ai.ask>[0]) => ai.ask(opts));
+  ipcMain.handle('app:paths', () => paths(settings.rootFolder));
 }
 
 function registerHotkey() {

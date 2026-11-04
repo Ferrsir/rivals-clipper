@@ -99,7 +99,116 @@ $('sort').addEventListener('change', renderClips);
 clipper.onStatus(renderStatus);
 clipper.onClip(replace);
 
+// ---------- tabs ----------
+let studioMounted = false;
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `tab-${name}`));
+  if (name === 'studio' && !studioMounted) {
+    studioMounted = true;
+    // The Studio is a separate ES module (renderer/studio/index.js) that owns #studio-root.
+    import('./studio/index.js')
+      .then((m) => m.mount($('studio-root')))
+      .catch((err) => console.warn('Studio not available yet', err));
+  }
+}
+document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+
+// ---------- sign-in ----------
+const LABEL = { claude: 'Claude', codex: 'ChatGPT' };
+const CLI = { claude: 'Claude Code', codex: 'Codex' };
+let ai = null;
+
+function providerState(s) {
+  if (!s.installed) return { text: `Needs the free ${CLI[s.provider]} app first.`, action: `Install ${CLI[s.provider]}`, kind: 'install' };
+  if (!s.loggedIn) return { text: 'Installed, not signed in.', action: `Sign in with ${LABEL[s.provider]}`, kind: 'login' };
+  return { text: 'Signed in.', action: `Use ${LABEL[s.provider]}`, kind: 'use' };
+}
+
+async function doAction(provider, kind, btn, statusEl) {
+  if (kind === 'install') {
+    await clipper.ai.install(provider);
+    statusEl.textContent = 'Installer opened in a PowerShell window. When it finishes, click Check again.';
+    btn.textContent = 'Check again';
+    btn.onclick = () => refreshAi();
+    return;
+  }
+  if (kind === 'login') {
+    btn.disabled = true;
+    statusEl.textContent = 'Finish signing in in your browser…';
+    const r = await clipper.ai.login(provider);
+    btn.disabled = false;
+    if (!r.loggedIn) statusEl.textContent = 'Sign-in did not finish. Try again.';
+    else enterApp();
+    await refreshAi();
+    return;
+  }
+  await clipper.ai.use(provider);
+  enterApp();
+  await refreshAi();
+}
+
+function renderProviderCards(container, statuses, compact) {
+  container.querySelectorAll('.provider').forEach((card) => {
+    const p = card.dataset.provider;
+    const st = providerState(statuses[p]);
+    const statusEl = card.querySelector('.pstatus');
+    const btn = card.querySelector('.act');
+    const active = ai.provider === p && statuses[p].loggedIn;
+    statusEl.textContent = active ? 'Signed in, active.' : st.text;
+    btn.textContent = active ? 'Active' : st.action;
+    btn.disabled = active;
+    btn.onclick = () => doAction(p, st.kind, btn, statusEl);
+    const out = card.querySelector('.logout');
+    if (out) {
+      out.classList.toggle('hidden', !statuses[p].loggedIn);
+      out.onclick = async () => {
+        await clipper.ai.logout(p);
+        await refreshAi();
+      };
+    }
+  });
+}
+
+function buildAccountList() {
+  $('accountList').innerHTML = ['claude', 'codex']
+    .map((p) => `<div class="provider" data-provider="${p}"><h2>${LABEL[p]}</h2><p class="pstatus muted"></p><span class="row"><button class="primary act"></button><button class="logout hidden">Sign out</button></span></div>`)
+    .join('');
+}
+
+async function refreshAi() {
+  ai = await clipper.ai.status();
+  renderProviderCards($('signin'), ai, false);
+  renderProviderCards($('accountList'), ai, true);
+  const active = ai.provider !== 'none' && ai[ai.provider]?.loggedIn ? LABEL[ai.provider] : null;
+  $('accountBadge').textContent = active ? `Signed in: ${active}` : 'Not signed in';
+  return ai;
+}
+
+function enterApp() {
+  $('signin').classList.add('hidden');
+  $('app').classList.remove('hidden');
+}
+
+$('skipSignin').addEventListener('click', async () => {
+  await clipper.ai.use('none');
+  enterApp();
+  await refreshAi();
+});
+
+// ---------- boot ----------
 (async () => {
+  buildAccountList();
+  const s = await refreshAi();
+  const signedIn = s.provider !== 'none' && s[s.provider]?.loggedIn;
+  if (s.onboarded && (signedIn || s.provider === 'none')) enterApp();
+  else if (!s.onboarded && (s.claude.loggedIn || s.codex.loggedIn)) {
+    // Already signed in from before: pick it automatically ("logs you in" on open).
+    await clipper.ai.use(s.claude.loggedIn ? 'claude' : 'codex');
+    await refreshAi();
+    enterApp();
+  } else $('signin').classList.remove('hidden');
+
   renderStatus(await clipper.status());
   await loadSettingsForm();
   clips = await clipper.listClips();

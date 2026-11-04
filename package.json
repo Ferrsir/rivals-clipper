@@ -24,13 +24,27 @@
   "build": {
     "appId": "com.ferris.rivalsclipper",
     "productName": "Rivals Clipper",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**/*",
       "renderer/**/*",
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "RivalsClipper-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Rivals Clipper"
+    },
+    "overwolf": {
+      "requireSigning": false
     }
   },
   "devDependencies": {

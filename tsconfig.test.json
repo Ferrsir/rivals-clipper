@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["test/**/*.ts", "src/shared/**/*.ts", "src/main/streak.ts", "src/main/scoring.ts", "src/main/match-state.ts"]
+  "include": ["test/**/*.ts", "src/shared/**/*.ts", "src/main/streak.ts", "src/main/scoring.ts", "src/main/match-state.ts", "src/main/ai-auth.ts"]
 }
