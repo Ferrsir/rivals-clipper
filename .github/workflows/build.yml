@@ -45,6 +45,7 @@ jobs:
       - run: npm ci
       # The local-mode audio helper (game audio + mic without Overwolf). Built with the runner's Visual Studio.
       - run: npm run build:native
+      - run: node scripts/verify-audio-policy.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: rc-audio
