@@ -102,3 +102,7 @@ Code map:
 ## License
 
 MIT
+
+## Overwolf packages not loading?
+
+An unsigned install opens, but it never detects kills or records. Run it from source in Overwolf dev mode instead. See [docs/run-with-overwolf.md](docs/run-with-overwolf.md).
