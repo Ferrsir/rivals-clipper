@@ -1,8 +1,10 @@
 /* global clipper */
 const $ = (id) => document.getElementById(id);
 let clips = [];
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+const aiReady = () => !!(ai && ai.provider !== 'none' && ai[ai.provider]?.loggedIn);
 
-const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
+const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'aiTagging', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
 // Kill detection panel (built-in mode).
 fields.push('engine', 'playerName', 'hudScale', 'readScreenText', 'detectionFps', 'captureMonitor', 'localEncoder');
 
@@ -52,24 +54,39 @@ function clipRow(c) {
   li.innerHTML = `
     <video src="file:///${c.videoFile.replace(/\\/g, '/')}" preload="metadata" controls></video>
     <div class="meta">
-      <div class="title"><strong>${kills} kill${kills === 1 ? '' : 's'}</strong> · ${c.hero ?? 'Unknown hero'} · ${c.match.map ?? ''}</div>
+      <div class="title"><strong>${kills} kill${kills === 1 ? '' : 's'}</strong> · ${esc(c.hero ?? 'Unknown hero')} · ${esc(c.match.map ?? '')}</div>
       <div class="muted">${when} · ${(c.durationMs / 1000).toFixed(0)}s · score <b>${c.score}</b></div>
-      <div class="tags">${tags}</div>
+      ${c.ai?.summary ? `<div class="summary">“${esc(c.ai.summary)}”${c.ai.hype ? ` <span class="muted">hype ${c.ai.hype}/10</span>` : ''}</div>` : ''}
+      ${c.ai?.error ? `<div class="muted small">AI tagging failed: ${esc(c.ai.error)}</div>` : ''}
+      <div class="tags">${esc(tags)}</div>
       <div class="actions">
         <span class="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${(c.rating ?? 0) >= n ? 'on' : ''}">★</button>`).join('')}</span>
         ${hasMic ? `<label class="check"><input type="checkbox" class="useMic" ${c.useMic ? 'checked' : ''}> mic in reels</label>` : '<span class="muted">no mic track</span>'}
+        <button class="delete" title="Move to the Recycle Bin">Delete</button>
         <button class="exportGame">Export game audio</button>
         ${hasMic ? '<button class="exportMic">Export with mic</button>' : ''}
         <button class="show">Show file</button>
+        ${aiReady() ? `<button class="aiTag">${c.ai && !c.ai.error ? 'Re-tag with AI' : 'Tag with AI'}</button>` : ''}
       </div>
     </div>`;
   li.querySelectorAll('[data-star]').forEach((b) =>
     b.addEventListener('click', async () => replace(await clipper.rate(c.videoFile, Number(b.dataset.star)))),
   );
   li.querySelector('.useMic')?.addEventListener('change', async (e) => replace(await clipper.setMic(c.videoFile, e.target.checked)));
+  li.querySelector('.delete').addEventListener('click', async () => {
+    if (!confirm('Move this clip to the Recycle Bin?')) return;
+    await clipper.deleteClip(c.videoFile).catch(alert);
+    await refreshFacets();
+    await runQuery();
+  });
   li.querySelector('.exportGame').addEventListener('click', () => clipper.exportClip(c.videoFile, false).catch(alert));
   li.querySelector('.exportMic')?.addEventListener('click', () => clipper.exportClip(c.videoFile, true).catch(alert));
   li.querySelector('.show').addEventListener('click', () => clipper.show(c.videoFile));
+  li.querySelector('.aiTag')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Tagging…';
+    replace(await clipper.aiTag(c.videoFile).catch((err) => (alert(err), undefined)));
+  });
   return li;
 }
 
@@ -151,6 +168,12 @@ function renderClips(total = clips.length) {
 
 $('q').addEventListener('input', queueQuery);
 for (const id of ['fHero', 'fMap', 'fType', 'fKills', 'fRating']) $(id).addEventListener('change', runQuery);
+$('aiTagAll').addEventListener('click', async () => {
+  if (!aiReady()) return alert('Sign in to Claude or ChatGPT first (Settings, Account).');
+  const n = await clipper.aiTagUntagged();
+  $('aiTagAll').textContent = n ? `Tagging ${n} clip${n === 1 ? '' : 's'}…` : 'Every clip is tagged';
+  setTimeout(() => ($('aiTagAll').textContent = 'AI-tag untagged clips'), 4000);
+});
 $('clearFilters').addEventListener('click', () => {
   $('q').value = '';
   for (const id of ['fHero', 'fMap', 'fType']) $(id).value = '';

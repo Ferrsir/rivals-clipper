@@ -485,7 +485,8 @@ export function plan(input: PlanInput): Timeline {
     downbeats,
     drop,
     introEnd: q(layout.introEnd),
-    captions: placeCaptions(input.captions ?? [], beats, duration, style.captions.beatsPerLine),
+    // With a hook card, story captions start when the gameplay does, so they don't cover the hook.
+    captions: placeCaptions(input.captions ?? [], layout.introEnd > 0 ? beats.filter((b) => b >= layout.introEnd - 1e-3) : beats, duration, style.captions.beatsPerLine, q(layout.introEnd)),
     musicStart: round4(M),
     musicShort,
     warnings,
@@ -493,9 +494,9 @@ export function plan(input: PlanInput): Timeline {
 }
 
 /** Lines with times keep them. The rest are laid end to end on the beat grid (or every 2 s without music). */
-export function placeCaptions(lines: CaptionLine[], beats: number[], duration: number, beatsPerLine: number) {
+export function placeCaptions(lines: CaptionLine[], beats: number[], duration: number, beatsPerLine: number, startAt = 0) {
   const out: Array<{ text: string; start: number; end: number }> = [];
-  let cursor = beats.length ? 0 : 0.3;
+  let cursor = startAt + (beats.length ? 0 : 0.3);
   let beatIdx = 0;
   for (const l of lines) {
     const text = (l.text ?? '').trim();
@@ -516,6 +517,7 @@ export function placeCaptions(lines: CaptionLine[], beats: number[], duration: n
       end = cursor + 2;
     }
     cursor = end;
+    start = Math.max(start, startAt);
     if (start >= duration - 0.2) break;
     out.push({ text, start: round4(start), end: round4(Math.min(duration, end)) });
   }

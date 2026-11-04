@@ -20,7 +20,10 @@ const S = {
   preview: null,
   suggest: null,
   aiIdeas: null,
-  filters: { q: '', minKills: 0, sort: 'score' },
+  filters: { q: '', minKills: 0, sort: 'score', hero: '', map: '', gameType: '', minRating: 0 },
+  /** Clip ids that match the filters, in order, from the Library index. null until the first answer. */
+  clipView: null,
+  facets: null,
   busy: {},
   safeZones: true,
   styleUndo: null,
@@ -59,7 +62,7 @@ const vertical = () => fmt().height > fmt().width;
 const trackOf = (id) => S.tracks.find((t) => t.id === id);
 const currentTrack = () => (S.project?.music ? trackOf(S.project.music.trackId) : undefined);
 const clipByUid = (uid) => S.project.clips.find((c) => c.uid === uid);
-const planKey = () => JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + (S.project?.music?.file ?? '') + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro);
+const planKey = () => JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + (S.project?.music?.file ?? '') + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null);
 const pct = (v) => `${Math.round(v * 100)}%`;
 const x100 = (v) => `${Math.round(v * 100)}`;
 
@@ -112,7 +115,68 @@ const planSoon = debounce(async () => {
 }, 120);
 
 /** Apply a change to the project, then save and re-plan. */
+// ---------- undo / redo ----------
+// Every edit goes through change(), which keeps a copy of the reel before it.
+// Quick bursts (dragging a slider, typing, dragging on the timeline) become one step.
+const UNDO_LIMIT = 100;
+const MERGE_MS = 700;
+const hist = { projectId: null, past: [], future: [], lastAt: 0 };
+
+function resetHistory() {
+  hist.projectId = S.project?.id ?? null;
+  hist.past = [];
+  hist.future = [];
+  hist.lastAt = 0;
+  undoButtons();
+}
+
+function undoButtons() {
+  if (E.undoBtn) E.undoBtn.disabled = !hist.past.length;
+  if (E.redoBtn) E.redoBtn.disabled = !hist.future.length;
+}
+
+function recordUndo() {
+  if (hist.projectId !== S.project.id) resetHistory();
+  const now = Date.now();
+  if (now - hist.lastAt > MERGE_MS || !hist.past.length) {
+    hist.past.push(structuredClone(S.project));
+    if (hist.past.length > UNDO_LIMIT) hist.past.shift();
+  }
+  hist.future = [];
+  hist.lastAt = now;
+  undoButtons();
+}
+
+function restore(snapshot) {
+  S.project = snapshot;
+  const entry = S.projects.find((x) => x.id === snapshot.id);
+  if (entry) Object.assign(entry, { name: snapshot.name, clips: snapshot.clips.length });
+  if (S.sel && !snapshot.clips.some((c) => c.uid === S.sel)) S.sel = null;
+  S.preview = null;
+  saveSoon(S.project);
+  planSoon.flush();
+  renderAll();
+  undoButtons();
+}
+
+function undo() {
+  if (hist.projectId !== S.project?.id || !hist.past.length) return;
+  hist.future.push(structuredClone(S.project));
+  hist.lastAt = 0;
+  restore(hist.past.pop());
+  toast(root, 'Undone', 'info', 1200);
+}
+
+function redo() {
+  if (hist.projectId !== S.project?.id || !hist.future.length) return;
+  hist.past.push(structuredClone(S.project));
+  hist.lastAt = 0;
+  restore(hist.future.pop());
+  toast(root, 'Redone', 'info', 1200);
+}
+
 function change(fn, parts = []) {
+  recordUndo();
   fn(S.project);
   saveSoon(S.project);
   planSoon();
@@ -130,6 +194,7 @@ async function openProject(id) {
   S.suggest = null;
   S.aiIdeas = null;
   S.styleUndo = null;
+  resetHistory();
   planSoon.flush();
   refreshSuggestions();
   renderAll();
@@ -150,6 +215,7 @@ export async function mount(el) {
   try {
     const [init, projects, library, tracks] = await Promise.all([api.init(), api.projects.list(), api.clips(), api.music.list()]);
     Object.assign(S, { init, projects, library, tracks });
+    refreshClipView();
   } catch (err) {
     clear(root, h('div', { class: 'st-loading error' }, `The studio couldn't start: ${err.message}`));
     return;
@@ -166,7 +232,8 @@ export async function mount(el) {
   });
   window.clipper?.onClip?.(async () => {
     S.library = await api.clips().catch(() => S.library);
-    if (S.leftTab === 'clips') renderLeft();
+    S.facets = null;
+    refreshClipView();
   });
   audio.addEventListener('ended', () => {
     playingTrack = null;
@@ -296,7 +363,12 @@ function renderTop() {
     h(
       'div',
       { class: 'st-menu' },
-      h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`),
+      (E.undoBtn = h('button', { title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', disabled: !hist.past.length, onclick: undo }, 'Undo')),
+      (E.redoBtn = h('button', { title: 'Redo (Ctrl+Shift+Z or Ctrl+Y)', 'aria-label': 'Redo', disabled: !hist.future.length, onclick: redo }, 'Redo')),
+      // Uploads are optional and parked for now: the button shows once an account has keys.
+      S.publish.some((x) => x.configured)
+        ? h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`)
+        : null,
       h('button', { title: 'Duplicate this reel', onclick: async () => {
         if (saveSoon.pending()) saveSoon.flush();
         const d = await api.projects.duplicate(p.id);
@@ -342,27 +414,72 @@ const thumbObserver = new IntersectionObserver(
   { rootMargin: '200px' },
 );
 
+let clipQuerySeq = 0;
+/** Ask the Library index for the clips that match the filters, then redraw the list. */
+async function refreshClipView() {
+  const f = S.filters;
+  const seq = ++clipQuerySeq;
+  try {
+    const [view, facets] = await Promise.all([
+      api.clipQuery({ text: f.q, hero: f.hero, map: f.map, gameType: f.gameType, minKills: f.minKills, minRating: f.minRating, sort: f.sort }),
+      S.facets ? Promise.resolve(S.facets) : api.clipFacets(),
+    ]);
+    if (seq !== clipQuerySeq) return; // a newer query is on its way
+    S.clipView = view;
+    S.facets = facets;
+  } catch {
+    S.clipView = null; // fall back to filtering here
+  }
+  if (S.leftTab === 'clips') {
+    const focused = document.activeElement?.matches?.('.st-filters input[type=search]');
+    renderLeft();
+    if (focused) focusSearch();
+  }
+}
+
+function filteredClips() {
+  const f = S.filters;
+  if (S.clipView) {
+    const byId = new Map(S.library.map((c) => [c.id, c]));
+    return S.clipView.ids.map((id) => byId.get(id)).filter(Boolean);
+  }
+  const q = f.q.trim().toLowerCase();
+  return S.library
+    .filter((c) => c.reel.kills >= f.minKills && (!q || [c.hero, c.match?.map, ...(c.tags || [])].filter(Boolean).join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (f.sort === 'new' ? b.createdAt - a.createdAt : f.sort === 'kills' ? b.reel.kills - a.reel.kills || b.score - a.score : b.score - a.score));
+}
+
 function clipsPanel() {
   const f = S.filters;
-  const q = f.q.trim().toLowerCase();
-  let list = S.library.filter((c) => {
-    const kills = c.reel.kills;
-    if (kills < f.minKills) return false;
-    if (!q) return true;
-    return [c.hero, c.match?.map, ...(c.tags || [])].filter(Boolean).join(' ').toLowerCase().includes(q);
-  });
-  list = list.sort((a, b) => (f.sort === 'new' ? b.createdAt - a.createdAt : f.sort === 'kills' ? b.reel.kills - a.reel.kills || b.score - a.score : b.score - a.score));
+  const list = filteredClips();
   const inReel = new Map();
   for (const c of S.project.clips) inReel.set(c.videoFile, (inReel.get(c.videoFile) ?? 0) + 1);
   const ai = S.init.ai.signedIn;
   const target = fmt().idealSeconds[1];
+  const setFilter = (k, v) => {
+    f[k] = v;
+    refreshClipView();
+  };
+  const facet = (key, all, items) =>
+    select({ value: f[key], options: [['', all], ...(items ?? []).map((x) => [x.value, `${x.value} (${x.count})`])], onChange: (v) => setFilter(key, v) });
+  const active = ['hero', 'map', 'gameType'].some((k) => f[k]) || f.minKills || f.minRating || f.q;
 
   const controls = h(
     'div',
     { class: 'st-filters' },
-    h('input', { type: 'search', placeholder: 'Search', title: 'Search by hero, map or tag', value: f.q, oninput: debounce((e) => ((f.q = e.target.value), renderLeft(), focusSearch()), 200) }),
-    select({ value: f.minKills, options: [[0, 'Any kills'], [2, '2+ kills'], [3, '3+ kills'], [4, '4+ kills']], onChange: (v) => ((f.minKills = Number(v)), renderLeft()) }),
-    select({ value: f.sort, options: [['score', 'Best'], ['kills', 'Most kills'], ['new', 'Newest']], onChange: (v) => ((f.sort = v), renderLeft()) }),
+    h('input', { type: 'search', placeholder: 'Search hero, map, tag', title: 'Search by hero, map, mode, tag or who you eliminated', value: f.q, oninput: debounce((e) => setFilter('q', e.target.value), 200) }),
+    facet('hero', 'Any hero', S.facets?.heroes),
+    facet('map', 'Any map', S.facets?.maps),
+    facet('gameType', 'Any mode', S.facets?.gameTypes),
+    select({ value: f.minKills, options: [[0, 'Any kills'], [2, '2+ kills'], [3, '3+ kills'], [4, '4+ kills'], [6, 'Team wipe']], onChange: (v) => setFilter('minKills', Number(v)) }),
+    select({ value: f.minRating, options: [[0, 'Any rating'], [3, '3★ and up'], [4, '4★ and up'], [5, '5★ only']], onChange: (v) => setFilter('minRating', Number(v)) }),
+    select({ value: f.sort, options: [['score', 'Best'], ['kills', 'Most kills'], ['rating', 'Top rated'], ['new', 'Newest']], onChange: (v) => setFilter('sort', v) }),
+    active
+      ? h('button', { class: 'st-link', onclick: () => {
+          Object.assign(f, { q: '', hero: '', map: '', gameType: '', minKills: 0, minRating: 0 });
+          refreshClipView();
+        } }, `Clear filters (${list.length} of ${S.library.length})`)
+      : null,
   );
   const actions = h(
     'div',
@@ -455,6 +572,7 @@ function ideaCard(idea) {
     h('div', { class: 'st-row' }, h('div', { class: 'st-track-title' }, idea.title), h('div', { class: 'st-spacer' }), h('span', { class: 'st-tagpill' }, idea.source === 'ai' ? 'AI' : 'Quick')),
     idea.concept ? h('p', { class: 'st-idea-concept' }, idea.concept) : null,
     idea.hook ? h('div', { class: 'st-idea-hook' }, idea.hook) : null,
+    idea.endText ? h('div', { class: 'st-clip-sub st-wrap' }, `Ends with: “${idea.endText}”`) : null,
     idea.captions.length ? h('div', { class: 'st-clip-sub st-wrap' }, idea.captions.slice(0, 4).map((c) => `“${c}”`).join(' → ') + (idea.captions.length > 4 ? ' …' : '')) : null,
     h('div', { class: 'st-clip-sub st-wrap' }, `${idea.clipIds.length} clip${idea.clipIds.length === 1 ? '' : 's'}${heroes.length ? ' · ' + heroes.slice(0, 3).join(', ') : ''} · ${styleName}`),
     h(
@@ -903,6 +1021,7 @@ function clipInspector() {
   crop.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     crop.setPointerCapture(e.pointerId);
+    recordUndo(); // keep the crop as it was before the drag
     const g = crop._geom;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -917,7 +1036,9 @@ function clipInspector() {
     };
     const up = () => {
       crop.removeEventListener('pointermove', move);
-      change(() => undefined);
+      // The drag already changed the clip; save it without a second undo step.
+      saveSoon(S.project);
+      planSoon();
     };
     crop.addEventListener('pointermove', move);
     crop.addEventListener('pointerup', up, { once: true });
@@ -990,9 +1111,8 @@ function clipInspector() {
     killList,
     vertical() || c.cropZoom > 1 ? h('p', { class: 'st-note' }, 'Drag the box on the video to choose what stays in frame.') : null,
     slider({ label: 'Punch in', min: 1, max: 2, step: 0.05, value: c.cropZoom, format: (z) => `${z.toFixed(2)}×`, onInput: (z) => {
-      c.cropZoom = z;
+      setNum('cropZoom', z); // through change(), so Undo gets the zoom from before
       placeCrop();
-      setNum('cropZoom', z);
     }, hint: 'Zooms into the middle of the crop, like the reference edits' }),
     c.hasMic
       ? toggle({ label: 'Use my mic in this clip', checked: c.useMic, onChange: (on) => setNum('useMic', on), hint: 'Your mic is on its own track, so it can be left out per clip' })
@@ -1133,10 +1253,28 @@ function textPanel() {
   const intro = p.intro;
   return [
     h('h3', {}, 'Hook card'),
-    toggle({ label: 'Open with a hook card', checked: !!intro, onChange: (on) => change((pr) => (pr.intro = on ? { text: '', seconds: 4 } : null), [renderRight]), hint: 'An image with big text before the gameplay. The cut into gameplay lands on the drop.' }),
+    toggle({ label: 'Open with a hook card', checked: !!intro, onChange: (on) => change((pr) => (pr.intro = on ? { text: '', seconds: 4, layout: 'band' } : null), [renderRight]), hint: 'A picture with big text before the gameplay, like the reference edits. The cut into gameplay lands on the drop.' }),
     intro
       ? [
-          h('label', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Headline'), h('input', { value: intro.text, maxlength: 120, placeholder: 'e.g. Rate this Deadpool 1-10', oninput: (e) => change((pr) => (pr.intro.text = e.target.value)) })),
+          h(
+            'label',
+            { class: 'st-field' },
+            h('span', { class: 'st-label' }, 'Hook lines'),
+            h('textarea', {
+              rows: 3,
+              value: intro.text,
+              maxlength: 330,
+              placeholder: "One line, or a short back-and-forth, one per line:\nWho's stronger?\nHim?\nOr you?",
+              oninput: (e) => change((pr) => (pr.intro.text = e.target.value)),
+            }),
+            h('span', { class: 'st-note' }, 'Up to 4 lines. Each one shows in turn, so give each about 1.5 s.'),
+          ),
+          select({
+            label: 'Layout',
+            value: intro.layout ?? 'band',
+            options: [['band', 'Picture across the middle, text under it'], ['full', 'Picture fills the screen']],
+            onChange: (v) => change((pr) => (pr.intro.layout = v)),
+          }),
           h(
             'div',
             { class: 'st-row' },
@@ -1148,7 +1286,7 @@ function textPanel() {
               pr.intro.image = img.file;
               pr.intro.imageCredit = img.credit || undefined;
             }, [renderRight]) }) }, 'Find a picture'),
-            intro.image ? h('span', { class: 'st-note' }, intro.image.split(/[\\/]/).pop()) : h('span', { class: 'st-note' }, 'No image: uses a blurred frame of your first clip'),
+            intro.image ? h('span', { class: 'st-note' }, intro.image.split(/[\\/]/).pop()) : h('span', { class: 'st-note' }, 'No picture: uses a frame of your first clip'),
             intro.image ? h('button', { class: 'st-x', onclick: () => change((pr) => (delete pr.intro.image, delete pr.intro.imageCredit), [renderRight]) }, '×') : null,
           ),
           slider({ label: 'Length', min: 1, max: 12, step: 0.5, value: intro.seconds, format: (v) => `about ${v} s`, onInput: (v) => change((pr) => (pr.intro.seconds = v)), hint: 'Snaps to the beat, ideally ending on the drop' }),
@@ -1169,6 +1307,14 @@ function textPanel() {
     slider({ label: 'Size', min: 0.035, max: 0.11, step: 0.005, value: st.captions.size, format: (v) => `${Math.round(v * 1000)}`, onInput: (v) => change((pr) => (pr.style.captions.size = v)) }),
     slider({ label: 'Beats per line', min: 1, max: 16, step: 1, value: st.captions.beatsPerLine, format: (v) => `${v}`, onInput: (v) => change((pr) => (pr.style.captions.beatsPerLine = v)) }),
     toggle({ label: 'ALL CAPS', checked: st.captions.uppercase, onChange: (v) => change((pr) => (pr.style.captions.uppercase = v)) }),
+    h('h3', {}, 'End text'),
+    toggle({ label: 'Text over the last seconds', checked: !!p.outro, onChange: (on) => change((pr) => (pr.outro = on ? { text: 'Follow for part 2', seconds: 3 } : null), [renderRight]), hint: 'e.g. "Follow for part 2" or "Rate it 1-10". Shown big at the top while the reel fades out.' }),
+    p.outro
+      ? [
+          h('label', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Text'), h('input', { value: p.outro.text, maxlength: 100, oninput: (e) => change((pr) => (pr.outro.text = e.target.value)) })),
+          slider({ label: 'Length', min: 1, max: 8, step: 0.5, value: p.outro.seconds, format: (v) => `${v} s`, onInput: (v) => change((pr) => (pr.outro.seconds = v)) }),
+        ]
+      : null,
     h('h3', {}, 'Post caption'),
     post,
     creditsFor(p)
@@ -1377,7 +1523,7 @@ function openExport() {
             h('div', { class: 'st-label' }, 'Upload when it\'s done'),
             connected.map((st) => toggle({ label: st.platform === 'tiktok' && st.tiktokMode !== 'direct' ? `Send to TikTok drafts (${st.account ?? 'TikTok'})` : `Upload to ${st.label} (${st.account ?? st.label})`, checked: false, onChange: (v) => (v ? autoUpload.add(st.platform) : autoUpload.delete(st.platform)), hint: 'Uses the matching export: TikTok for TikTok, Reels for Instagram, Shorts or YouTube for YouTube' })),
           ]
-        : null,
+        : h('p', { class: 'st-note' }, h('a', { href: '#', onclick: (e) => (e.preventDefault(), close(), openAccounts(root, S, () => (renderTop(), renderCenter()))) }, 'Upload accounts'), ' (optional, for later)'),
       toggle({ label: gpuOk ? `Faster export on the graphics card (${S.init.ffmpeg.gpuEncoders[0].replace('h264_', '').toUpperCase()})` : 'Faster export on the graphics card (not available)', checked: gpu, disabled: !gpuOk, onChange: (v) => (gpu = v) }),
       h(
         'div',
@@ -1397,7 +1543,19 @@ function openExport() {
 function onKey(e) {
   if (!root?.isConnected || root.closest('.hidden')) return;
   const tag = (e.target.tagName || '').toLowerCase();
-  if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
+  if (document.querySelector('.st-modal')) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+    return;
+  }
+  if (mod && !e.altKey && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    redo();
+    return;
+  }
   if (e.code === 'Space') {
     const v = E.center?.querySelector('video.st-preview');
     if (v) {

@@ -103,7 +103,8 @@
 
 /* Clip library */
 .st-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.st-filters > input { grid-column: 1 / -1; }
+.st-filters > input, .st-filters > .st-link { grid-column: 1 / -1; }
+.st-filters > .st-link { justify-self: start; }
 .st-filters input { min-width: 0; }
 .st-filters select { padding: 5px 4px; }
 .st-cliplist { display: flex; flex-direction: column; gap: 8px; }
@@ -209,7 +210,7 @@
 .st-idea-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--st-bg2); display: flex; flex-direction: column; gap: 6px; }
 .st-idea-card > .st-btn { align-self: flex-start; margin-top: 2px; }
 .st-idea-concept { margin: 0; line-height: 1.4; }
-.st-idea-hook { font-weight: 800; font-size: 14px; letter-spacing: 0.01em; padding: 6px 8px; border-radius: 6px; background: #000; color: #fff; text-shadow: 0 0 2px #000; border: 1px solid #2a2f3b; }
+.st-idea-hook { font-weight: 800; font-size: 14px; letter-spacing: 0.01em; padding: 6px 8px; border-radius: 6px; background: #000; color: #fff; text-shadow: 0 0 2px #000; border: 1px solid #2a2f3b; white-space: pre-line; }
 .st-idea-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 6px; align-items: center; font-size: 12px; }
 .st-idea-thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 4px; }
 .st-tagpill { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 1px 6px; }

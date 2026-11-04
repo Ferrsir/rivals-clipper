@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipEvent, ClipSidecar, HeroRole } from '../shared/types';
 import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller } from './ai-auth';
-import { clipFileName, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
+import { clipFileName, isClipFile, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
 import { Library, type ClipQuery } from './library';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
@@ -18,11 +18,12 @@ import type { BufferInfo, ClipRecorder, SavedVideo } from './capture/types';
 import { LocalRecorder, StartCancelled } from './capture/local-recorder';
 import { GameWatcher } from './capture/game-watcher';
 import { chooseEngine, lateBy, type Engine } from './engine';
-import { findFfmpeg } from './studio/ffmpeg-bin';
 import { ScreenDetector } from './vision/screen-detector';
-import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, localOptions, paths, saveSettings } from './settings';
+import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, localOptions, paths, sanitizeSettings, saveSettings } from './settings';
 import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
+import { findFfmpeg } from './studio/ffmpeg-bin';
+import { AiTagger, untagged } from './ai-tagger';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -76,6 +77,8 @@ let pending: PendingClip | undefined;
 let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
+/** Between match_start and match_end. AI tagging waits until this is false. */
+let inMatch = false;
 let lastStatus = 'Waiting for Marvel Rivals';
 /** Set when Overwolf's game events or recorder never loaded, so the window can say why instead of "waiting". */
 let packagesProblem: string | undefined;
@@ -84,6 +87,33 @@ const readyPackages = new Set<string>();
 export const ai = createAiClient(() => settings.aiProvider);
 /** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
 export const library = new Library(() => paths(settings.rootFolder).clips);
+/** Any ffmpeg that works: the running recorder's copy, else Overwolf's or the bundled one (see localFfmpeg). */
+async function anyFfmpeg(): Promise<string | undefined> {
+  if (recorder.ffmpegPath) return recorder.ffmpegPath;
+  return localFfmpeg().catch(() => undefined);
+}
+
+const tagger = new AiTagger({
+  ai,
+  ffmpeg: anyFfmpeg,
+  read: (videoFile) => {
+    try {
+      return JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
+    } catch {
+      return undefined;
+    }
+  },
+  save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
+  canRun: () => !inMatch && !pending,
+  enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
+  onTagged: (clip) => {
+    pushClip(clip);
+    if (clip.ai?.error) status(`AI tagging failed: ${clip.ai.error}`);
+    else status(`AI tagged a clip: ${clip.ai?.summary || clip.ai?.tags.join(', ')}`);
+  },
+  onStatus: (msg) => status(msg),
+});
+
 /** Clips saved during the current match, so the match outcome can be added when it ends. */
 let matchClips: string[] = [];
 
@@ -144,6 +174,7 @@ function prepareRoot() {
     settings = { ...settings, rootFolder: fallback };
     ensureFolders(fallback);
   }
+  log?.flushSync();
   log = new EventLog(paths(settings.rootFolder).logs);
 }
 
@@ -212,6 +243,7 @@ function onClipSaved(video: SavedVideo) {
   matchClips.push(saved.videoFile);
   status(`Saved ${kills}-kill clip (score ${saved.score})`);
   pushClip(saved);
+  tagger.enqueue(saved.videoFile);
 }
 
 let practiceNoticeShown = false;
@@ -262,6 +294,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       state.onKillFeed(value, now);
       break;
     case 'match_start':
+      inMatch = true;
       state.onMatchStart();
       matchClips = [];
       practiceNoticeShown = false;
@@ -271,6 +304,8 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       state.onRoundStart();
       break;
     case 'match_end':
+      inMatch = false;
+      tagger.kick();
       if (pending) recorder.stopClip();
       status('Match ended');
       break;
@@ -321,6 +356,8 @@ function setupGep() {
   gep.on('game-exit', () => {
     if (engine !== 'overwolf') return;
     gameRunning = false;
+    inMatch = false;
+    tagger.kick();
     void recorder.stop().then(() => status('Marvel Rivals closed'));
   });
   gep.on('error', (_e, _gameId, err) => status('GEP error', err));
@@ -362,6 +399,8 @@ function setupRecorder() {
   rec.on('game-exit', () => {
     if (engine !== 'overwolf') return;
     gameRunning = false;
+    inMatch = false;
+    tagger.kick();
     gameProcess = undefined;
   });
   rec.on('performance-warning', (w) => status('Recording is struggling to keep up', w));
@@ -388,6 +427,7 @@ function applyEngine(reconsider = false): void {
     // Switching while running: stop the old engine. Its clip in progress still saves.
     const old = recorder;
     gameRunning = false;
+    inMatch = false;
     void old.stop().catch(() => undefined);
     if (prev === 'local') {
       gameWatcher.stop();
@@ -418,8 +458,12 @@ function setupLocalMode() {
   gameWatcher.on('exit', () => {
     if (engine !== 'local') return;
     gameRunning = false;
+    inMatch = false;
     gameProcess = undefined;
-    void Promise.all([detector.shutdown(), localRecorder.stop()]).then(() => status('Marvel Rivals closed'));
+    void Promise.all([detector.shutdown(), localRecorder.stop()]).then(() => {
+      status('Marvel Rivals closed');
+      tagger.kick();
+    });
   });
 }
 
@@ -445,7 +489,7 @@ function setupIpc() {
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
     const rootChanged = patch.rootFolder && patch.rootFolder !== settings.rootFolder;
     const engineChanged = patch.engine !== undefined && patch.engine !== settings.engine;
-    settings = { ...settings, ...patch };
+    settings = sanitizeSettings({ ...settings, ...patch }, settings);
     if (rootChanged) prepareRoot();
     saveSettings(settings);
     fs.mkdirSync(path.dirname(rootPointer), { recursive: true });
@@ -458,11 +502,34 @@ function setupIpc() {
     return settings;
   });
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
-  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(videoFile, { useMic }));
-  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
-  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(videoFile));
-  ipcMain.handle('clip:export', async (_e, videoFile: string, withMic: boolean) => {
-    const ff = recorder.ffmpegPath ?? (await localFfmpeg().catch(() => undefined));
+  // Clip actions only ever touch .mp4 files inside the clips folder, whatever the window sends.
+  const clipOnly = (videoFile: unknown): string => {
+    if (!isClipFile(videoFile, paths(settings.rootFolder).clips)) throw new Error('That file is not a clip in your library.');
+    return videoFile;
+  };
+  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(clipOnly(videoFile), { useMic: !!useMic }));
+  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => {
+    const r = Math.round(Number(rating));
+    if (!(r >= 1 && r <= 5)) throw new Error('Rating must be 1 to 5 stars.');
+    return updateSidecar(clipOnly(videoFile), { rating: r });
+  });
+  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagNow(clipOnly(videoFile)));
+  ipcMain.handle('clips:aiTagUntagged', () => {
+    const list = untagged(library.query({ limit: 100_000 }).items);
+    for (const c of list) tagger.enqueue(c.videoFile);
+    return list.length;
+  });
+  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(clipOnly(videoFile)));
+  /** Moves the clip and its sidecar to the Recycle Bin, so a mistake can be undone there. */
+  ipcMain.handle('clip:delete', async (_e, videoFile: string) => {
+    const file = clipOnly(videoFile);
+    for (const f of [file, sidecarPath(file)]) if (fs.existsSync(f)) await shell.trashItem(f);
+    status('Clip moved to the Recycle Bin');
+    return true;
+  });
+  ipcMain.handle('clip:export', async (_e, rawFile: string, withMic: boolean) => {
+    const videoFile = clipOnly(rawFile);
+    const ff = await anyFfmpeg();
     if (!ff) throw new Error('No ffmpeg found to export with. Reinstall the app or set FFMPEG_PATH.');
     const c = JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
     const out = await exportClip(ff, videoFile, paths(settings.rootFolder).exports, { withMic, hasMicTrack: c.audioTracks.length > 1 });
@@ -564,6 +631,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   gameWatcher.stop();
   void detector.shutdown().catch(() => undefined);
+  log?.flushSync();
   void recorder.stop().catch(() => undefined);
 });
 app.on('window-all-closed', () => app.quit());

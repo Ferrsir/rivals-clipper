@@ -230,9 +230,16 @@ export interface ReelProject {
   captions: CaptionLine[];
   /** Optional hook card before the first clip: an image and a big line of text. */
   intro: IntroCard | null;
+  /** Optional end text over the last seconds, e.g. "Follow for part 2". */
+  outro?: OutroText | null;
   /** Post caption and hashtags for the upload. */
   caption?: string;
   lastExports?: Array<{ file: string; format: FormatId; at: number }>;
+}
+
+export interface OutroText {
+  text: string;
+  seconds: number;
 }
 
 export interface CaptionLine {
@@ -243,10 +250,16 @@ export interface CaptionLine {
 }
 
 export interface IntroCard {
-  /** Image file (png/jpg/webp). Without one, the first frame of the first clip is used, blurred. */
+  /** Image file (png/jpg/webp). Without one, the first frame of the first clip is used. */
   image?: string;
+  /**
+   * The hook. Several lines (one per line) play one after another, like a short dialogue
+   * ("WHO'S STRONGER?" / "HIM?" / "OR YOU?").
+   */
   text: string;
   seconds: number;
+  /** band: the picture in a strip across the middle over a blurred copy of itself, text under it (the reference look). full: the picture fills the screen. */
+  layout?: 'band' | 'full';
   /** Attribution for a downloaded Creative Commons picture. */
   imageCredit?: string;
 }
@@ -350,8 +363,10 @@ export interface ReelIdea {
   title: string;
   /** One sentence: what the edit is about. */
   concept: string;
-  /** Big text on the hook card. Empty for no hook card. */
+  /** Hook card text: one line, or up to 4 short lines shown one after another. Empty for no hook card. */
   hook: string;
+  /** Big text over the last seconds, e.g. "Comment who wins". */
+  endText?: string;
   /** What the hook card picture should show, and words to search for one. */
   imageIdea: string;
   imageSearch: string;

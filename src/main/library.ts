@@ -9,7 +9,7 @@ import type { ClipSidecar } from '../shared/types';
 export type ClipSort = 'new' | 'score' | 'kills' | 'rating';
 
 export interface ClipQuery {
-  /** Free text: matched against hero, map, mode, game type, tags and victim heroes. */
+  /** Free text: matched against hero, map, mode, game type, tags, victim heroes and the AI summary. */
   text?: string;
   hero?: string;
   map?: string;
@@ -52,7 +52,7 @@ const norm = (s: string | undefined) => (s ?? '').trim().toLowerCase();
 
 function haystack(c: ClipSidecar): string {
   const victims = c.events.map((e) => e.victimHero ?? '').join(' ');
-  return [c.hero, c.match.map, c.match.gameMode, c.match.gameType, c.endedMatch, victims, ...c.tags].map(norm).join(' ');
+  return [c.hero, c.match.map, c.match.gameMode, c.match.gameType, c.endedMatch, victims, c.ai?.summary, ...c.tags].map(norm).join(' ');
 }
 
 /** Filter, sort and page a list of clips. Pure, so the UI and the Studio get the same answer. */
