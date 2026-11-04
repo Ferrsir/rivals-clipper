@@ -30,7 +30,8 @@ rows, and until then a kill-feed row alone can't tell your kill from your death 
 
 | Cue on screen | What it means | Needs text reading |
 | --- | --- | --- |
-| A new name in the KO list right of the crosshair | You got a KO (only your KOs show there) | No (the name is read for the victim) |
+| A new name in the KO list right of the crosshair, with the crossed-blades icon | You got a KO (only your KOs show there) | No (the name is read for the victim) |
+| The same, with the figure-on-a-ring icon | An assist | No |
 | A new light-grey row in the kill feed with your name on the left | Your KO | Yes |
 | The same kind of row with your name on the right | Your death | Yes |
 | "N PLAYER KO STREAK!" with no KO seen just before it | A KO the other cues missed | No |
@@ -38,7 +39,8 @@ rows, and until then a kill-feed row alone can't tell your kill from your death 
 | VICTORY / DEFEAT | Match result | Yes |
 | The map label, top left | Map name, or the Practice Range | Yes |
 
-A KO-list name and a feed row within 1.5 s of each other are one KO. Each KO is reported with the time it showed
+A KO-list name and a feed row within 1.5 s of each other are one KO, and the same name again within 8 s is the
+same KO shown twice. Each KO is reported with the time it showed
 on screen, and the clip reaches back by however long detection took, so clips start where they should.
 
 Text reading uses Tesseract (WebAssembly, bundled, runs on your PC, nothing is uploaded). If it can't start,
@@ -85,7 +87,8 @@ later.
 
 Honest list, so you know what to expect:
 
-- **Assists are not detected.** The HUD shows them briefly, but not in a way that can be read reliably yet.
+- **Assists are new and lightly tested.** They come from the KO list's assist icon, which was checked on only one
+  example so far. When unsure, a line counts as a KO.
 - **Heroes, teammates alive, enemies alive and ult usage are not known**, so clips from local mode have fewer tags
   (no clutch, healer-hunt or ult tags). Kill count, streaks, fast kills, victim names, map and match result work.
 - **Your name has to be on screen to tell kills from deaths in the kill feed.** The KO list doesn't need it.

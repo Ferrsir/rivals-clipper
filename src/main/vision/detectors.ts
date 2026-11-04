@@ -11,7 +11,7 @@ import type { HudLayout, RegionId } from './layout';
 
 export type Observation =
   | { kind: 'feed-row'; t: number; id: number; box: Box; crop: Crop }
-  | { kind: 'ko-line'; t: number; id: number; box: Box; crop: Crop }
+  | { kind: 'ko-line'; t: number; id: number; box: Box; crop: Crop; assist: boolean }
   | { kind: 'banner'; t: number; id: number; box: Box; crop: Crop }
   | { kind: 'hud'; t: number; matchHud: boolean; feedRows: number; koLines: number }
   | { kind: 'crop'; t: number; region: RegionId; crop: Crop };
@@ -21,6 +21,8 @@ export interface Candidate {
   sig: Float32Array;
   /** False for a line that is shown but faded (an older entry). Weak lines are followed but never reported. */
   strong?: boolean;
+  /** KO list: the line starts with the assist icon rather than the KO icon. */
+  assist?: boolean;
 }
 
 interface Track {
@@ -36,6 +38,8 @@ interface Track {
   /** Seen bright at least once. Lines that are only ever seen faded were on screen before we looked. */
   strong: boolean;
   reported: boolean;
+  /** Sightings where the candidate had `assist` set. */
+  assistVotes: number;
 }
 
 export interface TrackerOptions {
@@ -96,6 +100,7 @@ export class LineTracker {
       tr.box = c.box;
       tr.sig = c.sig;
       if (c.strong !== false) tr.strong = true;
+      if (c.assist) tr.assistVotes++;
       if (!tr.confirmed && tr.still >= this.o.confirmFrames) tr.confirmed = true;
       // Report once it has settled and been bright; a line that fades in may settle first.
       if (tr.confirmed && tr.strong && !tr.reported && t - tr.firstSeen <= REPORT_WINDOW_MS) {
@@ -106,7 +111,7 @@ export class LineTracker {
     for (const c of cands) {
       if (usedC.has(c)) continue;
       const strong = c.strong !== false;
-      const tr: Track = { id: nextId++, sig: c.sig, box: c.box, firstSeen: t, lastSeen: t, seen: 1, still: 1, confirmed: false, strong, reported: false };
+      const tr: Track = { id: nextId++, sig: c.sig, box: c.box, firstSeen: t, lastSeen: t, seen: 1, still: 1, confirmed: false, strong, reported: false, assistVotes: c.assist ? 1 : 0 };
       this.tracks.push(tr);
       if (this.o.confirmFrames <= 1) {
         tr.confirmed = true;
@@ -188,10 +193,60 @@ export interface KoOptions {
  */
 export function koCandidates(v: View, opts: KoOptions = {}): Candidate[] {
   const strong = koLines(v, WHITE, opts);
-  for (const c of strong) c.strong = true;
+  for (const c of strong) {
+    c.strong = true;
+    c.assist = isAssistIcon(iconShape(v, c.box, WHITE));
+  }
   const weak = koLines(v, PALE, opts).filter((c) => !strong.some((s) => overlapY(s.box, c.box)));
   for (const c of weak) c.strong = false;
   return [...strong, ...weak];
+}
+
+export interface IconShape {
+  /** Icon width in HUD units (0 = no icon found). */
+  width: number;
+  /** Ink in the top third over ink in the bottom third. */
+  topToBottom: number;
+  /** Share of the top third's ink that sits in the left or right 30% of the icon. */
+  topCorners: number;
+}
+
+/**
+ * The icon at the start of a KO-list line. The KO icon is an X of crossed blades (ink reaching the top
+ * corners, about as much on top as at the bottom). The assist icon is a small figure on a ring: a head
+ * in the middle at the top and a wide ring at the bottom.
+ */
+export function iconShape(v: View, b: Box, bit: number): IconShape {
+  const h = b.y1 - b.y0;
+  let width = 0;
+  let zeros = 0;
+  for (let x = b.x0; x < Math.min(b.x1, b.x0 + 2 * h); x++) {
+    let n = 0;
+    for (let y = b.y0; y < b.y1; y++) if (v.mask[y * v.w + x] & bit) n++;
+    if (n) {
+      width = x - b.x0 + 1;
+      zeros = 0;
+    } else if (width && ++zeros >= 3) break;
+  }
+  const third = Math.max(1, Math.ceil(h * 0.35));
+  let top = 0;
+  let corners = 0;
+  let bottom = 0;
+  for (let y = b.y0; y < b.y1; y++) {
+    for (let x = b.x0; x < b.x0 + width; x++) {
+      if (!(v.mask[y * v.w + x] & bit)) continue;
+      if (y < b.y0 + third) {
+        top++;
+        if (x < b.x0 + 0.3 * width || x >= b.x0 + 0.7 * width) corners++;
+      } else if (y >= b.y1 - third) bottom++;
+    }
+  }
+  return { width: width / v.u, topToBottom: bottom ? top / bottom : top ? 9 : 0, topCorners: top ? corners / top : 0 };
+}
+
+/** Only a clear figure-on-a-ring counts; anything unsure stays a KO. */
+export function isAssistIcon(s: IconShape): boolean {
+  return s.width >= 12 && s.topToBottom < 0.6 && s.topCorners < 0.3;
 }
 
 function overlapY(a: Box, b: Box): boolean {
@@ -311,7 +366,7 @@ export class HudAnalyzer {
 
     const koView = viewFor(frame, this.layout, 'ko');
     for (const tr of this.ko.update(koCandidates(koView, { columnX: this.opts.koColumnX }), t, koView.u, frameMs))
-      out.push({ kind: 'ko-line', t: tr.firstSeen, id: tr.id, box: tr.box, crop: cropLuma(koView, tr.box) });
+      out.push({ kind: 'ko-line', t: tr.firstSeen, id: tr.id, box: tr.box, crop: cropLuma(koView, tr.box), assist: tr.assistVotes * 2 > tr.seen });
 
     const bannerView = viewFor(frame, this.layout, 'banner');
     for (const tr of this.banner.update(bannerCandidates(bannerView), t, bannerView.u, frameMs))

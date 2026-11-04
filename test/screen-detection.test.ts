@@ -119,6 +119,34 @@ test('the match bar needs both team colours', () => {
   assert.equal(matchHudVisible(viewFor(f, L, 'top')), true);
 });
 
+test('the KO icon (crossed blades) and the assist icon (figure on a ring) are told apart', () => {
+  const f = blankFrame(L);
+  const g = region(L, 'ko');
+  const u = g.pxPerUnit;
+  const s = Math.round(22 * u); // icon size
+  const X = (x0: number, y0: number) => {
+    for (let i = 0; i < s; i++) {
+      paint(f, L, 'ko', x0 + i, y0 + i, 2, 1, WHITE);
+      paint(f, L, 'ko', x0 + s - 1 - i, y0 + i, 2, 1, WHITE);
+    }
+  };
+  const figure = (x0: number, y0: number) => {
+    paint(f, L, 'ko', x0 + Math.round(s / 2) - 2, y0, 4, 4, WHITE); // head
+    paint(f, L, 'ko', x0 + Math.round(s / 2) - 1, y0 + 4, 2, Math.round(s * 0.45), WHITE); // body
+    paint(f, L, 'ko', x0, y0 + s - 5, s, 2, WHITE); // ring
+    paint(f, L, 'ko', x0 + 2, y0 + s - 3, s - 4, 3, WHITE);
+  };
+  const x0 = Math.round(60 * u);
+  X(x0, 40);
+  paintText(f, L, 'ko', x0 + s + 8, 42, 8, s - 4, WHITE);
+  figure(x0, 140);
+  paintText(f, L, 'ko', x0 + s + 8, 142, 8, s - 4, WHITE, 2);
+  const c = koCandidates(viewFor(f, L, 'ko')).sort((a, b) => a.box.y0 - b.box.y0);
+  assert.equal(c.length, 2);
+  assert.equal(c[0].assist, false);
+  assert.equal(c[1].assist, true);
+});
+
 // ---------- line tracking ----------
 
 function cand(x: number, y: number, w: number, sigSeed: number, strong = true): Candidate {
@@ -209,8 +237,8 @@ function harness(opts: { name?: string; ocr?: boolean; hudVerified?: boolean } =
       fusion.onObservation({ kind: 'hud', t, matchHud: on, feedRows: 0, koLines: 0 });
       fusion.tick(t);
     },
-    ko(t: number, id: number) {
-      fusion.onObservation({ kind: 'ko-line', t, id, box, crop: empty });
+    ko(t: number, id: number, assist = false) {
+      fusion.onObservation({ kind: 'ko-line', t, id, box, crop: empty, assist });
     },
     feed(t: number, id: number) {
       fusion.onObservation({ kind: 'feed-row', t, id, box, crop: empty });
@@ -282,6 +310,28 @@ test('a trade (you KO them as they KO you) counts the kill and the death', () =>
   h.fusion.tick(8000);
   assert.equal(h.kills().length, 1);
   assert.equal(h.deaths().length, 1);
+});
+
+test('a KO-list line with the assist icon is an assist, not a kill', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.ko(1000, 1, true);
+  h.fusion.onOcr('ko', 1, words(['BooBoB', 10]), 1200);
+  h.fusion.tick(3000);
+  assert.equal(h.kills().length, 0);
+  assert.deepEqual(h.events.filter((e) => e.key === 'assist').map((e) => e.value), [{ victim: 'BooBoB' }]);
+});
+
+test('the same name KO\'d twice within a few seconds is one KO shown twice', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.ko(1000, 1);
+  h.fusion.onOcr('ko', 1, words(['BALLADS1', 10]), 1200);
+  h.ko(3500, 2);
+  h.fusion.onOcr('ko', 2, words(['BALLADSI', 10]), 3700);
+  h.ko(15_000, 3);
+  h.fusion.onOcr('ko', 3, words(['BALLADS1', 10]), 15_200);
+  assert.equal(h.kills().length, 2);
 });
 
 test('without your name a feed row alone claims nothing', () => {

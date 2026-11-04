@@ -19,7 +19,7 @@ import type { RegionId } from './layout';
 
 export interface EventSink {
   /** Same keys as GEP's match_info events. `at` is when it happened on screen (epoch ms). */
-  gameEvent(key: 'kill' | 'death' | 'kill_feed' | 'match_start' | 'match_end', value: unknown, at: number): void;
+  gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end', value: unknown, at: number): void;
   infoUpdate(feature: 'game_info' | 'match_info', key: string, value: unknown): void;
 }
 
@@ -64,7 +64,12 @@ interface KoItem {
   ocrDone: boolean;
   feed?: FeedItem;
   done: boolean;
+  /** The line has the assist icon: you helped, someone else got the KO. */
+  assist?: boolean;
 }
+
+/** Nobody respawns and gets KO'd by you again this fast, so the same name again is the same KO. */
+const SAME_VICTIM_MS = 8000;
 
 interface FeedItem {
   id: number;
@@ -135,6 +140,8 @@ export class ScreenFusion {
   private feed: FeedItem[] = [];
   private banners: BannerItem[] = [];
   private lastKillAt = -Infinity;
+  private recentVictims: Array<{ name: string; at: number }> = [];
+  assists = 0;
   private hudSeenAt = -Infinity;
   private hudLostAt = -Infinity;
   private hudWindow: Array<{ t: number; v: boolean }> = [];
@@ -176,9 +183,10 @@ export class ScreenFusion {
     if (this.startedAt === undefined) this.begin(o.t);
     switch (o.kind) {
       case 'ko-line': {
-        const item: KoItem = { id: o.id, t: o.t, ocrDone: !this.o.ocr, done: false };
+        const item: KoItem = { id: o.id, t: o.t, ocrDone: !this.o.ocr, done: false, assist: o.assist };
         this.kos.push(item);
-        const f = this.feed.find((x) => !x.ko && !x.done && Math.abs(x.t - o.t) <= this.o.pairWindowMs);
+        // An assist has no feed row of yours (someone else's name is on the left).
+        const f = o.assist ? undefined : this.feed.find((x) => !x.ko && !x.done && Math.abs(x.t - o.t) <= this.o.pairWindowMs);
         if (f) this.pair(item, f);
         if (this.o.ocr) this.cb.requestOcr?.({ id: o.id, kind: 'ko' });
         break;
@@ -186,7 +194,7 @@ export class ScreenFusion {
       case 'feed-row': {
         const item: FeedItem = { id: o.id, t: o.t, ocrDone: !this.o.ocr, done: false };
         this.feed.push(item);
-        const k = this.kos.find((x) => !x.feed && Math.abs(x.t - o.t) <= this.o.pairWindowMs);
+        const k = this.kos.find((x) => !x.feed && !x.assist && Math.abs(x.t - o.t) <= this.o.pairWindowMs);
         if (k) this.pair(k, item);
         if (this.o.ocr) this.cb.requestOcr?.({ id: o.id, kind: 'feed' });
         break;
@@ -263,6 +271,10 @@ export class ScreenFusion {
       const ready = (k.ocrDone && (!k.feed || k.feed.ocrDone)) || now - k.t >= this.o.decideAfterMs;
       if (!ready) continue;
       k.done = true;
+      if (k.assist) {
+        this.emitAssist(k.t, k.victim);
+        continue;
+      }
       // A trade: the feed row paired with this KO is actually your death. Count both.
       if (k.feed?.ocr && this.sidesOf(k.feed.ocr)?.mine === 'victim') {
         const death = k.feed;
@@ -285,7 +297,7 @@ export class ScreenFusion {
       const sides = f.ocr ? this.sidesOf(f.ocr) : undefined;
       if (sides?.mine === 'attacker') {
         // Same KO as a KO-list name that had no row of its own (e.g. it was paired with a death).
-        const k = this.kos.find((x) => !x.feed && Math.abs(x.t - f.t) <= this.o.pairWindowMs);
+        const k = this.kos.find((x) => !x.feed && !x.assist && Math.abs(x.t - f.t) <= this.o.pairWindowMs);
         if (k) this.pair(k, f);
         else this.emitKill(f.t, sides.victim);
       } else if (sides?.mine === 'victim') {
@@ -327,6 +339,7 @@ export class ScreenFusion {
   }
 
   private emitKill(at: number, victim: string | undefined): void {
+    if (victim && this.sameVictimAgain(victim, at)) return;
     this.checkPractice(at);
     this.lastKillAt = at;
     this.kills++;
@@ -336,6 +349,19 @@ export class ScreenFusion {
       at,
     );
     this.sink.gameEvent('kill', this.kills, at);
+  }
+
+  /** True when this name was KO'd moments ago: the HUD showed the same KO twice (it moved, or flickered). */
+  private sameVictimAgain(victim: string, at: number): boolean {
+    this.recentVictims = this.recentVictims.filter((v) => at - v.at < SAME_VICTIM_MS);
+    if (normalizeName(victim).length >= 3 && this.recentVictims.some((v) => nameSimilarity(v.name, victim) >= 0.8)) return true;
+    this.recentVictims.push({ name: victim, at });
+    return false;
+  }
+
+  private emitAssist(at: number, victim: string | undefined): void {
+    this.assists++;
+    this.sink.gameEvent('assist', { victim: victim || undefined }, at);
   }
 
   private emitDeath(at: number, attacker: string | undefined): void {
