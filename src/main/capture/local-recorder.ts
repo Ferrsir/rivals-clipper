@@ -12,6 +12,7 @@ import { wavHeader } from './audio-buffer';
 import { AUDIO_FORMAT, AudioCapture, helperPath, listAudioDevices } from './audio-helper';
 import { ENCODER_LABEL, describeProbe, muxArgs, planRecording, probeCapture, recordArgs, type EncoderId, type ProbeResult } from './encoder';
 import { TsReplayBuffer, type CaptureHandle } from './ts-buffer';
+import { CaptureWatchdog } from './watchdog';
 import type { BufferInfo, ClipRecorder, GameProcess, MicDevice, SavedVideo } from './types';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -171,7 +172,7 @@ export class LocalRecorder implements ClipRecorder {
       // The stream lives in memory, so there is no file for ffmpeg to finish: just end it.
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 3000);
-        ff.once('exit', () => {
+        ff.once('close', () => {
           clearTimeout(t);
           resolve();
         });
@@ -212,12 +213,23 @@ export class LocalRecorder implements ClipRecorder {
     const proc = spawn(ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.ff = proc;
     this.stderrTail = [];
+    const buffer = this.ts;
+    const watchdog = new CaptureWatchdog(() => {
+      if (this.ff !== proc || this.stopping) return;
+      this.log('Screen recorder stopped producing footage for 15 seconds. Restarting capture.');
+      proc.kill(); // close triggers the normal partial-clip save and session-scoped recovery
+    });
+    watchdog.start();
+    proc.once('close', () => watchdog.stop());
     proc.once('error', (err) => {
       this.stderrTail.push(err.message);
       if (this.ff === proc) this.ff = undefined;
       this.log(`Screen recorder could not start: ${err.message}`);
     });
-    proc.stdout.on('data', (d: Buffer) => this.ts.push(d));
+    proc.stdout.on('data', (d: Buffer) => {
+      watchdog.progress();
+      buffer.push(d); // bytes from an older process must not enter a replacement replay buffer
+    });
     proc.stderr.on('data', (d: Buffer) => {
       for (const line of d.toString('utf8').split(/\r?\n/)) {
         if (!line.trim()) continue;
@@ -225,7 +237,8 @@ export class LocalRecorder implements ClipRecorder {
         if (this.stderrTail.length > 30) this.stderrTail.shift();
       }
     });
-    proc.on('exit', (code) => {
+    // Consume the final stdout packets before saving a partial clip or restarting.
+    proc.on('close', (code) => {
       if (this.ff !== proc) return;
       this.ff = undefined;
       if (this.stopping) return;
