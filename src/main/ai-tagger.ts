@@ -100,7 +100,10 @@ export interface TaggerDeps {
 export class AiTagger {
   private queue: string[] = [];
   private busy = false;
+  private draining = false;
   private timer: NodeJS.Timeout | undefined;
+  /** Every tagging job, automatic or manual, runs through this chain, so only one runs at a time. */
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private d: TaggerDeps) {}
 
@@ -121,25 +124,55 @@ export class AiTagger {
     this.timer = setTimeout(() => void this.drain(), delayMs);
   }
 
-  private async drain(): Promise<void> {
-    if (this.busy) return;
-    while (this.queue.length) {
-      if (!this.d.enabled()) return;
-      if (!this.d.canRun()) return this.kick(15_000);
-      const status = await this.d.ai.status().catch(() => ({ signedIn: false }));
-      if (!status.signedIn) return;
-      const file = this.queue.shift()!;
+  private exclusive<T>(job: () => Promise<T>): Promise<T> {
+    const run = async () => {
       this.busy = true;
       try {
-        await this.tagOne(file);
+        return await job();
       } finally {
         this.busy = false;
       }
+    };
+    const p = this.chain.then(run, run);
+    this.chain = p.catch(() => undefined);
+    return p;
+  }
+
+  private async drain(): Promise<void> {
+    if (this.draining) return; // reserved before any await, so two drains never overlap
+    this.draining = true;
+    try {
+      while (this.queue.length) {
+        if (!this.d.enabled()) return;
+        if (!this.d.canRun()) return this.kick(15_000);
+        const status = await this.d.ai.status().catch(() => ({ signedIn: false }));
+        if (!status.signedIn) return;
+        const file = this.queue.shift()!;
+        const ran = await this.exclusive(async () => {
+          // A match may have started while we waited on the status check or another job.
+          if (!this.d.canRun()) return false;
+          await this.tagOne(file);
+          return true;
+        });
+        if (!ran) {
+          this.queue.unshift(file);
+          return this.kick(15_000);
+        }
+      }
+    } finally {
+      this.draining = false;
     }
   }
 
-  /** Tag one clip now. Errors are stored on the clip so it is not retried forever. */
-  async tagOne(videoFile: string): Promise<ClipSidecar | undefined> {
+  /** The "Tag with AI" button: runs even with auto-tagging off, but never during a match or recording. */
+  async tagNow(videoFile: string): Promise<ClipSidecar | undefined> {
+    if (!this.d.canRun()) throw new Error('A match or recording is in progress. Tag this clip after the match.');
+    this.queue = this.queue.filter((f) => f !== videoFile);
+    return this.exclusive(() => this.tagOne(videoFile));
+  }
+
+  /** Tag one clip. Errors are stored on the clip so it is not retried forever. Callers serialize through exclusive(). */
+  private async tagOne(videoFile: string): Promise<ClipSidecar | undefined> {
     const clip = this.d.read(videoFile);
     if (!clip || !fs.existsSync(videoFile)) return undefined;
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rivals-tag-'));

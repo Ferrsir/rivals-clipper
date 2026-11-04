@@ -108,14 +108,14 @@ test('tagger reads frames, asks the AI and saves the answer; failures are saved 
       canRun: () => true,
       enabled: () => true,
     });
-    const r = await tagger.tagOne(video);
+    const r = await tagger.tagNow(video);
     assert.equal(seen.length, 2);
     assert.deepEqual(r?.ai?.tags, ['dive']);
     assert.equal(r?.ai?.hype, 7);
     assert.ok(seen.every((p) => !fs.existsSync(p)), 'frames are cleaned up');
 
     fail = true;
-    const f = await tagger.tagOne(video);
+    const f = await tagger.tagNow(video);
     assert.equal(f?.ai?.error, 'rate limited');
     assert.deepEqual(f?.ai?.tags, []);
   } finally {
@@ -143,4 +143,35 @@ test('tagger waits while a match is on', async () => {
   assert.equal(asked, 0, 'a clip with no sidecar is skipped without asking');
   tagger.kick(60_000);
   clearTimeout((tagger as unknown as { timer: NodeJS.Timeout }).timer);
+});
+
+test('manual tagging refuses during a match, and jobs never overlap', { skip: process.platform === 'win32' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-lock-'));
+  let canRun = false;
+  let running = 0;
+  let maxRunning = 0;
+  const clip = base({ videoFile: __filename });
+  const tagger = new AiTagger({
+    ai: {
+      status: async () => ({ signedIn: true, provider: 'claude' }),
+      ask: async () => {
+        running++;
+        maxRunning = Math.max(maxRunning, running);
+        await new Promise((r) => setTimeout(r, 20));
+        running--;
+        return { text: '', provider: 'claude', json: { tags: [], summary: 'ok', hype: 5 } };
+      },
+    },
+    ffmpeg: async () => fakeFfmpeg(dir),
+    read: () => clip,
+    save: (_f, info) => ({ ...clip, ai: info }),
+    canRun: () => canRun,
+    enabled: () => true,
+  });
+  await assert.rejects(tagger.tagNow(__filename), /match/);
+  canRun = true;
+  await Promise.all([tagger.tagNow(__filename), tagger.tagNow(__filename), tagger.tagNow(__filename)]);
+  assert.equal(running, 0);
+  assert.equal(maxRunning, 1, 'three requests ran one after another');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

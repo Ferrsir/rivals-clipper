@@ -375,7 +375,7 @@ function setupIpc() {
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
   ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(videoFile, { useMic }));
   ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
-  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagOne(videoFile));
+  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagNow(videoFile));
   ipcMain.handle('clips:aiTagUntagged', () => {
     const list = untagged(library.query({ limit: 100_000 }).items);
     for (const c of list) tagger.enqueue(c.videoFile);
