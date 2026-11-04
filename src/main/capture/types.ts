@@ -26,6 +26,8 @@ export interface SavedVideo {
   /** Epoch ms of the first frame. */
   startTimeEpoch: number;
   error?: unknown;
+  /** Raw video/audio retained after a failed conversion, so the footage can be recovered. */
+  recoveryFolder?: string;
   /** Audio tracks actually inside the file. Overwolf clips leave this out (main.ts uses BufferInfo.micRecorded). */
   audioTracks?: Array<'game' | 'mic'>;
 }

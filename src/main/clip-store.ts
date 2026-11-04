@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ClipSidecar } from '../shared/types';
 import { scoreClip } from './scoring';
 import { writeFileAtomic } from './settings';
@@ -14,7 +15,7 @@ export function clipFileName(now: Date, kills: number, hero?: string): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
   const safeHero = (hero ?? 'unknown').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
-  return `${stamp}_${kills}k_${safeHero}`;
+  return `${stamp}-${String(now.getMilliseconds()).padStart(3, '0')}-${randomUUID().slice(0, 8)}_${kills}k_${safeHero}`;
 }
 
 export function writeSidecar(clip: Omit<ClipSidecar, 'score' | 'tags' | 'scoreBreakdown'>): ClipSidecar {
