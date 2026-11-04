@@ -35,16 +35,37 @@ jobs:
       - run: npm ci
       - run: npm run dist
         env:
-          # Optional: Overwolf signing. Without these the installer is built unsigned,
-          # which is fine for personal use. Add them as repo secrets to sign builds.
+          # Free signing/distribution routes switch on when these repo secrets exist (docs/signing.md).
+          RELEASE_BUILD: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '0' }}
           OW_CLI_EMAIL: ${{ secrets.OW_CLI_EMAIL }}
           OW_CLI_API_KEY: ${{ secrets.OW_CLI_API_KEY }}
+          OW_BUILD_KEY: ${{ secrets.OW_BUILD_KEY }}
+          STORE_IDENTITY_NAME: ${{ secrets.STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ secrets.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ secrets.STORE_PUBLISHER_DISPLAY_NAME }}
+      - name: Report signature status of every shipped binary
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem release -Filter *.exe) + @(Get-ChildItem release/win-unpacked -Recurse -Include *.exe,*.dll,*.node)
+          $rows = foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            [pscustomobject]@{ File = $f.FullName.Replace("$PWD\", ''); Status = $sig.Status; Signer = $sig.SignerCertificate.Subject }
+          }
+          $rows | Format-Table -AutoSize | Out-String -Width 300 | Write-Output
+          $unsigned = @($rows | Where-Object { $_.Status -ne 'Valid' })
+          "## Signature report" >> $env:GITHUB_STEP_SUMMARY
+          "$($files.Count) binaries, $($unsigned.Count) not validly signed" >> $env:GITHUB_STEP_SUMMARY
+          $unsigned | ForEach-Object { "- $($_.File): $($_.Status)" } >> $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: RivalsClipper-Setup
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.appx
       - name: Publish release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/*.appx

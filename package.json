@@ -13,7 +13,7 @@
     "start": "npm run build && ow-electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
-    "dist": "npm run build && ow-electron-builder --publish=never"
+    "dist": "npm run build && ow-electron-builder --config electron-builder.config.js --publish=never"
   },
   "overwolf": {
     "packages": [
