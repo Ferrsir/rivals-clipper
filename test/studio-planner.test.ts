@@ -184,3 +184,19 @@ test('cinematic dip transition with a single clip builds a valid eq expression',
   assert.ok(eq);
   assert.ok(!/\(\)|,\)/.test(eq), eq);
 });
+
+test('each export gets its own base name, even within the same minute', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { uniqueExportBase } = await import('../src/main/studio/pipeline');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reels-'));
+  const at = new Date(2026, 10, 4, 12, 30);
+  const first = uniqueExportBase(dir, 'My Reel', at);
+  fs.writeFileSync(path.join(dir, `${first}_tiktok.mp4`), '');
+  fs.writeFileSync(path.join(dir, `${first}_shorts.mp4`), '');
+  const second = uniqueExportBase(dir, 'My Reel', at);
+  assert.notEqual(second, first);
+  assert.equal(second, `${first}-2`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

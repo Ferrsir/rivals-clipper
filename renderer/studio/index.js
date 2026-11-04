@@ -399,7 +399,7 @@ function clipsPanel() {
         h('div', { class: 'st-tags' }, (c.reel.tags || []).slice(0, 4).join(' ')),
       ),
       h('button', { class: 'st-add', title: n ? `In the reel ${n === 1 ? 'once' : n + ' times'}. Add it again` : 'Add to the reel', onclick: () => {
-        change((p) => p.clips.push({ ...c.reel, uid: Math.random().toString(36).slice(2, 10) }), [renderLeft, renderStrip]);
+        change((p) => p.clips.push({ ...structuredClone(c.reel), uid: Math.random().toString(36).slice(2, 10) }), [renderLeft, renderStrip]);
       } }, '+'),
     );
     grid.append(card);
@@ -626,7 +626,7 @@ function renderCenter() {
     vertical() ? toggle({ label: 'Safe zones', checked: S.safeZones, onChange: (v) => ((S.safeZones = v), renderCenter()), hint: 'Shows where TikTok/Instagram/YouTube put their buttons and captions' }) : null,
   );
   const warn = tl?.warnings?.length ? h('ul', { class: 'st-warnings' }, tl.warnings.map((w) => h('li', {}, w))) : null;
-  const done = job?.stage === 'done' && !job.preview && job.files?.length ? exportDone(job) : null;
+  const done = job?.stage === 'done' && !job.preview && job.files?.length && job.projectId === S.project.id ? exportDone(job) : null;
   const err = job?.stage === 'error' ? h('div', { class: 'st-error' }, h('b', {}, 'Render failed. '), job.error || '') : null;
   const wrap = h('div', { class: 'st-stage-wrap' }, stage);
   wrap.style.setProperty('--ar', String(ar));
@@ -1070,7 +1070,7 @@ async function startRender(req) {
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
   try {
     const { jobId } = await api.render(S.project, request);
-    S.job = { jobId, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+    S.job = { jobId, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
   } catch (err) {
     toast(root, err.message, 'error', 7000);
   }
@@ -1082,10 +1082,20 @@ function onProgress(p) {
   if (!S.job || p.jobId !== S.job.jobId) return;
   Object.assign(S.job, p);
   if (p.stage === 'done') {
-    if (S.job.preview && p.files?.[0]) S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
-    else {
-      S.project.lastExports = [...(S.project.lastExports ?? []), ...(p.files ?? []).map((f) => ({ file: f, format: S.project.format, at: Date.now() }))];
+    // The job belongs to the reel it was started from, which may not be the one open now.
+    // The main process has already recorded the export on that reel's history.
+    const here = S.job.projectId === S.project.id;
+    if (S.job.preview) {
+      if (here && p.files?.[0]) S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
+    } else if (here) {
+      const proj = S.project;
+      api.projects
+        .get(proj.id)
+        .then((saved) => saved && (proj.lastExports = saved.lastExports))
+        .catch(() => undefined);
       toast(root, 'Export finished');
+    } else {
+      toast(root, `Export of "${S.job.projectName}" finished`);
     }
     renderTop();
   }
