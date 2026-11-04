@@ -48,3 +48,12 @@ test('match state parses GEP roster strings and matches kill feed victims', () =
   assert.equal(k.enemiesAlive, 0);
   assert.equal(s.ultUsedBefore(5100), true);
 });
+
+import { quoteWinArg } from '../src/main/ai-auth';
+
+test('Windows args with spaces stay one argument', () => {
+  assert.equal(quoteWinArg('C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\a.txt'), '"C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\a.txt"');
+  assert.equal(quoteWinArg('Read'), 'Read');
+  assert.equal(quoteWinArg('say "hi"'), '"say ""hi"""');
+  assert.equal(quoteWinArg(''), '""');
+});

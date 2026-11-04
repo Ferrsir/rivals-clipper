@@ -51,15 +51,53 @@ export const PROVIDERS: Record<AiProvider, ProviderDef> = {
   },
 };
 
-function run(bin: string, args: string[], opts: { timeoutMs?: number; input?: string; cwd?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+/** Quote one argument for cmd.exe so paths with spaces stay a single argument. */
+export function quoteWinArg(arg: string): string {
+  if (arg === '') return '""';
+  if (!/[\s"&|<>^%()]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+const resolved = new Map<string, string | undefined>();
+
+/** On Windows, find the real executable (claude.exe, or an npm .cmd shim) via `where`. */
+async function resolveBin(bin: string): Promise<string | undefined> {
+  if (process.platform !== 'win32') return bin;
+  if (resolved.has(bin)) return resolved.get(bin);
+  const found = await new Promise<string | undefined>((resolve) => {
+    const child = spawn('where.exe', [bin], { windowsHide: true });
+    let out = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.on('error', () => resolve(undefined));
+    child.on('close', () => {
+      const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      resolve(lines.find((l) => /\.exe$/i.test(l)) ?? lines.find((l) => /\.(cmd|bat)$/i.test(l)));
+    });
+  });
+  resolved.set(bin, found);
+  return found;
+}
+
+/** Spawn without losing argument boundaries: .exe directly, .cmd shims through cmd.exe with each arg quoted. */
+async function spawnCli(bin: string, args: string[], opts: { cwd?: string } = {}) {
+  const exe = await resolveBin(bin);
+  if (!exe) return undefined;
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(exe)) {
+    const line = [quoteWinArg(exe), ...args.map(quoteWinArg)].join(' ');
+    return spawn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { windowsHide: true, windowsVerbatimArguments: true, cwd: opts.cwd });
+  }
+  return spawn(exe, args, { windowsHide: true, cwd: opts.cwd });
+}
+
+async function run(bin: string, args: string[], opts: { timeoutMs?: number; input?: string; cwd?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = await spawnCli(bin, args, { cwd: opts.cwd });
+  if (!child) return { code: -1, stdout: '', stderr: `${bin} not found` };
   return new Promise((resolve) => {
-    // shell:true so Windows finds claude.cmd / codex.cmd shims on PATH.
-    const child = spawn(bin, args, { shell: process.platform === 'win32', windowsHide: true, cwd: opts.cwd });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), opts.timeoutMs ?? 15_000);
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
+    child.stdout?.on('data', (d) => (stdout += d));
+    child.stderr?.on('data', (d) => (stderr += d));
     child.on('error', () => {
       clearTimeout(timer);
       resolve({ code: -1, stdout, stderr });
@@ -68,13 +106,14 @@ function run(bin: string, args: string[], opts: { timeoutMs?: number; input?: st
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
-    if (opts.input !== undefined) child.stdin.end(opts.input);
-    else child.stdin.end();
+    if (opts.input !== undefined) child.stdin?.end(opts.input);
+    else child.stdin?.end();
   });
 }
 
 export async function checkStatus(provider: AiProvider): Promise<ProviderStatus> {
   const def = PROVIDERS[provider];
+  resolved.delete(def.bin); // re-detect, e.g. right after the user installed it
   const version = await run(def.bin, ['--version']);
   if (version.code !== 0) return { provider, installed: false, loggedIn: false };
   const st = await run(def.bin, def.status);
@@ -90,19 +129,19 @@ export function openInstaller(provider: AiProvider): void {
 /** Starts the provider's browser login, then polls until signed in (or gives up after 5 minutes). */
 export async function login(provider: AiProvider, onUpdate: (s: ProviderStatus) => void): Promise<ProviderStatus> {
   const def = PROVIDERS[provider];
-  const child = spawn(def.bin, def.login, { shell: process.platform === 'win32', windowsHide: true, detached: false });
-  child.on('error', () => undefined);
+  const child = await spawnCli(def.bin, def.login);
+  child?.on('error', () => undefined);
   const deadline = Date.now() + 5 * 60_000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
     const s = await checkStatus(provider);
     onUpdate(s);
     if (s.loggedIn) {
-      child.kill();
+      child?.kill();
       return s;
     }
   }
-  child.kill();
+  child?.kill();
   return checkStatus(provider);
 }
 
@@ -119,7 +158,9 @@ export async function ask(provider: AiProvider, prompt: string, images: string[]
   try {
     if (provider === 'claude') {
       const withImages = images.length ? `${prompt}\n\nImages to look at:\n${images.map((p) => `- ${p}`).join('\n')}` : prompt;
-      const args = ['-p', '--output-format', 'json', '--allowedTools', 'Read'];
+      // --tools limits the built-in tool set to Read; --strict-mcp-config with no --mcp-config
+      // drops every MCP server, so nothing inherited from the user's settings can write or run commands.
+      const args = ['-p', '--output-format', 'json', '--tools', 'Read', '--strict-mcp-config'];
       for (const img of images) args.push('--add-dir', path.dirname(img));
       const r = await run('claude', args, { timeoutMs, input: withImages, cwd: work });
       if (r.code !== 0) throw new Error(r.stderr || 'Claude request failed');
