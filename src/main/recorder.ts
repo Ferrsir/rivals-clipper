@@ -4,6 +4,9 @@
 import { app } from 'electron';
 import path from 'node:path';
 import { Settings, defaultBitrate, resolveResolution } from './settings';
+import type { BufferInfo, ClipRecorder, GameProcess, MicDevice, SavedVideo } from './capture/types';
+
+export type { BufferInfo, GameProcess } from './capture/types';
 
 type RecorderApi = Electron.App['overwolf']['packages']['recorder'];
 type ActiveReplay = Awaited<ReturnType<RecorderApi['captureReplay']>>;
@@ -13,19 +16,8 @@ type ReplayVideo = Parameters<NonNullable<Parameters<RecorderApi['captureReplay'
 const TRACK_GAME = 1;
 const TRACK_MIC = 2;
 
-export interface GameProcess {
-  pid?: number;
-  fullPath?: string;
-}
-
-export interface BufferInfo {
-  width: number;
-  height: number;
-  fps: number;
-  micRecorded: boolean;
-}
-
-export class Recorder {
+export class Recorder implements ClipRecorder {
+  readonly kind = 'overwolf' as const;
   private active?: ActiveReplay;
   info?: BufferInfo;
 
@@ -43,7 +35,7 @@ export class Recorder {
     }
   }
 
-  async listMics(): Promise<Array<{ id: string; name: string; isDefault: boolean }>> {
+  async listMics(): Promise<MicDevice[]> {
     const info = await this.api.queryInformation();
     return info.audio.inputDevices.map((d) => ({ id: d.id, name: d.name, isDefault: d.isDefault }));
   }
@@ -99,7 +91,7 @@ export class Recorder {
       },
       capture,
     );
-    this.info = { width: res.width, height: res.height, fps: settings.fps, micRecorded };
+    this.info = { width: res.width, height: res.height, fps: settings.fps, micRecorded, engine: 'overwolf', encoder: String(capture.videoEncoderSettings.type ?? '') || undefined };
     this.log('replay buffer started', { ...this.info, source: gameProcess ?? 'primary monitor', encoder: capture.videoEncoderSettings.type });
     return this.info;
   }
@@ -107,15 +99,16 @@ export class Recorder {
   async stop(): Promise<void> {
     if (this.active) this.active.stop();
     this.active = undefined;
+    this.info = undefined;
     if (await this.api.isReplayActive()) await this.api.stopReplays();
   }
 
   /** Start saving a clip that includes the last `pastDurationMs`. Keeps recording until stopClip(). */
-  async startClip(fileName: string, pastDurationMs: number, onDone: (v: ReplayVideo) => void): Promise<void> {
+  async startClip(fileName: string, pastDurationMs: number, onDone: (v: SavedVideo) => void): Promise<void> {
     if (this.active) return;
     this.active = await this.api.captureReplay({ fileName, pastDuration: pastDurationMs }, (video) => {
       this.active = undefined;
-      onDone(video);
+      onDone(toSaved(video));
     });
   }
 
@@ -126,4 +119,8 @@ export class Recorder {
   get clipInProgress(): boolean {
     return this.active !== undefined;
   }
+}
+
+function toSaved(v: ReplayVideo): SavedVideo {
+  return { filePath: v.filePath, duration: v.duration, startTimeEpoch: v.startTimeEpoch, error: v.error };
 }

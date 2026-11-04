@@ -2,7 +2,9 @@
 
 Auto-clips your Marvel Rivals kills and streaks, keeps a ranked highlight library, and (coming next) turns the best clips into TikTok, Reels, Shorts and YouTube edits.
 
-Kill detection uses Overwolf's official Game Events Provider for Marvel Rivals, and recording uses Overwolf's recorder package (an OBS-based replay buffer). Nothing reads game memory, so there is no anti-cheat risk.
+The app runs on standard Electron with its own screen detector, GPU replay buffer and Windows audio helper. No Overwolf installation, account, signing keys, monetization or ads are required. It uses screen capture and Windows audio APIs rather than game memory. See [local-mode.md](docs/local-mode.md) for setup and current detection limitations.
+
+**No Overwolf? Local mode.** When Overwolf's packages can't load (an unsigned build, or you'd rather not use it), the app finds kills by watching the screen (KO list, kill feed, streak banners, match bar) and records with your graphics card (NVENC on GeForce, AMF on AMD), with game audio and mic on separate tracks as usual. Screen capture only: it never touches the game. See [docs/local-mode.md](docs/local-mode.md) for how it works and where it falls short of Overwolf.
 
 ## What works now (Phase 0 + 1)
 
@@ -46,9 +48,9 @@ The app has three tabs: **Clipper** (live status and your ranked clips), **Studi
 3. Launch Marvel Rivals. The status bar turns green when the replay buffer is running.
 4. Play a match. Clips appear in the list as they're saved.
 
-The first launch downloads Overwolf's `gep` and `recorder` packages, which can take a minute. If Marvel Rivals runs as administrator, run Rivals Clipper as administrator too, or game events won't arrive.
+Built-in screen detection is the default. Set your in-game name under Settings, Kill detection, and select the monitor where you play. The installer includes the audio helper; source builds need `npm run build:native` with Visual Studio C++ tools.
 
-To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main`, and publishes a Release when you push a tag like `v0.2.0`. Publishing it to other people requires registering the app with Overwolf; personal use does not.
+To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main`, and publishes a Release when you push a tag like `v0.2.0`. The installer uses standard Electron and can be shared without Overwolf registration. Windows signing and reputation are separate distribution concerns.
 
 ## The Studio (reel maker)
 
@@ -128,4 +130,4 @@ MIT
 
 ## Overwolf packages not loading?
 
-An unsigned install opens, but it never detects kills or records. Run it from source in Overwolf dev mode instead. See [docs/run-with-overwolf.md](docs/run-with-overwolf.md).
+Current builds use the built-in recorder and do not need Overwolf packages. The old Overwolf integration remains in source for compatibility, with development-only type packages; it is not bundled in the standalone installer.

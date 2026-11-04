@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "sourceMap": true,
-    "types": ["node", "@overwolf/ow-electron", "@overwolf/ow-electron-packages-types"]
+    "types": ["node", "electron", "@overwolf/ow-electron/mix", "@overwolf/ow-electron-packages-types"]
   },
   "include": ["src/**/*.ts"]
 }

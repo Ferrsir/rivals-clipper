@@ -10,16 +10,12 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "npm run build && ow-electron .",
+    "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
-    "dist": "npm run build && ow-electron-builder --publish=never"
-  },
-  "overwolf": {
-    "packages": [
-      "gep",
-      "recorder"
-    ]
+    "dist": "npm run build && electron-builder --publish=never",
+    "harness": "npm run build && node dist/tools/harness.js",
+    "build:native": "powershell -ExecutionPolicy Bypass -File scripts/build-native.ps1"
   },
   "build": {
     "appId": "com.ferris.rivalsclipper",
@@ -29,8 +25,10 @@
     },
     "files": [
       "dist/**/*",
+      "!dist/tools/**",
       "renderer/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/@tesseract.js-data/eng/4.0.0/**"
     ],
     "win": {
       "target": "nsis",
@@ -43,21 +41,31 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Rivals Clipper"
     },
-    "overwolf": {
-      "requireSigning": false
-    },
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
+      "node_modules/**",
+      "node_modules/tesseract.js-core/**"
+    ],
+    "extraResources": [
+      {
+        "from": "native/bin",
+        "to": "native",
+        "filter": [
+          "rc-audio.exe"
+        ]
+      }
     ]
   },
   "dependencies": {
-    "ffmpeg-static": "5.3.0"
+    "@tesseract.js-data/eng": "1.0.0",
+    "ffmpeg-static": "5.3.0",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@overwolf/ow-electron": "44.9.0",
-    "@overwolf/ow-electron-builder": "26.18.0",
     "@overwolf/ow-electron-packages-types": "1.1.14",
     "@types/node": "22.15.0",
+    "electron": "45.2.2",
+    "electron-builder": "26.18.0",
     "typescript": "5.8.3"
   }
 }

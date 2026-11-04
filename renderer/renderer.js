@@ -5,6 +5,8 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', 
 const aiReady = () => !!(ai && ai.provider !== 'none' && ai[ai.provider]?.loggedIn);
 
 const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'aiTagging', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
+// Kill detection panel (built-in mode).
+fields.push('engine', 'playerName', 'hudScale', 'readScreenText', 'detectionFps', 'captureMonitor', 'localEncoder');
 
 function renderStatus(s) {
   const bits = [s.msg];
@@ -15,6 +17,32 @@ function renderStatus(s) {
   const warn = $('packagesWarning');
   warn.textContent = s.packagesProblem ?? '';
   warn.classList.toggle('hidden', !s.packagesProblem);
+  renderDetection(s);
+}
+
+/** The kill-detection panel's live line: which engine is on and how detection is doing. */
+function renderDetection(s) {
+  const el = $('detectionStatus');
+  if (!el) return;
+  const lines = [];
+  if (s.engine === 'overwolf') lines.push('Using Overwolf game events.');
+  else if (s.engine === 'local') {
+    const d = s.detection;
+    if (s.buffer?.encoder) lines.push(`Recording with ${s.buffer.encoder}${s.buffer.gpu ? ` on ${s.buffer.gpu}` : ''}.`);
+    if (d?.running) {
+      lines.push(`Watching a ${d.width}×${d.height} screen at ${d.fps} checks/s (${d.msPerFrame} ms each${d.framesDropped ? `, ${d.framesDropped} skipped` : ''}).`);
+      lines.push(d.inMatch ? 'In a match.' : d.hudVerified ? 'Not in a match (no match bar on screen).' : 'Waiting to see the match bar once.');
+    } else if (d?.problem) lines.push(d.problem);
+    else lines.push('Built-in mode is on. Detection starts when Marvel Rivals does.');
+    if (d?.textReading === 'failed') lines.push(`Text reading is off: ${d.textReadingProblem}`);
+    const learned = $('learnedName');
+    if (learned) {
+      const show = d?.playerName && !$('playerName').value.trim();
+      learned.textContent = show ? `Learned from the kill feed: ${d.playerName}` : '';
+      learned.classList.toggle('hidden', !show);
+    }
+  } else lines.push('Checking whether Overwolf is available…');
+  el.textContent = lines.join(' ');
 }
 
 function clipRow(c) {
@@ -176,7 +204,7 @@ function readForm() {
   const patch = {};
   for (const f of fields) {
     const el = $(f);
-    patch[f] = el.type === 'checkbox' ? el.checked : el.type === 'number' || f === 'fps' ? Number(el.value) : el.value;
+    patch[f] = el.type === 'checkbox' ? el.checked : el.type === 'number' || f === 'fps' || 'number' in el.dataset ? Number(el.value) : el.value;
   }
   patch.rootFolder = $('rootFolder').value;
   return patch;
@@ -186,6 +214,12 @@ $('save').addEventListener('click', async () => {
   await clipper.setSettings(readForm());
   $('save').textContent = 'Saved';
   setTimeout(() => ($('save').textContent = 'Save settings'), 1200);
+});
+$('saveDetection').addEventListener('click', async () => {
+  await clipper.setSettings(readForm());
+  $('saveDetection').textContent = 'Saved';
+  setTimeout(() => ($('saveDetection').textContent = 'Save settings'), 1200);
+  renderStatus(await clipper.status());
 });
 $('pickFolder').addEventListener('click', async () => {
   const p = await clipper.pickFolder();
@@ -321,6 +355,10 @@ $('skipSignin').addEventListener('click', async () => {
   } else $('signin').classList.remove('hidden');
 
   renderStatus(await clipper.status());
+  // Keep the kill-detection numbers fresh while Settings is open.
+  setInterval(async () => {
+    if (!$('tab-settings').classList.contains('hidden')) renderDetection(await clipper.status());
+  }, 3000);
   await loadSettingsForm();
   await refreshFacets();
   await runQuery();

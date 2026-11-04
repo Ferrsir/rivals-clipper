@@ -69,10 +69,14 @@ export function uniqueExportBase(dir: string, name: string, d = new Date()): str
   for (let n = 2; ; n++) if (!used(`${root}-${n}`)) return `${root}-${n}`;
 }
 
+const graphFileOptions = new Map<string, string>();
+
 export function runFfmpeg(ffmpeg: string, job: FfJob, cwd: string, onPct: (pct: number) => void, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('cancelled'));
   const script = path.join(cwd, `graph-${hashOf([job.output, job.filter]).slice(0, 10)}.txt`);
   fs.writeFileSync(script, job.filter, 'utf8');
-  const args = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats', '-filter_complex_script', script, ...job.args];
+  const graphOption = graphFileOptions.get(ffmpeg) ?? '-filter_complex_script';
+  const args = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats', graphOption, script, ...job.args];
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpeg, args, { cwd, windowsHide: true });
     let err = '';
@@ -94,6 +98,13 @@ export function runFfmpeg(ffmpeg: string, job: FfJob, cwd: string, onPct: (pct: 
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
       if (signal?.aborted) return reject(new Error('cancelled'));
+      // FFmpeg 9 removed the legacy option. Keep older bundled builds working,
+      // and retry only this option-parsing failure, before any rendering began.
+      if (code !== 0 && graphOption === '-filter_complex_script' && /Unrecognized option 'filter_complex_script'/.test(err)) {
+        graphFileOptions.set(ffmpeg, '-/filter_complex');
+        runFfmpeg(ffmpeg, job, cwd, onPct, signal).then(resolve, reject);
+        return;
+      }
       if (code === 0) {
         try {
           fs.rmSync(script, { force: true });

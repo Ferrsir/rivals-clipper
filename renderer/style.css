@@ -52,3 +52,5 @@ label.check > input { display: inline-block; width: auto; margin: 0; }
 .summary { font-style: italic; margin: 4px 0 2px; }
 .small { font-size: 12px; }
 .ai-all { margin-left: auto; }
+#detectionStatus { margin: 8px 0 12px; line-height: 1.5; }
+p.small { margin: -4px 0 10px; }
