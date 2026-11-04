@@ -49,6 +49,9 @@ let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
 let lastStatus = 'Waiting for Marvel Rivals';
+/** Set when Overwolf's game events or recorder never loaded, so the window can say why instead of "waiting". */
+let packagesProblem: string | undefined;
+const readyPackages = new Set<string>();
 /** Shared AI client: the Studio and AI tagging call this. */
 export const ai = createAiClient(() => settings.aiProvider);
 /** Clips saved during the current match, so the match outcome can be added when it ends. */
@@ -73,7 +76,7 @@ function loadHeroRoles(): Record<string, HeroRole> {
 function status(msg: string, extra?: unknown) {
   lastStatus = msg;
   log?.write('status', { msg, extra });
-  win?.webContents.send('status', { msg, extra, gameRunning, buffer: recorder.info, clipping: !!pending });
+  win?.webContents.send('status', { msg, extra, gameRunning, buffer: recorder.info, clipping: !!pending, packagesProblem });
 }
 
 function pushClip(clip: ClipSidecar) {
@@ -309,7 +312,7 @@ function createWindow() {
 }
 
 function setupIpc() {
-  ipcMain.handle('status', () => ({ msg: lastStatus, gameRunning, buffer: recorder.info, clipping: !!pending }));
+  ipcMain.handle('status', () => ({ msg: lastStatus, gameRunning, buffer: recorder.info, clipping: !!pending, packagesProblem }));
   ipcMain.handle('clips:list', () => listClips(paths(settings.rootFolder).clips));
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
@@ -384,12 +387,32 @@ function registerHotkey() {
 
 app.overwolf.disableAnonymousAnalytics();
 
+const PACKAGES_HELP =
+  'Overwolf blocked its game-event and recording packages, so kills cannot be detected or recorded. ' +
+  'This happens when the app is not signed by Overwolf. Run it from source with your Overwolf dev key ' +
+  '(see docs/run-with-overwolf.md), or install a build signed with Overwolf keys.';
+
+function reportPackagesProblem(reason: string) {
+  packagesProblem = `${PACKAGES_HELP} (${reason})`;
+  status('Overwolf packages did not load');
+}
+
 app.overwolf.packages.on('ready', (_e, packageName, version) => {
   log?.write('package-ready', { packageName, version });
+  readyPackages.add(packageName);
+  if (readyPackages.has('gep') && readyPackages.has('recorder') && packagesProblem) {
+    packagesProblem = undefined;
+    status(lastStatus);
+  }
   if (packageName === 'gep') setupGep();
   if (packageName === 'recorder') setupRecorder();
 });
-app.overwolf.packages.on('failed-to-initialize', (_e, packageName) => status(`Overwolf package "${packageName}" failed to load`));
+app.overwolf.packages.on('failed-to-initialize', (_e, packageName) => reportPackagesProblem(`"${packageName}" failed to initialize`));
+// When Overwolf rejects the app signature it skips package loading without any event, so watch for silence too.
+setTimeout(() => {
+  const missing = ['gep', 'recorder'].filter((p) => !readyPackages.has(p));
+  if (missing.length) reportPackagesProblem(`${missing.join(' and ')} not loaded after 60 seconds`);
+}, 60_000);
 
 app.whenReady().then(() => {
   prepareRoot();
