@@ -25,6 +25,7 @@ import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 import { findFfmpeg } from './studio/ffmpeg-bin';
 import { AiTagger, untagged } from './ai-tagger';
+import { installGracefulShutdown, sendIfOpen } from './shutdown';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -86,6 +87,7 @@ let pending: PendingClip | undefined;
 let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
+let quitting = false;
 /** Between match_start and match_end. AI tagging waits until this is false. */
 let inMatch = false;
 let lastStatus = 'Waiting for Marvel Rivals';
@@ -113,7 +115,7 @@ const tagger = new AiTagger({
     }
   },
   save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
-  canRun: () => !inMatch && !pending,
+  canRun: () => !quitting && !inMatch && !pending,
   enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
   onTagged: (clip) => {
     pushClip(clip);
@@ -165,11 +167,11 @@ function statusPayload(extra?: unknown) {
 function status(msg: string, extra?: unknown) {
   lastStatus = msg;
   log?.write('status', { msg, extra });
-  win?.webContents.send('status', statusPayload(extra));
+  sendIfOpen(win, 'status', statusPayload(extra));
 }
 
 function pushClip(clip: ClipSidecar) {
-  win?.webContents.send('clip-saved', clip);
+  sendIfOpen(win, 'clip-saved', clip);
 }
 
 // ---------- storage root (F: drive by default) ----------
@@ -190,6 +192,7 @@ function prepareRoot() {
 // ---------- clipping ----------
 
 async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number, stopAt: number) {
+  if (quitting) return;
   if (!recorder.info) {
     status('Kill detected but the replay buffer is not running yet');
     streak.finish();
@@ -226,7 +229,7 @@ function onClipSaved(video: SavedVideo) {
   streak.finish();
   if (stopTimer) clearTimeout(stopTimer);
   if (!clip || !video.filePath || video.error) {
-    status('Clip failed to save', video.error);
+    status(video.recoveryFolder ? `Clip failed to save. Recovery files are in ${video.recoveryFolder}` : 'Clip failed to save', video.error);
     return;
   }
   const kills = clip.events.filter((e) => e.type === 'kill').length;
@@ -286,6 +289,7 @@ function handleManualClip() {
 
 /** `at` is when it happened: screen detection reports events a moment after they showed on screen. */
 function onGameEvent(feature: string, key: string, value: unknown, at = Date.now()) {
+  if (quitting) return;
   const now = at;
   log.write('event', { feature, key, value, ...(feature === 'screen' ? { at, lateMs: Date.now() - at } : {}) });
   switch (key) {
@@ -387,6 +391,7 @@ function retryBuffer(reason: string) {
 }
 
 async function startBuffer() {
+  if (quitting) return;
   captureRecovery.clearPending();
   gameRunning = true;
   const rec = recorder;
@@ -502,6 +507,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   void win.loadFile(path.join(__dirname, '../../renderer/index.html'));
+  win.once('closed', () => { win = undefined; });
 }
 
 function setupIpc() {
@@ -575,7 +581,7 @@ function setupIpc() {
   }));
   ipcMain.handle('ai:install', (_e, provider: AiProvider) => openInstaller(provider));
   ipcMain.handle('ai:login', async (_e, provider: AiProvider) => {
-    const result = await login(provider, (s) => win?.webContents.send('ai-status', s));
+    const result = await login(provider, s => sendIfOpen(win, 'ai-status', s));
     if (result.loggedIn) {
       settings = { ...settings, aiProvider: provider, onboarded: true };
       saveSettings(settings);
@@ -653,12 +659,20 @@ app.whenReady().then(() => {
   applyEngine();
 });
 
-app.on('will-quit', () => {
+installGracefulShutdown(app, async () => {
+  quitting = true;
+  gameRunning = false;
+  bufferStarts++;
   captureRecovery.reset();
   globalShortcut.unregisterAll();
   gameWatcher.stop();
-  void detector.shutdown().catch(() => undefined);
+  if (stopTimer) clearTimeout(stopTimer);
+  status('Closing: finishing saved clips…');
+  const results = await Promise.allSettled([detector.shutdown(), recorder.stop()]);
+  for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   log?.flushSync();
-  void recorder.stop().catch(() => undefined);
+}, error => {
+  log?.write('shutdown-error', String(error));
+  log?.flushSync();
 });
 app.on('window-all-closed', () => app.quit());
