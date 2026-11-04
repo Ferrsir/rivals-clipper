@@ -1083,19 +1083,18 @@ function onProgress(p) {
   Object.assign(S.job, p);
   if (p.stage === 'done') {
     // The job belongs to the reel it was started from, which may not be the one open now.
+    // The main process has already recorded the export on that reel's history.
     const here = S.job.projectId === S.project.id;
-    const added = (p.files ?? []).map((f) => ({ file: f, at: Date.now() }));
     if (S.job.preview) {
       if (here && p.files?.[0]) S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
     } else if (here) {
-      S.project.lastExports = [...(S.project.lastExports ?? []), ...added.map((e) => ({ ...e, format: S.project.format }))];
-      saveSoon(S.project);
+      const proj = S.project;
+      api.projects
+        .get(proj.id)
+        .then((saved) => saved && (proj.lastExports = saved.lastExports))
+        .catch(() => undefined);
       toast(root, 'Export finished');
     } else {
-      api.projects
-        .get(S.job.projectId)
-        .then((other) => other && api.projects.save({ ...other, lastExports: [...(other.lastExports ?? []), ...added.map((e) => ({ ...e, format: other.format }))] }))
-        .catch(() => undefined);
       toast(root, `Export of "${S.job.projectName}" finished`);
     }
     renderTop();
