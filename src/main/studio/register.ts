@@ -28,7 +28,8 @@ export interface StudioContext {
   ai?: AiClient;
 }
 
-export function registerStudio(ctx: StudioContext): void {
+export function registerStudio(ctx: StudioContext): () => Promise<void> {
+  let closing = false;
   const root = () => ctx.getSettings().rootFolder;
   const p = () => paths(root());
   const studioDir = () => path.join(root(), 'studio');
@@ -83,6 +84,7 @@ export function registerStudio(ctx: StudioContext): void {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, async (e, ...args) => {
       try {
+        if (closing) throw new Error('The app is closing');
         return await fn(e, ...args);
       } catch (err) {
         // Electron strips custom error fields; keep the message readable.
@@ -177,21 +179,21 @@ export function registerStudio(ctx: StudioContext): void {
   });
 
   // ---------- rendering ----------
-  const jobs = new Map<string, AbortController>();
+  const jobs = new Map<string, { abort: () => void; done: Promise<void> }>();
   handle('studio:render', async (e, proj: unknown, req: RenderRequest) => {
     const project = sanitizeProject(proj);
     const jobId = newId();
     const ac = new AbortController();
-    jobs.set(jobId, ac);
     const ff = await findFfmpeg(ctx.ffmpegPath());
     if (!ff.ok || !ff.path) throw new Error(ff.problem ?? 'ffmpeg not available');
+    if (closing) throw new Error('The app is closing');
     const formats = (Array.isArray(req?.formats) ? req.formats : [project.format]).filter((f): f is FormatId => f in FORMATS);
     const request: RenderRequest = { preview: !!req?.preview, formats, noMusicCopy: !!req?.noMusicCopy, gpu: !!req?.gpu };
     const enc = request.gpu && ff.gpuEncoders.length ? { name: ff.gpuEncoders[0] as 'h264_nvenc' } : { name: 'libx264' as const };
     const send = (msg: object) => {
       if (!e.sender.isDestroyed()) e.sender.send('studio:render:progress', { jobId, ...msg });
     };
-    void (async () => {
+    const done = (async () => {
       try {
         const files = await renderProject({
           ffmpeg: ff.path!,
@@ -219,6 +221,8 @@ export function registerStudio(ctx: StudioContext): void {
         jobs.delete(jobId);
       }
     })();
+    jobs.set(jobId, { abort: () => ac.abort(), done });
+    void done.catch(() => undefined); // shutdown still observes unexpected failures through the stored promise
     return { jobId };
   });
   handle('studio:render:cancel', (_e, jobId: string) => jobs.get(jobId)?.abort());
@@ -431,6 +435,12 @@ export function registerStudio(ctx: StudioContext): void {
   handle('studio:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && /^https:\/\/[^\s]+$/i.test(url)) return shell.openExternal(url);
   });
+  return async () => {
+    closing = true;
+    const active = [...jobs.values()];
+    for (const job of active) job.abort();
+    await Promise.allSettled(active.map(job => job.done));
+  };
 }
 
 function guessFormat(file: string, formats: FormatId[]): FormatId {

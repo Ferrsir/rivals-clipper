@@ -1,12 +1,14 @@
 # Rivals Clipper
 
-Auto-clips your Marvel Rivals kills and streaks, keeps a ranked highlight library, and (coming next) turns the best clips into TikTok, Reels, Shorts and YouTube edits.
+Auto-clips your Marvel Rivals kills and streaks, keeps a ranked highlight library, and turns clips into TikTok, Reels, Shorts and YouTube edits. This is a working prototype undergoing gameplay validation.
 
 The app runs on standard Electron with its own screen detector, GPU replay buffer and Windows audio helper. No Overwolf installation, account, signing keys, monetization or ads are required. It uses screen capture and Windows audio APIs rather than game memory. See [local-mode.md](docs/local-mode.md) for setup and current detection limitations.
 
 **No Overwolf? Local mode.** When Overwolf's packages can't load (an unsigned build, or you'd rather not use it), the app finds kills by watching the screen (KO list, kill feed, streak banners, match bar) and records with your graphics card (NVENC on GeForce, AMF on AMD), with game audio and mic on separate tracks as usual. Screen capture only: it never touches the game. See [docs/local-mode.md](docs/local-mode.md) for how it works and where it falls short of Overwolf.
 
-## What works now (Phase 0 + 1)
+## Implemented features
+
+Built-in screen detection currently provides KOs, streaks, victim names, and map/result information when recognized. It does not yet provide player hero, ultimate usage or alive-player counts, so filters and tags requiring that metadata remain incomplete. The lists below describe the shared clip format and available editing features, not measured detection accuracy. See [standalone validation](docs/standalone-validation.md).
 
 - **Replay buffer** of the game while Marvel Rivals is running (60 s in memory, nothing written until something happens).
 - **Streak clips:** the first kill saves the last 12 s, and every kill within 5 s of the previous one extends the same clip, so a triple kill is one clip, not three. Capped at 90 s.
@@ -85,6 +87,8 @@ Tick *Upload when it's done* in the export window to upload as soon as the expor
 
 **Undo / redo**: Ctrl+Z and Ctrl+Shift+Z (or Ctrl+Y), or the buttons in the top bar. Space plays the preview, Delete removes the selected clip.
 
+Cancelling a render stops its FFmpeg jobs. Closing the app cancels and waits for active Studio renders while finishing captured clip saves. MP4 exports are only published under their final names after conversion succeeds.
+
 Exports use the ffmpeg build bundled with the app (from the `ffmpeg-static` package, GPL licensed), and can use your graphics card (NVENC, AMF or Quick Sync) when available.
 
 ## Settings worth knowing
@@ -102,11 +106,13 @@ Code map:
 
 | File | What it does |
 | --- | --- |
-| `src/main/main.ts` | Wires GEP events to the streak logic and the recorder, plus IPC for the UI |
+| `src/main/main.ts` | Wires detected events to clipping, recovery, shutdown and UI handlers |
 | `src/main/streak.ts` | Decides when a clip starts and stops (pure, tested) |
 | `src/main/match-state.ts` | Live match picture from GEP: roster, ult charge, kill feed (tested) |
 | `src/main/scoring.ts` | Score and tags for a clip (tested) |
-| `src/main/recorder.ts` | Overwolf recorder setup: game capture, audio tracks, replay buffer |
+| `src/main/capture/` | Built-in replay buffer, GPU recording, Windows audio and recovery |
+| `src/main/vision/` | HUD detection, local OCR, event fusion and labelled-video harness |
+| `src/main/recorder.ts` | Legacy Overwolf adapter retained in source |
 | `src/main/clip-store.ts` | Clip sidecar JSON read/write |
 | `src/main/ffmpeg.ts` | Exports with or without the mic track |
 | `src/main/studio/` | The Studio: beat detection (`beats.ts`), edit planner (`planner.ts`), ffmpeg graph builder (`render.ts`, `pipeline.ts`), music library and suggestions, reel ideas (`ideas.ts`), free media search (`openverse.ts`), uploads (`publish/`), AI helpers, IPC (`register.ts`) |
@@ -115,14 +121,9 @@ Code map:
 
 ## Roadmap
 
-1. ~~Phase 0: event logging~~
-2. ~~Phase 1: clipper~~
-3. Phase 2: library with SQLite index, filters, bulk cleanup
-4. Phase 3: AI style tags (Claude or ChatGPT through your own sign-in)
-5. ~~Phase 4: Reel Maker: pick clips and music, beat-synced cuts, 9:16 and 16:9 export~~ (first version, needs testing on Windows)
-6. ~~Phase 5: edit-style recipes (speed ramps, zoom punches, shake, flashes, text)~~ (first version)
-7. ~~Reel ideas, free music and pictures, uploads to YouTube, TikTok and Instagram~~ (first version, needs testing with real accounts)
-8. Phase 6: polish
+Implemented: standalone recording, event logging, a sidecar-backed Library index with filters and ranking, AI style tags, beat-synced Studio editing, reel ideas and multi-format exports. Automated tests include real FFmpeg renders on Windows and Linux.
+
+Remaining: measured full-match kill accuracy and Practice Range suppression, local hero/ultimate metadata, gameplay performance and audio-isolation checks, display/device-change and HDR tests, real-account AI/upload validation, clean-PC installation and Windows signing. See [the validation checklist](docs/standalone-validation.md). Upload integrations are optional and remain parked pending account testing.
 
 ## License
 

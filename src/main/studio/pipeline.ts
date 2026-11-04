@@ -117,13 +117,20 @@ export function runFfmpeg(ffmpeg: string, job: FfJob, cwd: string, onPct: (pct: 
   });
 }
 
-function runSimple(ffmpeg: string, args: string[], cwd: string): Promise<void> {
+function runSimple(ffmpeg: string, args: string[], cwd: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('cancelled'));
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error', ...args], { cwd, windowsHide: true });
     let err = '';
+    const onAbort = () => child.kill();
+    signal?.addEventListener('abort', onAbort);
     child.stderr.on('data', (d: Buffer) => (err += d.toString()));
     child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(err.trim() || `ffmpeg exited with ${code}`))));
+    child.on('close', code => {
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) return reject(new Error('cancelled'));
+      code === 0 ? resolve() : reject(new Error(err.trim() || `ffmpeg exited with ${code}`));
+    });
   });
 }
 
@@ -149,6 +156,7 @@ export function findFont(): string | undefined {
 }
 
 export async function renderProject(o: PipelineOpts): Promise<string[]> {
+  if (o.signal?.aborted) throw new Error('cancelled');
   const { project, req } = o;
   if (!project.clips.length) throw new Error('Add at least one clip first.');
   const formats = (req.formats.length ? req.formats : [project.format]).map((id) => FORMATS[id as FormatId]).filter(Boolean);
@@ -194,7 +202,13 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
         const first = tl.segments.find((s) => s.kind !== 'intro');
         const c = clips[first!.clipIndex];
         image = path.join(workDir, `introframe-${hashOf([c.videoFile, first!.src[0]])}.jpg`);
-        if (!fs.existsSync(image)) await runSimple(o.ffmpeg, ['-ss', String(first!.src[0]), '-i', c.videoFile, '-frames:v', '1', '-q:v', '2', image], workDir);
+        if (!fs.existsSync(image)) {
+          const partialImage = image.replace(/\.jpg$/, '.part.jpg');
+          try {
+            await runSimple(o.ffmpeg, ['-ss', String(first!.src[0]), '-i', c.videoFile, '-frames:v', '1', '-q:v', '2', partialImage], workDir, o.signal);
+            fs.renameSync(partialImage, image);
+          } finally { fs.rmSync(partialImage, { force: true }); }
+        }
         blurred = true;
       }
       jobs.push({ job: buildIntroJob({ image, blurred, seconds: tl.introEnd, size, fps, preview: req.preview, workDir, layout: project.intro.layout }), label: 'intro card' });
@@ -237,7 +251,15 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
       intro: project.intro,
       outro: project.outro,
     });
-    await runFfmpeg(o.ffmpeg, job, workDir, (p) => report('assemble', clipShare + (1 - clipShare) * p, req.preview ? 'Rendering preview' : `Rendering ${fmts.map((x) => x.label).join(' + ')}`), o.signal);
+    const partialOut = out.replace(/\.mp4$/, '.part.mp4');
+    job.args = job.args.map(arg => arg === out ? partialOut : arg);
+    try {
+      await runFfmpeg(o.ffmpeg, job, workDir, (p) => report('assemble', clipShare + (1 - clipShare) * p, req.preview ? 'Rendering preview' : `Rendering ${fmts.map((x) => x.label).join(' + ')}`), o.signal);
+      fs.renameSync(partialOut, out);
+    } catch (error) {
+      if (noMusicAudio) fs.rmSync(noMusicAudio, { force: true });
+      throw error;
+    } finally { fs.rmSync(partialOut, { force: true }); }
     files.push(out);
     for (const extra of fmts.slice(1)) {
       const copy = path.join(o.reelsDir, `${base}_${extra.id}.mp4`);
@@ -248,7 +270,11 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
       for (const fm of fmts) {
         const src = fm === f ? out : path.join(o.reelsDir, `${base}_${fm.id}.mp4`);
         const dst = src.replace(/\.mp4$/, '_nomusic.mp4');
-        await runSimple(o.ffmpeg, ['-i', src, '-i', noMusicAudio, '-map', '0:v', '-map', '1:a', '-c', 'copy', '-movflags', '+faststart', dst], workDir);
+        const partialCopy = dst.replace(/\.mp4$/, '.part.mp4');
+        try {
+          await runSimple(o.ffmpeg, ['-i', src, '-i', noMusicAudio, '-map', '0:v', '-map', '1:a', '-c', 'copy', '-movflags', '+faststart', partialCopy], workDir, o.signal);
+          fs.renameSync(partialCopy, dst);
+        } finally { fs.rmSync(partialCopy, { force: true }); }
         files.push(dst);
       }
       fs.rmSync(noMusicAudio, { force: true });

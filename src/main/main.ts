@@ -88,6 +88,7 @@ let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
 let quitting = false;
+let shutdownStudio: (() => Promise<void>) | undefined;
 /** Between match_start and match_end. AI tagging waits until this is false. */
 let inMatch = false;
 let lastStatus = 'Waiting for Marvel Rivals';
@@ -650,7 +651,7 @@ app.whenReady().then(() => {
   prepareRoot();
   if (!fs.existsSync(paths(settings.rootFolder).settings)) saveSettings({ ...DEFAULT_SETTINGS, ...settings });
   setupIpc();
-  registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
+  shutdownStudio = registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
   createWindow();
   registerHotkey();
   setupLocalMode();
@@ -667,7 +668,7 @@ installGracefulShutdown(app, async () => {
   gameWatcher.stop();
   if (stopTimer) clearTimeout(stopTimer);
   status('Closing: finishing saved clips…');
-  const results = await Promise.allSettled([detector.shutdown(), recorder.stop()]);
+  const results = await Promise.allSettled([detector.shutdown(), recorder.stop(), shutdownStudio?.()]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   log?.flushSync();
 }, error => {
