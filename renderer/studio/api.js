@@ -68,6 +68,7 @@ export const api = {
   show: (file) => call('studio:show', file),
   open: (file) => call('studio:open', file),
   openFolder: (which) => call('studio:openFolder', which),
+  exportDir: { choose: () => call('studio:exportDir:choose'), reset: () => call('studio:exportDir:reset') },
   openExternal: (url) => call('studio:openExternal', url),
   on: (ch, cb) => bridge().on(ch, cb),
 };
