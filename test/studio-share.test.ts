@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { ClipSidecar } from '../src/shared/types';
 import type { MusicTrack } from '../src/shared/studio';
 import { quickIdeas, sanitizeIdeas, ideasPrompt } from '../src/main/studio/ideas';
+import { STYLES } from '../src/main/studio/styles';
 import { creditFor, parseResults, readCapped, search } from '../src/main/studio/openverse';
 import { FORMATS } from '../src/main/studio/formats';
 import * as youtube from '../src/main/studio/publish/youtube';
@@ -70,6 +71,25 @@ test('quick ideas only use library clips, build up to the best one and match son
   assert.equal(spotlight.music.trackId, 't1');
   assert.ok(ideas.some((i) => i.title === 'Team wipe montage'));
   assert.ok(ideas.some((i) => i.title === 'Ult value'));
+});
+
+test('quick ideas use real edit styles, reference-style hooks and end text', () => {
+  const ideas = quickIdeas(LIB, [TRACK], FORMATS.tiktok);
+  const styleIds = new Set(STYLES.map((s) => s.id));
+  for (const i of ideas) assert.ok(styleIds.has(i.styleId), `${i.title} uses unknown style ${i.styleId}`);
+  const duel = ideas.find((i) => i.title === 'Hela or Magik?')!;
+  assert.ok(duel, 'duel idea');
+  assert.equal(duel.hook, "Who's stronger?\nHela?\nOr Magik?");
+  assert.equal(duel.endText, 'Comment who wins');
+  assert.ok(duel.clipIds.includes('c') && duel.clipIds.includes('e'));
+  assert.match(ideas.find((i) => i.title === 'Hela spotlight')!.hook, /^POV: you main Hela$/);
+});
+
+test('AI hooks keep up to 4 short lines', () => {
+  const raw = { ideas: [{ title: 'Duel', hook: "  Who's stronger?\n\nHim?\nOr you?\nMe\nToo many", endText: ' Comment who wins ', clipIds: ['a'] }] };
+  const [idea] = sanitizeIdeas(raw, LIB, [TRACK], FORMATS.tiktok);
+  assert.equal(idea.hook, "Who's stronger?\nHim?\nOr you?\nMe");
+  assert.equal(idea.endText, 'Comment who wins');
 });
 
 test('AI ideas are cleaned: unknown clips, songs and styles are dropped', () => {

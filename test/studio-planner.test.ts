@@ -200,3 +200,53 @@ test('each export gets its own base name, even within the same minute', async ()
   assert.equal(second, `${first}-2`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('with a hook card, story captions wait for the gameplay', () => {
+  const an = grid(128, 90, 4);
+  const style = getStyle('story');
+  const clips = [clip('a', [9], 10), clip('b', [9, 10], 40), clip('c', [8, 9, 10], 90)];
+  const tl = plan({ clips, style, fps: 60, analysis: an, musicStart: 'auto', intro: { text: 'Hook', seconds: 5 }, captions: [{ text: 'one' }, { text: 'two' }] });
+  assert.ok(tl.introEnd > 0);
+  assert.equal(tl.captions.length, 2);
+  assert.ok(tl.captions[0].start >= tl.introEnd - 1e-3, `caption at ${tl.captions[0].start}, intro ends ${tl.introEnd}`);
+});
+
+test('hook lines share the hook card in turn, under the picture band', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { hookTimes, introBand, textFilters } = await import('../src/main/studio/render');
+  const { FORMATS } = await import('../src/main/studio/formats');
+  assert.deepEqual(hookTimes(3, 4.5), [[0, 1.5], [1.5, 3], [3, 4.5]]);
+  assert.deepEqual(hookTimes(0, 4), []);
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-'));
+  const size = { width: 1080, height: 1920 };
+  const timeline = { introEnd: 4.5, duration: 30, captions: [{ text: 'story', start: 5, end: 7 }] } as any;
+  const f = textFilters({ timeline, style: getStyle('story'), format: FORMATS.tiktok, size, workDir, fontFile: '/fonts/x.ttf', intro: { text: "Who's stronger?\nHim?\nOr you?", seconds: 4.5, layout: 'band' }, outro: { text: 'Comment who wins', seconds: 3 } });
+  assert.equal(f.length, 5); // 3 hook lines, 1 caption, 1 end text
+  assert.equal(fs.readFileSync(path.join(workDir, 'cap1.txt'), 'utf8'), 'HIM?');
+  const band = introBand(size);
+  const y = Number(/:y=(\d+):/.exec(f[0])![1]);
+  assert.ok(y > size.height * (band.center + band.height / 2), `hook text at ${y} should sit under the band`);
+  assert.match(f[1], /between\(t,1\.5,3\)/);
+  assert.match(f[4], /between\(t,27,30\)/);
+  assert.equal(fs.readFileSync(path.join(workDir, 'cap4.txt'), 'utf8').replace(/\n/g, ' '), 'COMMENT WHO WINS');
+});
+
+test('hook text fits under the picture on landscape exports too', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { textFilters } = await import('../src/main/studio/render');
+  const { FORMATS } = await import('../src/main/studio/formats');
+  for (const [fmt, size] of [[FORMATS.youtube, { width: 1920, height: 1080 }], [FORMATS.youtube1440, { width: 2560, height: 1440 }], [FORMATS.tiktok, { width: 1080, height: 1920 }]] as const) {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hookfit-'));
+    const timeline = { introEnd: 3, duration: 20, captions: [] } as any;
+    const [f] = textFilters({ timeline, style: getStyle('story'), format: fmt, size, workDir, fontFile: '/fonts/x.ttf', intro: { text: 'POV: you main Deadpool and nobody believes you', seconds: 3, layout: 'band' } });
+    const y = Number(/:y=(\d+):/.exec(f)![1]);
+    const fontsize = Number(/:fontsize=(\d+):/.exec(f)![1]);
+    const lines = fs.readFileSync(path.join(workDir, 'cap0.txt'), 'utf8').split('\n').length;
+    const bottom = y + lines * fontsize * 1.18;
+    assert.ok(bottom <= size.height * (1 - fmt.safe.bottom) + 1, `${fmt.id}: text ends at ${Math.round(bottom)} of ${size.height}`);
+  }
+});

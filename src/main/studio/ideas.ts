@@ -7,14 +7,15 @@ import type { AiClient } from '../ai-auth';
 import type { ClipSidecar } from '../../shared/types';
 import type { ExportFormat, FormatId, MusicTrack, ReelIdea } from '../../shared/studio';
 import { STYLES } from './styles';
+import { hookText } from './projects';
 
 /** What the reference edits do, in words the AI can work from. */
 export const REFERENCE_STYLE = [
   'Reference edits (TikTok creator @imfuzedb, Marvel Rivals): 25 to 55 seconds.',
-  'They open on a hook card: a meme or reaction picture with big bold text (a question, a hot take or "rate this 1-10") for 2 to 8 seconds.',
-  'Then a short story told in bold white captions, one line every 1 to 2 seconds, building up to the best play ("They said Deadpool was a support" / "They were wrong").',
-  'Gameplay is cut on the beat in 3 to 7 second pieces, punched in on the hero, with white flashes on cuts, afterimage trails on the big moment and the best kill landing on the song\'s drop.',
-  'It ends on a fade to black. The tone is funny, confident and a little self-aware.',
+  'They open on a hook card for 3 to 8 seconds: a hero picture or meme in a strip across the middle of the screen over a blurred copy of it, with big bold capital text under it.',
+  'The hook is often a short back-and-forth, one line at a time ("WHO\'S STRONGER?" / "HIM?" / "OR YOU?", or "I CAN\'T BELIEVE IT" / "SUCH AN UNKILLABLE DUO!" / "MAYBE NOT..."), or a single "POV: YOU MAIN DEADPOOL".',
+  'Then gameplay cut on the beat in 3 to 7 second pieces, punched in on the hero, with white flashes on cuts, afterimage trails on the big moment and the best kill landing on the song\'s drop. Short story captions can run over it.',
+  'It ends with big text over the last seconds ("JOIN US DP MAINS!", "Please buff us", "Tysm for 2k") and a fade to black. The tone is funny, confident and a little self-aware.',
 ].join(' ');
 
 const SECONDS_PER_CLIP = 4.5;
@@ -39,7 +40,7 @@ function buildUp(list: ClipSidecar[]): string[] {
 }
 
 /** A handful of ideas straight from the library's tags. Always available, no sign-in needed. */
-export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: ExportFormat, count = 5): ReelIdea[] {
+export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: ExportFormat, count = 6): ReelIdea[] {
   const usable = clips.filter((c) => kills(c) > 0);
   if (!usable.length) return [];
   const n = Math.max(3, Math.round(format.idealSeconds[1] / SECONDS_PER_CLIP));
@@ -66,7 +67,8 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
       base({
         title: `${hero} spotlight`,
         concept: `Your best ${hero} plays, building to the cleanest one on the drop.`,
-        hook: `Rate this ${hero} 1-10`,
+        hook: `POV: you main ${hero}`,
+        endText: `${hero} mains, where you at?`,
         imageIdea: `${hero} looking smug or a reaction meme`,
         imageSearch: `${hero} marvel`,
         captions: [`They said ${hero} was a throw pick`, 'So I queued anyway', 'Then this happened', 'Still a throw pick?'],
@@ -86,6 +88,7 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
         title: 'Team wipe montage',
         concept: 'Only the multi-kills and team wipes, cut hard on every beat.',
         hook: 'POV: the enemy team queued into me',
+        endText: 'Rate it 1-10',
         imageIdea: 'shocked or crying reaction face',
         imageSearch: 'shocked face reaction',
         captions: ['Warm up', 'Getting started', 'Okay now it counts', 'Team wipe'],
@@ -97,6 +100,28 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
     );
   }
 
+  // Who's stronger: your two most-played heroes against each other, like the reference duel edits.
+  const pair = [...heroes.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 2);
+  if (pair.length === 2) {
+    const [[a, la], [b, lb]] = pair;
+    const half = Math.max(2, Math.floor(n / 2));
+    ideas.push(
+      base({
+        title: `${a} or ${b}?`,
+        concept: `Your best ${a} plays against your best ${b} plays. Let the comments decide.`,
+        hook: `Who's stronger?\n${a}?\nOr ${b}?`,
+        endText: 'Comment who wins',
+        imageIdea: `${a} and ${b} side by side`,
+        imageSearch: 'versus battle',
+        captions: [`${a} first`, 'Not bad', `Now ${b}`, 'Okay...'],
+        clipIds: [...buildUp(byScore(la).slice(0, half)), ...buildUp(byScore(lb).slice(0, half))],
+        styleId: 'story',
+        music: { mood: 'hype, big drop', bpm: [125, 150], search: 'hype electronic drop', trackId: pickTrack(tracks, [125, 150]) },
+        why: 'A "who wins" question gets people arguing in the comments, which pushes the video.',
+      }),
+    );
+  }
+
   // Ult moments.
   const ults = byScore(usable.filter((c) => c.tags.includes('ult')));
   if (ults.length >= 2) {
@@ -104,12 +129,13 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
       base({
         title: 'Ult value',
         concept: 'Every ult that turned a fight, each one punched in with slow-mo on the kill.',
-        hook: 'How much value is too much value?',
+        hook: 'Is this ult broken?\nAsking for a friend',
+        endText: 'Please don\'t nerf it',
         imageIdea: 'galaxy-brain or "stonks" meme',
         imageSearch: 'galaxy brain meme',
         captions: ['Ult ready', 'Wait for it', 'Value', 'More value', 'Okay that is enough value'],
         clipIds: buildUp(ults.slice(0, n)),
-        styleId: 'beatCuts',
+        styleId: 'beat-cuts',
         music: { mood: 'epic build to a drop', bpm: [120, 140], search: 'epic trailer drop', trackId: pickTrack(tracks, [120, 140]) },
         why: `${ults.length} ult clips. Repeated setup-and-payoff makes a clear format people recognise.`,
       }),
@@ -123,7 +149,8 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
       base({
         title: 'Last one standing',
         concept: 'Clutch fights where you were the last one alive, told as a comeback.',
-        hook: 'My team left me 1v5',
+        hook: 'My team left me 1v5\nBig mistake',
+        endText: 'Follow for part 2',
         imageIdea: 'lonely or "this is fine" meme',
         imageSearch: 'this is fine dog',
         captions: ['Team is dead', 'Five of them', 'One of me', 'Not today'],
@@ -142,6 +169,7 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
       title: 'Wait for it',
       concept: 'Your single best clip, slowed down on every kill, nothing else.',
       hook: 'Wait for it...',
+      endText: 'Clean or lucky?',
       imageIdea: '',
       imageSearch: '',
       captions: [],
@@ -175,7 +203,8 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
       id: id(),
       title,
       concept: str(r?.concept, 240),
-      hook: str(r?.hook, 80),
+      hook: hookText(r?.hook),
+      endText: str(r?.endText, 60) || undefined,
       imageIdea: str(r?.imageIdea, 160),
       imageSearch: str(r?.imageSearch, 60),
       captions: (Array.isArray(r?.captions) ? r.captions : []).map((x: unknown) => str(x, 60)).filter(Boolean).slice(0, 14),
@@ -215,7 +244,7 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     'For music.search, give 2 to 4 words to search royalty-free music with (genre and mood, no artist names). For imageSearch, give 2 to 4 words to search free pictures for the hook card.',
     o.request ? `My own idea or request: "${o.request.slice(0, 400)}"` : '',
     `Clips: ${JSON.stringify(clipRows)}`,
-    'Reply as JSON: {"ideas":[{"title":"","concept":"one sentence","hook":"hook card text","imageIdea":"what the hook picture shows","imageSearch":"","captions":["",""],"styleId":"","clipIds":[""],"music":{"trackId":"optional","mood":"","bpm":[120,140],"search":""},"postCaption":"post text with 4 to 6 hashtags","why":"why it would do well"}]}',
+    'Reply as JSON: {"ideas":[{"title":"","concept":"one sentence","hook":"hook card text: one line, or 2 to 4 very short lines separated by \\n that show one after another","endText":"big text over the last seconds (optional)","imageIdea":"what the hook picture shows","imageSearch":"","captions":["",""],"styleId":"","clipIds":[""],"music":{"trackId":"optional","mood":"","bpm":[120,140],"search":""},"postCaption":"post text with 4 to 6 hashtags","why":"why it would do well"}]}',
   ]
     .filter(Boolean)
     .join('\n\n');

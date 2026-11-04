@@ -54,11 +54,11 @@ To build an installer locally: `npm run dist` (output in `release/`). GitHub Act
 
 Open the **Studio** tab to turn clips into a TikTok, Reel, Short or YouTube edit.
 
-1. **Clips**: add clips from your library, or press *Fill with best* (or *AI pick*) to fill the reel to the format's ideal length.
+1. **Clips**: add clips from your library (filter by hero, map, mode, kills or your star rating), or press *Fill with best* (or *AI pick*) to fill the reel to the format's ideal length.
 2. **Music**: press *Add music* or drop MP3/WAV/M4A/FLAC files into `F:\RivalsClips\music`. Each song is analysed for tempo, beats and the drop. Suggestions change with the format and the edit style, with links to safe sources (YouTube Audio Library, NCS, StreamBeats, Pixabay, TikTok's sound library).
 3. **Style**: pick a preset (Story edit, Velocity, Beat cuts, Cinematic, Raw) or type a change in plain English and the AI adjusts the recipe. Every kill and cut lands on a beat, and your best kill lands on the drop.
 4. **Clip**: trim, nudge kill markers, drag the vertical crop box, punch in, and turn **your mic on or off per clip** (it lives on its own audio track).
-5. **Text**: hook card at the start, story captions that change on the beat, and an AI-written post caption.
+5. **Text**: a hook card at the start (by default the picture sits in a strip across the middle with big text under it, like the reference edits), with up to 4 hook lines that show one after another. Then story captions that change on the beat, optional end text over the last seconds ("Comment who wins"), and an AI-written post caption.
 6. **Preview** renders a quick low-res version. **Export** saves full-quality files to `F:\RivalsClips\exports\reels`, or any folder you pick with *Change folder* in the export window, for several formats at once if you like, plus an optional copy without music so you can add the same song inside TikTok or Instagram (the app tells you where the song should start).
 
 ### Reel ideas
@@ -80,6 +80,8 @@ Exporting to a folder is all you need. If you want one-click uploads later, each
 | Instagram | Posts a Reel | An Instagram Creator or Business account linked to a Facebook Page, and a Meta app (it works for you as the app's admin without review). Sign-in lasts about 60 days. |
 
 Tick *Upload when it's done* in the export window to upload as soon as the export finishes. Without accounts set up, *Post on…* opens the platform's upload page, shows the file and copies your caption.
+
+**Undo / redo**: Ctrl+Z and Ctrl+Shift+Z (or Ctrl+Y), or the buttons in the top bar. Space plays the preview, Delete removes the selected clip.
 
 Exports use the ffmpeg build bundled with the app (from the `ffmpeg-static` package, GPL licensed), and can use your graphics card (NVENC, AMF or Quick Sync) when available.
 

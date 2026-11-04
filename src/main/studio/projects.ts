@@ -66,6 +66,16 @@ export function createProject(opts: { name?: string; format?: FormatId; styleId?
   };
 }
 
+/** Hook text: up to 4 lines of up to 80 characters each. */
+export function hookText(v: unknown): string {
+  return String(v ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 4)
+    .join('\n');
+}
+
 const num = (v: unknown, lo: number, hi: number, fb: number) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
@@ -119,7 +129,7 @@ export function sanitizeProject(p: any): ReelProject {
     : [];
   const intro: IntroCard | null =
     p.intro && typeof p.intro === 'object'
-      ? { image: typeof p.intro.image === 'string' && p.intro.image ? p.intro.image : undefined, imageCredit: typeof p.intro.imageCredit === 'string' && p.intro.imageCredit ? p.intro.imageCredit.slice(0, 300) : undefined, text: String(p.intro.text ?? '').slice(0, 120), seconds: num(p.intro.seconds, 1, 15, 4) }
+      ? { image: typeof p.intro.image === 'string' && p.intro.image ? p.intro.image : undefined, imageCredit: typeof p.intro.imageCredit === 'string' && p.intro.imageCredit ? p.intro.imageCredit.slice(0, 300) : undefined, text: hookText(p.intro.text), seconds: num(p.intro.seconds, 1, 15, 4), layout: p.intro.layout === 'full' ? 'full' : 'band' }
       : null;
   const music =
     p.music && typeof p.music.file === 'string' && p.music.file
@@ -146,6 +156,10 @@ export function sanitizeProject(p: any): ReelProject {
     heroUid: typeof p.heroUid === 'string' ? p.heroUid : undefined,
     captions,
     intro,
+    outro:
+      p.outro && typeof p.outro === 'object' && String(p.outro.text ?? '').trim()
+        ? { text: String(p.outro.text).replace(/\s+/g, ' ').trim().slice(0, 100), seconds: num(p.outro.seconds, 1, 8, 3) }
+        : null,
     caption: typeof p.caption === 'string' ? p.caption.slice(0, 2200) : undefined,
     lastExports: Array.isArray(p.lastExports) ? p.lastExports.slice(-20) : undefined,
   };

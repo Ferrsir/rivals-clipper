@@ -17,6 +17,8 @@ const call = (ch, ...args) =>
 export const api = {
   init: () => call('studio:init'),
   clips: () => call('studio:clips'),
+  clipQuery: (q) => call('studio:clips:query', q),
+  clipFacets: () => call('studio:clips:facets'),
   autoFill: (project, seconds) => call('studio:autoFill', project, seconds),
   projects: {
     list: () => call('studio:projects:list'),
