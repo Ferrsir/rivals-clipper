@@ -7,13 +7,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipEvent, ClipSidecar, HeroRole } from '../shared/types';
 import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller } from './ai-auth';
-import { clipFileName, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
+import { clipFileName, isClipFile, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
 import { Library, type ClipQuery } from './library';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
 import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
-import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
+import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, sanitizeSettings, saveSettings } from './settings';
 import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 import { findFfmpeg } from './studio/ffmpeg-bin';
@@ -129,6 +129,7 @@ function prepareRoot() {
     settings = { ...settings, rootFolder: fallback };
     ensureFolders(fallback);
   }
+  log?.flushSync();
   log = new EventLog(paths(settings.rootFolder).logs);
 }
 
@@ -362,7 +363,7 @@ function setupIpc() {
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
     const rootChanged = patch.rootFolder && patch.rootFolder !== settings.rootFolder;
-    settings = { ...settings, ...patch };
+    settings = sanitizeSettings({ ...settings, ...patch }, settings);
     if (rootChanged) prepareRoot();
     saveSettings(settings);
     fs.mkdirSync(path.dirname(rootPointer), { recursive: true });
@@ -373,16 +374,33 @@ function setupIpc() {
     return settings;
   });
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
-  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(videoFile, { useMic }));
-  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
-  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagNow(videoFile));
+  // Clip actions only ever touch .mp4 files inside the clips folder, whatever the window sends.
+  const clipOnly = (videoFile: unknown): string => {
+    if (!isClipFile(videoFile, paths(settings.rootFolder).clips)) throw new Error('That file is not a clip in your library.');
+    return videoFile;
+  };
+  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(clipOnly(videoFile), { useMic: !!useMic }));
+  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => {
+    const r = Math.round(Number(rating));
+    if (!(r >= 1 && r <= 5)) throw new Error('Rating must be 1 to 5 stars.');
+    return updateSidecar(clipOnly(videoFile), { rating: r });
+  });
+  ipcMain.handle('clip:aiTag', (_e, videoFile: string) => tagger.tagNow(clipOnly(videoFile)));
   ipcMain.handle('clips:aiTagUntagged', () => {
     const list = untagged(library.query({ limit: 100_000 }).items);
     for (const c of list) tagger.enqueue(c.videoFile);
     return list.length;
   });
-  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(videoFile));
-  ipcMain.handle('clip:export', async (_e, videoFile: string, withMic: boolean) => {
+  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(clipOnly(videoFile)));
+  /** Moves the clip and its sidecar to the Recycle Bin, so a mistake can be undone there. */
+  ipcMain.handle('clip:delete', async (_e, videoFile: string) => {
+    const file = clipOnly(videoFile);
+    for (const f of [file, sidecarPath(file)]) if (fs.existsSync(f)) await shell.trashItem(f);
+    status('Clip moved to the Recycle Bin');
+    return true;
+  });
+  ipcMain.handle('clip:export', async (_e, rawFile: string, withMic: boolean) => {
+    const videoFile = clipOnly(rawFile);
     const ff = await anyFfmpeg();
     if (!ff) throw new Error('No ffmpeg found to export with. Reinstall the app or set FFMPEG_PATH.');
     const c = JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
@@ -477,6 +495,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  log?.flushSync();
   void recorder.stop().catch(() => undefined);
 });
 app.on('window-all-closed', () => app.quit());

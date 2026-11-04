@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../shared/types';
 import { scoreClip } from './scoring';
+import { writeFileAtomic } from './settings';
 
 export function sidecarPath(videoFile: string): string {
   return videoFile.replace(/\.[^.]+$/, '') + '.json';
@@ -19,7 +20,7 @@ export function clipFileName(now: Date, kills: number, hero?: string): string {
 export function writeSidecar(clip: Omit<ClipSidecar, 'score' | 'tags' | 'scoreBreakdown'>): ClipSidecar {
   const { score, tags, breakdown } = scoreClip(clip);
   const full: ClipSidecar = { ...clip, score, tags, scoreBreakdown: breakdown };
-  fs.writeFileSync(sidecarPath(clip.videoFile), JSON.stringify(full, null, 2));
+  writeFileAtomic(sidecarPath(clip.videoFile), JSON.stringify(full, null, 2));
   return full;
 }
 
@@ -30,7 +31,7 @@ export function updateSidecar(videoFile: string, patch: Partial<ClipSidecar>): C
   const merged = { ...current, ...patch };
   const { score, tags, breakdown } = scoreClip(merged);
   const full = { ...merged, score, tags, scoreBreakdown: breakdown };
-  fs.writeFileSync(p, JSON.stringify(full, null, 2));
+  writeFileAtomic(p, JSON.stringify(full, null, 2));
   return full;
 }
 
@@ -54,4 +55,11 @@ export function listClips(clipsFolder: string, limit = 200): ClipSidecar[] {
   };
   walk(clipsFolder);
   return out.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+}
+
+/** True when `file` is an .mp4 inside `clipsFolder` (after resolving `..` and case on Windows). */
+export function isClipFile(file: unknown, clipsFolder: string): file is string {
+  if (typeof file !== 'string' || !/\.mp4$/i.test(file)) return false;
+  const rel = path.relative(path.resolve(clipsFolder), path.resolve(file));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
 }

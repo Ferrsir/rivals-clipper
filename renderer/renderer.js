@@ -34,6 +34,7 @@ function clipRow(c) {
       <div class="actions">
         <span class="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${(c.rating ?? 0) >= n ? 'on' : ''}">★</button>`).join('')}</span>
         ${hasMic ? `<label class="check"><input type="checkbox" class="useMic" ${c.useMic ? 'checked' : ''}> mic in reels</label>` : '<span class="muted">no mic track</span>'}
+        <button class="delete" title="Move to the Recycle Bin">Delete</button>
         <button class="exportGame">Export game audio</button>
         ${hasMic ? '<button class="exportMic">Export with mic</button>' : ''}
         <button class="show">Show file</button>
@@ -44,6 +45,12 @@ function clipRow(c) {
     b.addEventListener('click', async () => replace(await clipper.rate(c.videoFile, Number(b.dataset.star)))),
   );
   li.querySelector('.useMic')?.addEventListener('change', async (e) => replace(await clipper.setMic(c.videoFile, e.target.checked)));
+  li.querySelector('.delete').addEventListener('click', async () => {
+    if (!confirm('Move this clip to the Recycle Bin?')) return;
+    await clipper.deleteClip(c.videoFile).catch(alert);
+    await refreshFacets();
+    await runQuery();
+  });
   li.querySelector('.exportGame').addEventListener('click', () => clipper.exportClip(c.videoFile, false).catch(alert));
   li.querySelector('.exportMic')?.addEventListener('click', () => clipper.exportClip(c.videoFile, true).catch(alert));
   li.querySelector('.show').addEventListener('click', () => clipper.show(c.videoFile));
