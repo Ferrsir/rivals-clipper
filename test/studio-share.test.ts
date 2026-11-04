@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { ClipSidecar } from '../src/shared/types';
 import type { MusicTrack } from '../src/shared/studio';
 import { quickIdeas, sanitizeIdeas, ideasPrompt } from '../src/main/studio/ideas';
-import { creditFor, parseResults, search } from '../src/main/studio/openverse';
+import { creditFor, parseResults, readCapped, search } from '../src/main/studio/openverse';
 import { FORMATS } from '../src/main/studio/formats';
 import * as youtube from '../src/main/studio/publish/youtube';
 import * as tiktok from '../src/main/studio/publish/tiktok';
@@ -108,6 +108,20 @@ test('openverse search asks for commercial licences and music only', async () =>
   assert.equal(u.searchParams.get('q'), 'phonk drop');
   assert.equal(u.searchParams.get('license'), 'cc0,pdm,by,by-sa');
   assert.equal(u.searchParams.get('category'), 'music');
+});
+
+test('downloads stop as soon as they pass the size limit, even without a length header', async () => {
+  let pulled = 0;
+  const endless = new ReadableStream<Uint8Array>({
+    pull(c) {
+      pulled++;
+      c.enqueue(new Uint8Array(1024));
+    },
+  });
+  await assert.rejects(readCapped(new Response(endless), 10 * 1024), /too big/);
+  assert.ok(pulled < 20, `read ${pulled} chunks`);
+  await assert.rejects(readCapped(new Response('x'.repeat(100), { headers: { 'content-length': '999999' } }), 1000), /too big/);
+  assert.equal((await readCapped(new Response('hello'), 1000)).toString(), 'hello');
 });
 
 test('youtube resumable upload sends metadata, then the file in pieces', async () => {

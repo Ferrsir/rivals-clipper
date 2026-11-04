@@ -808,8 +808,7 @@ async function startUpload(project, file, platform) {
 }
 
 async function autoUploadAfterExport(job, files) {
-  const proj = job.projectId === S.project.id ? S.project : await api.projects.get(job.projectId).catch(() => null);
-  if (!proj) return;
+  const proj = job.snapshot;
   for (const platform of job.autoUpload) {
     const mine = files.filter((f) => PLATFORM_OF_FORMAT[formatOfFile(f).format] === platform);
     if (!mine.length) {
@@ -1278,8 +1277,10 @@ async function startRender(req) {
   saveSoon.flush(S.project);
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
   try {
-    const { jobId } = await api.render(S.project, request);
-    S.job = { jobId, autoUpload: req.autoUpload ?? [], projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+    // Uploads use the reel as it was rendered, even if it is edited while the export runs.
+    const snapshot = structuredClone(S.project);
+    const { jobId } = await api.render(snapshot, request);
+    S.job = { jobId, autoUpload: req.autoUpload ?? [], snapshot, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
   } catch (err) {
     toast(root, err.message, 'error', 7000);
   }
