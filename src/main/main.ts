@@ -1,6 +1,7 @@
 // Rivals Clipper main process.
-// Listens to Overwolf GEP for Marvel Rivals, keeps a replay buffer running while you play,
-// and saves one clip per kill streak with a JSON sidecar describing what happened.
+// Listens to Overwolf GEP for Marvel Rivals (or, in local mode, watches the screen for kills),
+// keeps a replay buffer running while you play, and saves one clip per kill streak with a JSON
+// sidecar describing what happened.
 
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } from 'electron';
 import fs from 'node:fs';
@@ -13,7 +14,13 @@ import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
 import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
-import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
+import type { BufferInfo, ClipRecorder, SavedVideo } from './capture/types';
+import { LocalRecorder } from './capture/local-recorder';
+import { GameWatcher } from './capture/game-watcher';
+import { chooseEngine, lateBy, type Engine } from './engine';
+import { findFfmpeg } from './studio/ffmpeg-bin';
+import { ScreenDetector } from './vision/screen-detector';
+import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, localOptions, paths, saveSettings } from './settings';
 import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 
@@ -43,7 +50,27 @@ function readRootPointer(): string {
 }
 let log: EventLog;
 const state = new MatchState(loadHeroRoles());
-const recorder = new Recorder((msg, extra) => status(msg, extra));
+/** Present only when running inside ow-electron. Plain Electron has no app.overwolf. */
+const overwolf = (app as { overwolf?: Electron.App['overwolf'] }).overwolf;
+const owRecorder = new Recorder((msg, extra) => status(msg, extra));
+// Local mode (no Overwolf): the built-in recorder, a process-list watcher and the screen detector.
+const localRecorder = new LocalRecorder((msg, extra) => status(msg, extra), { ffmpeg: localFfmpeg });
+const gameWatcher = new GameWatcher();
+const detector = new ScreenDetector({
+  ffmpeg: localFfmpeg,
+  log: (msg, extra) => status(msg, extra),
+  dataDir: () => app.getPath('userData'),
+  sink: {
+    gameEvent: (key, value, at) => engine === 'local' && onGameEvent('screen', key, value, at),
+    infoUpdate: (feature, key, value) => engine === 'local' && onInfoUpdate(feature, key, value),
+  },
+});
+/** Which engine is in use. Undefined while 'auto' waits to see if Overwolf's packages load. */
+let engine: Engine | undefined;
+/** The recorder of the engine in use. */
+let recorder: ClipRecorder = owRecorder;
+/** Kept after the buffer stops, for a clip that finishes saving afterwards. */
+let lastBufferInfo: BufferInfo | undefined;
 let streak = makeStreak();
 let pending: PendingClip | undefined;
 let stopTimer: NodeJS.Timeout | undefined;
@@ -76,10 +103,30 @@ function loadHeroRoles(): Record<string, HeroRole> {
   }
 }
 
+async function localFfmpeg(): Promise<string> {
+  const f = await findFfmpeg(owRecorder.ffmpegPath);
+  if (!f.ok || !f.path) throw new Error(f.problem ?? 'No ffmpeg found');
+  return f.path;
+}
+
+function statusPayload(extra?: unknown) {
+  return {
+    msg: lastStatus,
+    extra,
+    gameRunning,
+    buffer: recorder.info,
+    clipping: !!pending,
+    engine,
+    // In local mode Overwolf not loading is expected, not an error.
+    packagesProblem: engine === 'local' ? undefined : packagesProblem,
+    detection: engine === 'local' ? detector.status() : undefined,
+  };
+}
+
 function status(msg: string, extra?: unknown) {
   lastStatus = msg;
   log?.write('status', { msg, extra });
-  win?.webContents.send('status', { msg, extra, gameRunning, buffer: recorder.info, clipping: !!pending, packagesProblem });
+  win?.webContents.send('status', statusPayload(extra));
 }
 
 function pushClip(clip: ClipSidecar) {
@@ -116,9 +163,10 @@ async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number
     hero: state.myHero,
     ultUsedBeforeKills: state.ultUsedBefore(now),
   };
-  scheduleStop(stopAt, now);
+  scheduleStop(stopAt);
   try {
-    await recorder.startClip(fileName, pastMs, (video) => onClipSaved(video));
+    // A kill seen on screen is reported a moment after it happened, so reach back that much further.
+    await recorder.startClip(fileName, pastMs + lateBy(now, Date.now()), (video) => onClipSaved(video));
     status(trigger === 'manual' ? 'Saving manual clip' : 'Kill! Clipping');
   } catch (err) {
     status(`Could not start clip: ${(err as Error).message}`);
@@ -127,12 +175,12 @@ async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number
   }
 }
 
-function scheduleStop(stopAt: number, now = Date.now()) {
+function scheduleStop(stopAt: number) {
   if (stopTimer) clearTimeout(stopTimer);
-  stopTimer = setTimeout(() => recorder.stopClip(), Math.max(0, stopAt - now));
+  stopTimer = setTimeout(() => recorder.stopClip(), Math.max(0, stopAt - Date.now()));
 }
 
-function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoch: number; error?: unknown }) {
+function onClipSaved(video: SavedVideo) {
   const clip = pending;
   pending = undefined;
   streak.finish();
@@ -142,7 +190,9 @@ function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoc
     return;
   }
   const kills = clip.events.filter((e) => e.type === 'kill').length;
-  const info = recorder.info ?? { width: 0, height: 0, fps: 0, micRecorded: false };
+  const info = recorder.info ?? lastBufferInfo ?? { width: 0, height: 0, fps: 0, micRecorded: false };
+  // The local recorder says which tracks it wrote; Overwolf clips follow the buffer settings.
+  const tracks = video.audioTracks ?? (info.micRecorded ? ['game', 'mic'] : ['game']);
   const saved = writeSidecar({
     version: 1,
     id: path.basename(video.filePath).replace(/\.[^.]+$/, ''),
@@ -156,8 +206,8 @@ function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoc
     events: clip.events,
     ultUsedBeforeKills: clip.ultUsedBeforeKills,
     video: { width: info.width, height: info.height, fps: info.fps },
-    audioTracks: info.micRecorded ? [{ index: 0, label: 'game' }, { index: 1, label: 'mic' }] : [{ index: 0, label: 'game' }],
-    useMic: info.micRecorded && settings.useMicInReelsByDefault,
+    audioTracks: tracks.map((label, index) => ({ index, label })),
+    useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
   matchClips.push(saved.videoFile);
   status(`Saved ${kills}-kill clip (score ${saved.score})`);
@@ -174,7 +224,7 @@ function handleKill(now: number, total?: number) {
   } else {
     const action = streak.onKill(now);
     if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
-    else if (action.type === 'extend') scheduleStop(action.stopAt, now);
+    else if (action.type === 'extend') scheduleStop(action.stopAt);
   }
   // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
@@ -184,7 +234,7 @@ function handleKill(now: number, total?: number) {
 function handleManualClip() {
   const now = Date.now();
   if (pending) {
-    scheduleStop(now + settings.postRollSeconds * 1000, now);
+    scheduleStop(now + settings.postRollSeconds * 1000);
     return;
   }
   const past = Math.min(30_000, settings.bufferSeconds * 1000 - 2000);
@@ -193,9 +243,10 @@ function handleManualClip() {
 
 // ---------- GEP ----------
 
-function onGameEvent(feature: string, key: string, value: unknown) {
-  const now = Date.now();
-  log.write('event', { feature, key, value });
+/** `at` is when it happened: screen detection reports events a moment after they showed on screen. */
+function onGameEvent(feature: string, key: string, value: unknown, at = Date.now()) {
+  const now = at;
+  log.write('event', { feature, key, value, ...(feature === 'screen' ? { at, lateMs: Date.now() - at } : {}) });
   switch (key) {
     case 'kill':
       handleKill(now, Number(parseMaybeJson(value)) || undefined);
@@ -256,7 +307,7 @@ function onInfoUpdate(feature: string, key: string, value: unknown) {
 function setupGep() {
   const gep = app.overwolf.packages.gep;
   gep.on('game-detected', async (e, gameId, name) => {
-    if (gameId !== MARVEL_RIVALS) return;
+    if (gameId !== MARVEL_RIVALS || engine === 'local') return;
     e.enable();
     await gep.setRequiredFeatures(MARVEL_RIVALS, GEP_FEATURES).catch((err) => status('GEP feature setup failed', String(err)));
     status(`${name} detected, game events on`);
@@ -265,9 +316,10 @@ function setupGep() {
   gep.on('elevated-privileges-required', () =>
     status('Marvel Rivals is running as administrator. Run Rivals Clipper as administrator too, or kills will not be detected.'),
   );
-  gep.on('new-game-event', (_e, _gameId, data) => onGameEvent(data.feature, data.key, data.value));
-  gep.on('new-info-update', (_e, _gameId, data) => onInfoUpdate(data.feature, data.key, data.value));
+  gep.on('new-game-event', (_e, _gameId, data) => engine === 'overwolf' && onGameEvent(data.feature, data.key, data.value));
+  gep.on('new-info-update', (_e, _gameId, data) => engine === 'overwolf' && onInfoUpdate(data.feature, data.key, data.value));
   gep.on('game-exit', () => {
+    if (engine !== 'overwolf') return;
     gameRunning = false;
     void recorder.stop().then(() => status('Marvel Rivals closed'));
   });
@@ -278,27 +330,89 @@ function setupGep() {
 
 async function startBuffer() {
   gameRunning = true;
+  const rec = recorder;
   try {
-    await recorder.start(settings, gameProcess ?? {}, paths(settings.rootFolder).clips);
-    status('Replay buffer running. Go get some kills.');
+    lastBufferInfo = await rec.start(settings, gameProcess ?? {}, paths(settings.rootFolder).clips);
+    const how = rec.kind === 'local' && lastBufferInfo.encoder ? ` (${lastBufferInfo.encoder}${lastBufferInfo.gpu ? ` on ${lastBufferInfo.gpu}` : ''})` : '';
+    status(`Replay buffer running${how}. Go get some kills.`);
   } catch (err) {
     status(`Replay buffer failed to start: ${(err as Error).message}`);
+    return;
   }
+  // Local mode: kills come from the screen. Started after the recorder so it knows the capture works.
+  if (rec.kind === 'local' && engine === 'local') await detector.start(settings).catch((err) => status(`Kill detection failed to start: ${(err as Error).message}`));
 }
 
 function setupRecorder() {
-  const rec = recorder.api;
+  const rec = owRecorder.api;
   void rec.registerGames({ gamesIds: [MARVEL_RIVALS] });
   rec.on('game-launched', (game) => {
-    if (game.id !== MARVEL_RIVALS || game.type !== 'Game') return;
+    if (game.id !== MARVEL_RIVALS || game.type !== 'Game' || engine !== 'overwolf') return;
     gameProcess = { pid: game.processInfo?.pid, fullPath: game.processInfo?.fullPath };
     void startBuffer();
   });
   rec.on('game-exit', () => {
+    if (engine !== 'overwolf') return;
     gameRunning = false;
     gameProcess = undefined;
   });
   rec.on('performance-warning', (w) => status('Recording is struggling to keep up', w));
+}
+
+// ---------- engine: Overwolf or local ----------
+
+/**
+ * Picks Overwolf or local mode from the setting and whether Overwolf's packages loaded.
+ * Once picked it stays for the session unless the setting changes (`reconsider`).
+ */
+function applyEngine(reconsider = false): void {
+  if (engine && !reconsider) return;
+  const next = chooseEngine(localOptions(settings).engine, {
+    present: !!overwolf,
+    ready: readyPackages.has('gep') && readyPackages.has('recorder'),
+    failed: !!packagesProblem,
+  });
+  if (!next || next === engine) return;
+  const prev = engine;
+  engine = next;
+  log?.write('engine', { engine: next, setting: settings.engine, packagesProblem });
+  if (prev) {
+    // Switching while running: stop the old engine. Its clip in progress still saves.
+    const old = recorder;
+    gameRunning = false;
+    void old.stop().catch(() => undefined);
+    if (prev === 'local') {
+      gameWatcher.stop();
+      void detector.shutdown();
+    }
+  }
+  if (next === 'local') {
+    recorder = localRecorder;
+    gameWatcher.start();
+    status(
+      settings.engine === 'local'
+        ? 'Local mode: waiting for Marvel Rivals'
+        : 'Overwolf is not available, so local mode is on (screen detection + built-in recorder). Waiting for Marvel Rivals.',
+    );
+  } else {
+    recorder = owRecorder;
+    status(prev ? 'Switched to Overwolf. Restart Marvel Rivals to start recording with it.' : lastStatus);
+  }
+}
+
+function setupLocalMode() {
+  gameWatcher.on('launched', (game: { pid: number; name: string }) => {
+    if (engine !== 'local') return;
+    gameProcess = { pid: game.pid };
+    status('Marvel Rivals detected');
+    void startBuffer();
+  });
+  gameWatcher.on('exit', () => {
+    if (engine !== 'local') return;
+    gameRunning = false;
+    gameProcess = undefined;
+    void Promise.all([detector.shutdown(), localRecorder.stop()]).then(() => status('Marvel Rivals closed'));
+  });
 }
 
 // ---------- UI + IPC ----------
@@ -315,13 +429,14 @@ function createWindow() {
 }
 
 function setupIpc() {
-  ipcMain.handle('status', () => ({ msg: lastStatus, gameRunning, buffer: recorder.info, clipping: !!pending, packagesProblem }));
+  ipcMain.handle('status', () => statusPayload());
   ipcMain.handle('clips:list', () => library.query({ limit: 200 }).items);
   ipcMain.handle('clips:query', (_e, q: ClipQuery) => library.query(q ?? {}));
   ipcMain.handle('clips:facets', () => library.facets());
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
     const rootChanged = patch.rootFolder && patch.rootFolder !== settings.rootFolder;
+    const engineChanged = patch.engine !== undefined && patch.engine !== settings.engine;
     settings = { ...settings, ...patch };
     if (rootChanged) prepareRoot();
     saveSettings(settings);
@@ -329,7 +444,9 @@ function setupIpc() {
     fs.writeFileSync(rootPointer, settings.rootFolder);
     streak = makeStreak();
     registerHotkey();
-    if (gameRunning) await startBuffer(); // apply capture changes
+    const engineBefore = engine;
+    applyEngine(engineChanged);
+    if (gameRunning && engine === engineBefore) await startBuffer(); // apply capture changes
     return settings;
   });
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
@@ -337,8 +454,8 @@ function setupIpc() {
   ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
   ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(videoFile));
   ipcMain.handle('clip:export', async (_e, videoFile: string, withMic: boolean) => {
-    const ff = recorder.ffmpegPath;
-    if (!ff) throw new Error('ffmpeg not available yet (recorder package still loading)');
+    const ff = recorder.ffmpegPath ?? (await localFfmpeg().catch(() => undefined));
+    if (!ff) throw new Error('No ffmpeg found to export with. Reinstall the app or set FFMPEG_PATH.');
     const c = JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
     const out = await exportClip(ff, videoFile, paths(settings.rootFolder).exports, { withMic, hasMicTrack: c.audioTracks.length > 1 });
     shell.showItemInFolder(out);
@@ -390,7 +507,7 @@ function registerHotkey() {
 
 // ---------- boot ----------
 
-app.overwolf.disableAnonymousAnalytics();
+overwolf?.disableAnonymousAnalytics();
 
 const PACKAGES_HELP =
   'Overwolf blocked its game-event and recording packages, so kills cannot be detected or recorded. ' +
@@ -399,25 +516,29 @@ const PACKAGES_HELP =
 
 function reportPackagesProblem(reason: string) {
   packagesProblem = `${PACKAGES_HELP} (${reason})`;
-  status('Overwolf packages did not load');
+  if (engine !== 'local') status('Overwolf packages did not load');
+  applyEngine();
 }
 
-app.overwolf.packages.on('ready', (_e, packageName, version) => {
-  log?.write('package-ready', { packageName, version });
-  readyPackages.add(packageName);
-  if (readyPackages.has('gep') && readyPackages.has('recorder') && packagesProblem) {
-    packagesProblem = undefined;
-    status(lastStatus);
-  }
-  if (packageName === 'gep') setupGep();
-  if (packageName === 'recorder') setupRecorder();
-});
-app.overwolf.packages.on('failed-to-initialize', (_e, packageName) => reportPackagesProblem(`"${packageName}" failed to initialize`));
-// When Overwolf rejects the app signature it skips package loading without any event, so watch for silence too.
-setTimeout(() => {
-  const missing = ['gep', 'recorder'].filter((p) => !readyPackages.has(p));
-  if (missing.length) reportPackagesProblem(`${missing.join(' and ')} not loaded after 60 seconds`);
-}, 60_000);
+if (overwolf) {
+  overwolf.packages.on('ready', (_e, packageName, version) => {
+    log?.write('package-ready', { packageName, version });
+    readyPackages.add(packageName);
+    if (readyPackages.has('gep') && readyPackages.has('recorder') && packagesProblem) {
+      packagesProblem = undefined;
+      status(lastStatus);
+    }
+    if (packageName === 'gep') setupGep();
+    if (packageName === 'recorder') setupRecorder();
+    applyEngine();
+  });
+  overwolf.packages.on('failed-to-initialize', (_e, packageName) => reportPackagesProblem(`"${packageName}" failed to initialize`));
+  // When Overwolf rejects the app signature it skips package loading without any event, so watch for silence too.
+  setTimeout(() => {
+    const missing = ['gep', 'recorder'].filter((p) => !readyPackages.has(p));
+    if (missing.length) reportPackagesProblem(`${missing.join(' and ')} not loaded after 60 seconds`);
+  }, 60_000);
+}
 
 app.whenReady().then(() => {
   prepareRoot();
@@ -426,11 +547,15 @@ app.whenReady().then(() => {
   registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
   createWindow();
   registerHotkey();
+  setupLocalMode();
   status(lastStatus);
+  applyEngine();
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  gameWatcher.stop();
+  void detector.shutdown().catch(() => undefined);
   void recorder.stop().catch(() => undefined);
 });
 app.on('window-all-closed', () => app.quit());

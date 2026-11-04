@@ -34,6 +34,24 @@ export interface Settings {
   aiProvider: 'claude' | 'codex' | 'none';
   /** Set once the first-launch sign-in screen has been completed or skipped. */
   onboarded: boolean;
+  /**
+   * How kills are detected and clips recorded.
+   * 'local': screen detection + the built-in recorder (no Overwolf). 'overwolf': Overwolf's game events and recorder.
+   * 'auto': Overwolf when its packages load, otherwise local.
+   */
+  engine: 'auto' | 'overwolf' | 'local';
+  /** Local recorder: which monitor to record, counted on the graphics card that drives the main monitor (0 = main). */
+  captureMonitor: number;
+  /** Local recorder: video encoder. 'auto' picks the one on the card your monitor is plugged into. */
+  localEncoder: 'auto' | 'nvenc' | 'amf' | 'qsv' | 'x264';
+  /** Your in-game name, so the kill feed can tell your kills from your deaths. Empty = learn it from the feed. */
+  playerName: string;
+  /** In-game HUD scale (1 = default). */
+  hudScale: number;
+  /** Screen detection checks this many frames per second. */
+  detectionFps: number;
+  /** Read names, streak counts, map and match result from the screen (text recognition). */
+  readScreenText: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -54,6 +72,13 @@ export const DEFAULT_SETTINGS: Settings = {
   clipPractice: false,
   aiProvider: 'none',
   onboarded: false,
+  engine: 'auto',
+  captureMonitor: 0,
+  localEncoder: 'auto',
+  playerName: '',
+  hudScale: 1,
+  detectionFps: 10,
+  readScreenText: true,
 };
 
 export const paths = (root: string) => ({
@@ -100,4 +125,22 @@ export function resolveResolution(setting: Settings['resolution'], native: { wid
   const h = setting === '1080p' ? 1080 : setting === '1440p' ? 1440 : 2160;
   const aspect = native.width / native.height || 16 / 9;
   return { width: Math.round((h * aspect) / 2) * 2, height: h };
+}
+
+/** Local-mode settings with bad values (an empty box, a hand-edited file) replaced by safe ones. */
+export function localOptions(s: Partial<Settings>) {
+  const num = (v: unknown, min: number, max: number, fallback: number) => {
+    const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    return typeof n === 'number' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  };
+  const encoders = ['auto', 'nvenc', 'amf', 'qsv', 'x264'] as const;
+  return {
+    engine: (['auto', 'overwolf', 'local'] as const).includes(s.engine as never) ? (s.engine as Settings['engine']) : 'auto',
+    captureMonitor: Math.round(num(s.captureMonitor, 0, 7, 0)),
+    localEncoder: encoders.includes(s.localEncoder as never) ? (s.localEncoder as Settings['localEncoder']) : 'auto',
+    playerName: typeof s.playerName === 'string' ? s.playerName.trim().slice(0, 40) : '',
+    hudScale: Math.round(num(s.hudScale, 0.5, 1.5, 1) * 100) / 100,
+    detectionFps: Math.round(num(s.detectionFps, 4, 20, 10)),
+    readScreenText: typeof s.readScreenText === 'boolean' ? s.readScreenText : true,
+  };
 }

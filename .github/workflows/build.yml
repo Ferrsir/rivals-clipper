@@ -33,6 +33,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The local-mode audio helper (game audio + mic without Overwolf). Built with the runner's Visual Studio.
+      - run: npm run build:native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rc-audio
+          path: native/bin/rc-audio.exe
       - run: npm run dist
         env:
           # Overwolf signing. Without these the installer builds, but Overwolf won't load

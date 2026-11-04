@@ -4,6 +4,8 @@ Auto-clips your Marvel Rivals kills and streaks, keeps a ranked highlight librar
 
 Kill detection uses Overwolf's official Game Events Provider for Marvel Rivals, and recording uses Overwolf's recorder package (an OBS-based replay buffer). Nothing reads game memory, so there is no anti-cheat risk.
 
+**No Overwolf? Local mode.** When Overwolf's packages can't load (an unsigned build, or you'd rather not use it), the app finds kills by watching the screen (KO list, kill feed, streak banners, match bar) and records with your graphics card (NVENC on GeForce, AMF on AMD), with game audio and mic on separate tracks as usual. Screen capture only: it never touches the game. See [docs/local-mode.md](docs/local-mode.md) for how it works and where it falls short of Overwolf.
+
 ## What works now (Phase 0 + 1)
 
 - **Replay buffer** of the game while Marvel Rivals is running (60 s in memory, nothing written until something happens).
