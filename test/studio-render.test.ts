@@ -29,7 +29,8 @@ function findTool(name: 'ffmpeg' | 'ffprobe'): string | undefined {
 
 const FF = findTool('ffmpeg');
 const PROBE = findTool('ffprobe');
-const skip = !FF || !PROBE ? (process.env.CI ? false : 'ffmpeg/ffprobe not installed') : false;
+// Without ffmpeg the render tests skip; on CI the check below fails instead, so a missing ffmpeg can't pass quietly.
+const skip = !FF || !PROBE ? 'ffmpeg/ffprobe not installed' : false;
 if (process.env.CI && (!FF || !PROBE)) test('ffmpeg is available on CI', () => assert.fail('ffmpeg and ffprobe are needed for the render tests'));
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-render-'));
