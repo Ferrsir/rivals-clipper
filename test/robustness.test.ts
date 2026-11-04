@@ -32,6 +32,18 @@ test('settings from a bad form or hand-edited file are made valid', () => {
   assert.deepEqual(sanitizeSettings(DEFAULT_SETTINGS), DEFAULT_SETTINGS);
 });
 
+test('settings without a specific rule still survive when their type matches the default', () => {
+  const defaults = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
+  const added = 'testOnlySetting';
+  defaults[added] = 'a';
+  try {
+    assert.equal((sanitizeSettings({ [added]: 'b' }) as unknown as Record<string, unknown>)[added], 'b');
+    assert.equal((sanitizeSettings({ [added]: 5 }) as unknown as Record<string, unknown>)[added], 'a');
+  } finally {
+    delete defaults[added];
+  }
+});
+
 test('settings survive a round trip and a corrupt file falls back to defaults', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-'));
   try {

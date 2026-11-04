@@ -82,12 +82,20 @@ const str = (v: unknown, fallback: string) => (typeof v === 'string' && v.trim()
 
 /**
  * Turn anything (a settings file someone edited, a form with an empty box) into valid settings.
- * Unknown keys are dropped, wrong types fall back to `base`, numbers are kept in sane ranges.
+ * Keys not in DEFAULT_SETTINGS are dropped, wrong types fall back to `base`, numbers are kept in sane ranges.
  */
 export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS): Settings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  // Any setting without a rule below still survives if it has the same type as its default,
+  // so settings added elsewhere are never silently dropped.
+  const passthrough: Record<string, unknown> = {};
+  for (const [k, def] of Object.entries(DEFAULT_SETTINGS)) {
+    const v = k in r ? r[k] : (base as unknown as Record<string, unknown>)[k];
+    passthrough[k] = v !== null && typeof v === typeof def && Array.isArray(v) === Array.isArray(def) ? v : def;
+  }
   const preRollSeconds = clampInt(r.preRollSeconds, 3, 40, base.preRollSeconds);
   const s: Settings = {
+    ...(passthrough as unknown as Settings),
     rootFolder: str(r.rootFolder, base.rootFolder),
     preRollSeconds,
     postRollSeconds: clampInt(r.postRollSeconds, 2, 15, base.postRollSeconds),
