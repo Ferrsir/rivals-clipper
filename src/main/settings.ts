@@ -28,6 +28,10 @@ export interface Settings {
   manualClipHotkey: string;
   /** Also count assists as keeping a streak clip alive. */
   assistsExtendClip: boolean;
+  /** Which AI you signed in with. 'none' = skipped the sign-in screen. */
+  aiProvider: 'claude' | 'codex' | 'none';
+  /** Set once the first-launch sign-in screen has been completed or skipped. */
+  onboarded: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -45,6 +49,8 @@ export const DEFAULT_SETTINGS: Settings = {
   useMicInReelsByDefault: false,
   manualClipHotkey: 'F9',
   assistsExtendClip: false,
+  aiProvider: 'none',
+  onboarded: false,
 };
 
 export const paths = (root: string) => ({
@@ -52,6 +58,9 @@ export const paths = (root: string) => ({
   clips: path.join(root, 'clips'),
   logs: path.join(root, 'logs'),
   exports: path.join(root, 'exports'),
+  reels: path.join(root, 'exports', 'reels'),
+  studio: path.join(root, 'studio'),
+  music: path.join(root, 'music'),
   settings: path.join(root, 'settings.json'),
   heroRoles: path.join(root, 'hero-roles.json'),
 });
@@ -74,7 +83,7 @@ export function saveSettings(s: Settings): void {
 
 export function ensureFolders(root: string): void {
   const p = paths(root);
-  for (const dir of [p.root, p.clips, p.logs, p.exports]) fs.mkdirSync(dir, { recursive: true });
+  for (const dir of [p.root, p.clips, p.logs, p.exports, p.reels, p.studio, p.music]) fs.mkdirSync(dir, { recursive: true });
 }
 
 /** Bitrate that keeps enough detail for a 9:16 crop and re-encode later. */

@@ -2,58 +2,106 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; media-src file:; style-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data: blob:; media-src file: blob:; style-src 'self'">
   <title>Rivals Clipper</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Rivals Clipper</h1>
-    <div id="status" class="status">Starting…</div>
-  </header>
-
-  <main>
-    <section class="panel settings">
-      <h2>Recording</h2>
-      <label>Library folder
-        <span class="row"><input id="rootFolder" readonly><button id="pickFolder">Change</button><button id="openFolder">Open</button></span>
-      </label>
-      <label>Resolution
-        <select id="resolution">
-          <option value="native">Match my monitor (recommended)</option>
-          <option value="1080p">1080p</option>
-          <option value="1440p">1440p</option>
-          <option value="2160p">4K</option>
-        </select>
-      </label>
-      <label>Frame rate
-        <select id="fps"><option value="60">60 fps</option><option value="120">120 fps</option></select>
-      </label>
-      <label>Game audio
-        <select id="gameAudio">
-          <option value="game-only">Marvel Rivals only (no Discord or music)</option>
-          <option value="desktop">Everything I hear</option>
-        </select>
-      </label>
-      <label class="check"><input type="checkbox" id="recordMic"> Record my mic on its own track</label>
-      <label>Mic
-        <select id="micDeviceId"><option value="default">Windows default</option></select>
-      </label>
-      <label class="check"><input type="checkbox" id="useMicInReelsByDefault"> Use mic in reels by default</label>
-      <label>Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="40"></label>
-      <label>Seconds to wait for the next kill <input type="number" id="postRollSeconds" min="2" max="15"></label>
-      <label>Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>
-      <button id="save" class="primary">Save settings</button>
-    </section>
-
-    <section class="panel clips">
-      <h2>Clips <span id="count" class="muted"></span></h2>
-      <div class="sort">Sort:
-        <select id="sort"><option value="new">Newest</option><option value="score">Best score</option></select>
+  <!-- First launch: sign in with Claude or ChatGPT -->
+  <section id="signin" class="signin hidden">
+    <div class="signin-card">
+      <h1>Rivals Clipper</h1>
+      <p class="muted">Sign in with the AI you already pay for. It powers clip tagging and the editing studio. You log in on Anthropic's or OpenAI's own page, and this app never sees your password.</p>
+      <div class="providers">
+        <div class="provider" data-provider="claude">
+          <h2>Claude</h2>
+          <p class="pstatus muted">Checking…</p>
+          <button class="primary act">Sign in with Claude</button>
+        </div>
+        <div class="provider" data-provider="codex">
+          <h2>ChatGPT</h2>
+          <p class="pstatus muted">Checking…</p>
+          <button class="primary act">Sign in with ChatGPT</button>
+        </div>
       </div>
-      <ul id="clipList"></ul>
-    </section>
-  </main>
+      <button id="skipSignin" class="link">Skip for now (clipping still works)</button>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <div id="app" class="app hidden">
+    <nav class="sidebar">
+      <div class="brand">Rivals Clipper</div>
+      <button class="tab active" data-tab="clipper">Clipper</button>
+      <button class="tab" data-tab="studio">Studio</button>
+      <button class="tab" data-tab="settings">Settings</button>
+      <div class="account" id="accountBadge"></div>
+    </nav>
+
+    <div class="content">
+      <header><div id="status" class="status">Starting…</div></header>
+
+      <section id="tab-clipper" class="view">
+        <div class="panel clips">
+          <h2>Clips <span id="count" class="muted"></span></h2>
+          <div class="sort">Sort:
+            <select id="sort"><option value="new">Newest</option><option value="score">Best score</option></select>
+          </div>
+          <ul id="clipList"></ul>
+        </div>
+      </section>
+
+      <!-- The Studio module mounts here. See docs/studio-interface.md -->
+      <section id="tab-studio" class="view hidden">
+        <div id="studio-root" class="panel">
+          <h2>Editing Studio</h2>
+          <p class="muted">The studio is being built. Your clips are already being saved and ranked, so they'll be ready when it lands.</p>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="view hidden">
+        <div class="settings-grid">
+          <div class="panel">
+            <h2>Recording</h2>
+            <label>Library folder
+              <span class="row"><input id="rootFolder" readonly><button id="pickFolder">Change</button><button id="openFolder">Open</button></span>
+            </label>
+            <label>Resolution
+              <select id="resolution">
+                <option value="native">Match my monitor (recommended)</option>
+                <option value="1080p">1080p</option>
+                <option value="1440p">1440p</option>
+                <option value="2160p">4K</option>
+              </select>
+            </label>
+            <label>Frame rate
+              <select id="fps"><option value="60">60 fps</option><option value="120">120 fps (smooth slow-mo)</option></select>
+            </label>
+            <label>Game audio
+              <select id="gameAudio">
+                <option value="game-only">Marvel Rivals only (no Discord or music)</option>
+                <option value="desktop">Everything I hear</option>
+              </select>
+            </label>
+            <label class="check"><input type="checkbox" id="recordMic"> Record my mic on its own track</label>
+            <label>Mic
+              <select id="micDeviceId"><option value="default">Windows default</option></select>
+            </label>
+            <label class="check"><input type="checkbox" id="useMicInReelsByDefault"> Use mic in reels by default</label>
+            <label>Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="40"></label>
+            <label>Seconds to wait for the next kill <input type="number" id="postRollSeconds" min="2" max="15"></label>
+            <label>Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>
+            <button id="save" class="primary">Save settings</button>
+          </div>
+          <div class="panel">
+            <h2>Account</h2>
+            <p class="muted">AI features use whichever account is active.</p>
+            <div id="accountList"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <script src="renderer.js"></script>
 </body>

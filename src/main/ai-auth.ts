@@ -1,0 +1,189 @@
+// Sign-in to Claude or ChatGPT through their official command-line apps (Claude Code and Codex).
+// You log in on Anthropic's or OpenAI's own page in your browser; this app never sees your password
+// or tokens. AI work then runs on your existing subscription.
+
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export type AiProvider = 'claude' | 'codex';
+
+export interface ProviderStatus {
+  provider: AiProvider;
+  installed: boolean;
+  loggedIn: boolean;
+  detail?: string;
+}
+
+interface ProviderDef {
+  label: string;
+  bin: string;
+  status: string[];
+  login: string[];
+  parseLoggedIn: (stdout: string) => boolean;
+  /** PowerShell command shown to and run for the user if the CLI is missing. */
+  install: string;
+}
+
+export const PROVIDERS: Record<AiProvider, ProviderDef> = {
+  claude: {
+    label: 'Claude',
+    bin: 'claude',
+    status: ['auth', 'status', '--json'],
+    login: ['auth', 'login', '--claudeai'],
+    parseLoggedIn: (out) => {
+      try {
+        return JSON.parse(out).loggedIn === true;
+      } catch {
+        return false;
+      }
+    },
+    install: 'irm https://claude.ai/install.ps1 | iex',
+  },
+  codex: {
+    label: 'ChatGPT',
+    bin: 'codex',
+    status: ['login', 'status'],
+    login: ['login'],
+    parseLoggedIn: (out) => /logged in/i.test(out) && !/not logged in/i.test(out),
+    install: 'npm install -g @openai/codex',
+  },
+};
+
+function run(bin: string, args: string[], opts: { timeoutMs?: number; input?: string; cwd?: string } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    // shell:true so Windows finds claude.cmd / codex.cmd shims on PATH.
+    const child = spawn(bin, args, { shell: process.platform === 'win32', windowsHide: true, cwd: opts.cwd });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), opts.timeoutMs ?? 15_000);
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+    if (opts.input !== undefined) child.stdin.end(opts.input);
+    else child.stdin.end();
+  });
+}
+
+export async function checkStatus(provider: AiProvider): Promise<ProviderStatus> {
+  const def = PROVIDERS[provider];
+  const version = await run(def.bin, ['--version']);
+  if (version.code !== 0) return { provider, installed: false, loggedIn: false };
+  const st = await run(def.bin, def.status);
+  return { provider, installed: true, loggedIn: def.parseLoggedIn(st.stdout + st.stderr), detail: version.stdout.trim() };
+}
+
+/** Opens a visible PowerShell window that installs the CLI, so you can see exactly what runs. */
+export function openInstaller(provider: AiProvider): void {
+  const cmd = PROVIDERS[provider].install;
+  spawn('cmd.exe', ['/c', 'start', 'powershell', '-NoExit', '-Command', cmd], { detached: true, windowsHide: false }).unref();
+}
+
+/** Starts the provider's browser login, then polls until signed in (or gives up after 5 minutes). */
+export async function login(provider: AiProvider, onUpdate: (s: ProviderStatus) => void): Promise<ProviderStatus> {
+  const def = PROVIDERS[provider];
+  const child = spawn(def.bin, def.login, { shell: process.platform === 'win32', windowsHide: true, detached: false });
+  child.on('error', () => undefined);
+  const deadline = Date.now() + 5 * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const s = await checkStatus(provider);
+    onUpdate(s);
+    if (s.loggedIn) {
+      child.kill();
+      return s;
+    }
+  }
+  child.kill();
+  return checkStatus(provider);
+}
+
+export async function logout(provider: AiProvider): Promise<void> {
+  await run(PROVIDERS[provider].bin, provider === 'claude' ? ['auth', 'logout'] : ['logout']);
+}
+
+/**
+ * Ask the signed-in AI a one-shot question, optionally with image files (e.g. clip frames).
+ * Used by AI tagging and the Studio. Runs with no tools and no write access.
+ */
+export async function ask(provider: AiProvider, prompt: string, images: string[] = [], timeoutMs = 120_000): Promise<string> {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rivals-ai-'));
+  try {
+    if (provider === 'claude') {
+      const withImages = images.length ? `${prompt}\n\nImages to look at:\n${images.map((p) => `- ${p}`).join('\n')}` : prompt;
+      const args = ['-p', '--output-format', 'json', '--allowedTools', 'Read'];
+      for (const img of images) args.push('--add-dir', path.dirname(img));
+      const r = await run('claude', args, { timeoutMs, input: withImages, cwd: work });
+      if (r.code !== 0) throw new Error(r.stderr || 'Claude request failed');
+      const parsed = JSON.parse(r.stdout);
+      return String(parsed.result ?? '');
+    }
+    const outFile = path.join(work, 'answer.txt');
+    const args = ['exec', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only', '-o', outFile];
+    for (const img of images) args.push('-i', img);
+    args.push('-');
+    const r = await run('codex', args, { timeoutMs, input: prompt, cwd: work });
+    if (r.code !== 0) throw new Error(r.stderr || 'ChatGPT request failed');
+    return fs.readFileSync(outFile, 'utf8');
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+// ---------- main-process AI client (used by AI tagging and the Studio) ----------
+
+export interface AiAskOptions {
+  prompt: string;
+  system?: string;
+  imagePaths?: string[];
+  /** Ask for a single JSON value back and parse it. `text` stays the raw reply. */
+  expectJson?: boolean;
+  timeoutMs?: number;
+}
+
+export interface AiAskResult {
+  text: string;
+  provider: AiProvider;
+  json?: unknown;
+}
+
+export interface AiClient {
+  status(): Promise<{ signedIn: boolean; provider: AiProvider | 'none' }>;
+  ask(opts: AiAskOptions): Promise<AiAskResult>;
+}
+
+function extractJson(text: string): unknown {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = (fenced ? fenced[1] : text).trim();
+  const start = body.search(/[[{]/);
+  if (start < 0) throw new Error('AI reply had no JSON');
+  const end = Math.max(body.lastIndexOf('}'), body.lastIndexOf(']'));
+  return JSON.parse(body.slice(start, end + 1));
+}
+
+export function createAiClient(getProvider: () => AiProvider | 'none'): AiClient {
+  return {
+    async status() {
+      const provider = getProvider();
+      if (provider === 'none') return { signedIn: false, provider };
+      const s = await checkStatus(provider);
+      return { signedIn: s.loggedIn, provider };
+    },
+    async ask(opts) {
+      const provider = getProvider();
+      if (provider === 'none') throw new Error('Sign in to Claude or ChatGPT first (Settings, Account).');
+      const parts = [opts.system ? `Instructions:\n${opts.system}` : '', opts.prompt];
+      if (opts.expectJson) parts.push('Reply with only one JSON value and no other text.');
+      const text = await ask(provider, parts.filter(Boolean).join('\n\n'), opts.imagePaths ?? [], opts.timeoutMs);
+      return { text, provider, json: opts.expectJson ? extractJson(text) : undefined };
+    },
+  };
+}

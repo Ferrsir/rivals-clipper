@@ -2,11 +2,28 @@
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.45 system-ui, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
 header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+.hidden { display: none !important; }
+.app { display: grid; grid-template-columns: 200px 1fr; height: 100vh; }
+.sidebar { display: flex; flex-direction: column; gap: 4px; padding: 16px 12px; border-right: 1px solid var(--line); background: #0b0d11; }
+.brand { font-weight: 700; font-size: 16px; padding: 4px 8px 16px; }
+.tab { text-align: left; border: none; background: none; padding: 8px 10px; border-radius: 6px; color: var(--muted); }
+.tab.active, .tab:hover { background: var(--panel); color: var(--text); }
+.account { margin-top: auto; color: var(--muted); font-size: 12px; padding: 8px; }
+.content { display: flex; flex-direction: column; min-width: 0; }
+.view { padding: 16px 20px; overflow: auto; flex: 1; }
+.settings-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(260px, 1fr); gap: 16px; align-items: start; }
+.signin { display: grid; place-items: center; height: 100vh; padding: 24px; }
+.signin-card { max-width: 640px; text-align: center; }
+.signin-card h1 { font-size: 28px; margin-bottom: 8px; }
+.providers { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0 16px; }
+.provider { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; text-align: left; }
+.provider h2 { margin-bottom: 4px; }
+.provider .row button { flex: 1; }
+button.link { background: none; border: none; color: var(--muted); text-decoration: underline; }
 h1 { font-size: 18px; margin: 0; }
 h2 { font-size: 15px; margin: 0 0 12px; }
 .status { color: var(--muted); }
 .status.live { color: #7ddc8a; }
-main { display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 16px 20px; height: calc(100vh - 54px); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow: auto; }
 label { display: block; margin-bottom: 12px; color: var(--muted); }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
@@ -25,3 +42,4 @@ video { width: 280px; aspect-ratio: 16 / 9; background: #000; border-radius: 6px
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .stars button { border: none; background: none; padding: 0 1px; color: #444a57; font-size: 16px; }
 .stars button.on { color: var(--accent); }
+label.check > input { display: inline-block; width: auto; margin: 0; }
