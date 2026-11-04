@@ -57,6 +57,16 @@ export interface AudioCaptureOptions {
 
 type SpawnAudio = (bin: string, args: string[]) => ChildProcessWithoutNullStreams;
 
+/** Desktop sound is opt-in; a missing game PID must never widen the capture source. */
+export function audioCaptureArgs(opts: AudioCaptureOptions): string[] {
+  const args = ['capture'];
+  if (opts.desktopAudio) args.push('--game-loopback');
+  else if (Number.isInteger(opts.gamePid) && opts.gamePid! > 0) args.push('--game-pid', String(opts.gamePid));
+  else args.push('--no-game');
+  if (opts.mic) args.push('--mic', opts.mic);
+  return args;
+}
+
 /**
  * Events: 'status' (message: string), 'track' (track: 'game' | 'mic', status: TrackStatus), 'exit' (code).
  */
@@ -95,10 +105,8 @@ export class AudioCapture extends EventEmitter {
     const opts = this.opts;
     this.game.setMaxMs(opts.bufferMs);
     this.mic.setMaxMs(opts.bufferMs);
-    const args = ['capture'];
-    if (opts.desktopAudio || !opts.gamePid) args.push('--game-loopback');
-    if (opts.gamePid) args.push('--game-pid', String(opts.gamePid));
-    if (opts.mic) args.push('--mic', opts.mic);
+    const args = audioCaptureArgs(opts);
+    if (!opts.desktopAudio && args.includes('--no-game')) this.emit('status', 'Game audio is off because no valid game process was found. Desktop sound is not being recorded.');
     const proc = this.spawnAudio(this.bin, args);
     const startedAt = Date.now();
     this.proc = proc;
