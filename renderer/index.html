@@ -40,6 +40,7 @@
 
     <div class="content">
       <header><div id="status" class="status">Starting…</div></header>
+      <div id="autoSigninNotice" class="notice hidden"></div>
 
       <section id="tab-clipper" class="view">
         <div class="panel clips">
@@ -88,6 +89,7 @@
               <select id="micDeviceId"><option value="default">Windows default</option></select>
             </label>
             <label class="check"><input type="checkbox" id="useMicInReelsByDefault"> Use mic in reels by default</label>
+            <label class="check"><input type="checkbox" id="clipPractice"> Also auto-clip in the Practice Range</label>
             <label>Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="40"></label>
             <label>Seconds to wait for the next kill <input type="number" id="postRollSeconds" min="2" max="15"></label>
             <label>Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>

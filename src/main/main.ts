@@ -10,7 +10,7 @@ import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller }
 import { clipFileName, listClips, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
-import { MatchState, parseMaybeJson } from './match-state';
+import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
 import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
 import { StreakTracker } from './streak';
@@ -158,7 +158,15 @@ function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoc
   pushClip(saved);
 }
 
+let practiceNoticeShown = false;
+
 function handleKill(now: number, total?: number) {
+  if (!settings.clipPractice && isPracticeMode(state.context)) {
+    log.write('skip', { reason: 'practice', context: state.context });
+    if (!practiceNoticeShown) status('Practice Range: auto-clips are off here (manual hotkey still works)');
+    practiceNoticeShown = true;
+    return;
+  }
   const action = streak.onKill(now);
   if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
   else if (action.type === 'extend') scheduleStop(action.stopAt, now);
@@ -198,6 +206,7 @@ function onGameEvent(feature: string, key: string, value: unknown) {
     case 'match_start':
       state.onMatchStart();
       matchClips = [];
+      practiceNoticeShown = false;
       status('Match started');
       break;
     case 'round_start':
