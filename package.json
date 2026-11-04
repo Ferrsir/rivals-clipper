@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "npm run build && ow-electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "dist": "npm run build && ow-electron-builder --publish=never"
   },
   "overwolf": {

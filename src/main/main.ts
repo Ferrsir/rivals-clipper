@@ -7,13 +7,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipEvent, ClipSidecar, HeroRole } from '../shared/types';
 import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller } from './ai-auth';
-import { clipFileName, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
+import { clipFileName, isClipFile, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
 import { Library, type ClipQuery } from './library';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
 import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
-import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
+import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, sanitizeSettings, saveSettings } from './settings';
 import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 
@@ -322,7 +322,7 @@ function setupIpc() {
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
     const rootChanged = patch.rootFolder && patch.rootFolder !== settings.rootFolder;
-    settings = { ...settings, ...patch };
+    settings = sanitizeSettings({ ...settings, ...patch }, settings);
     if (rootChanged) prepareRoot();
     saveSettings(settings);
     fs.mkdirSync(path.dirname(rootPointer), { recursive: true });
@@ -333,10 +333,27 @@ function setupIpc() {
     return settings;
   });
   ipcMain.handle('mics:list', () => recorder.listMics().catch(() => []));
-  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(videoFile, { useMic }));
-  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => updateSidecar(videoFile, { rating }));
-  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(videoFile));
-  ipcMain.handle('clip:export', async (_e, videoFile: string, withMic: boolean) => {
+  // Clip actions only ever touch .mp4 files inside the clips folder, whatever the window sends.
+  const clipOnly = (videoFile: unknown): string => {
+    if (!isClipFile(videoFile, paths(settings.rootFolder).clips)) throw new Error('That file is not a clip in your library.');
+    return videoFile;
+  };
+  ipcMain.handle('clip:setMic', (_e, videoFile: string, useMic: boolean) => updateSidecar(clipOnly(videoFile), { useMic: !!useMic }));
+  ipcMain.handle('clip:rate', (_e, videoFile: string, rating: number) => {
+    const r = Math.round(Number(rating));
+    if (!(r >= 1 && r <= 5)) throw new Error('Rating must be 1 to 5 stars.');
+    return updateSidecar(clipOnly(videoFile), { rating: r });
+  });
+  ipcMain.handle('clip:show', (_e, videoFile: string) => shell.showItemInFolder(clipOnly(videoFile)));
+  /** Moves the clip and its sidecar to the Recycle Bin, so a mistake can be undone there. */
+  ipcMain.handle('clip:delete', async (_e, videoFile: string) => {
+    const file = clipOnly(videoFile);
+    for (const f of [file, sidecarPath(file)]) if (fs.existsSync(f)) await shell.trashItem(f);
+    status('Clip moved to the Recycle Bin');
+    return true;
+  });
+  ipcMain.handle('clip:export', async (_e, rawFile: string, withMic: boolean) => {
+    const videoFile = clipOnly(rawFile);
     const ff = recorder.ffmpegPath;
     if (!ff) throw new Error('ffmpeg not available yet (recorder package still loading)');
     const c = JSON.parse(fs.readFileSync(sidecarPath(videoFile), 'utf8')) as ClipSidecar;
