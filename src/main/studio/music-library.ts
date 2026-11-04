@@ -109,6 +109,22 @@ export class MusicLibrary {
     return added;
   }
 
+  /** Register a file already saved in the music folder (a royalty-free download) with its credit line. */
+  async addDownloaded(file: string, meta: { title: string; artist?: string; credit?: string; sourceUrl?: string; tags?: string[] }): Promise<MusicTrack> {
+    this.load();
+    const t = this.newTrack(file);
+    t.title = meta.title.slice(0, 120);
+    t.artist = meta.artist?.slice(0, 120);
+    t.license = 'royalty-free';
+    t.credit = meta.credit?.slice(0, 300) || undefined;
+    t.sourceUrl = meta.sourceUrl?.slice(0, 400);
+    t.tags = (meta.tags ?? []).slice(0, 12);
+    this.tracks = this.tracks.filter((x) => x.id !== t.id);
+    this.tracks.push(t);
+    this.save();
+    return this.analyze(t.id);
+  }
+
   async analyze(id: string, force = false): Promise<MusicTrack> {
     this.load();
     const t = this.tracks.find((x) => x.id === id);
