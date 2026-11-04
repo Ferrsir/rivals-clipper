@@ -1,52 +1,53 @@
-# Signing Rivals Clipper
+# Getting Rivals Clipper onto other people's PCs, for free
 
-Other people's PCs need two separate signatures before Rivals Clipper works for them:
+Windows' Smart App Control blocks unsigned apps. Normal code-signing certificates cost money ($120 a year and up, or about $10 a month for Azure Artifact Signing), so this project uses free routes instead.
 
-| Signature | Why | Who provides it | Cost |
-| --- | --- | --- | --- |
-| **Windows code signing** on every `.exe` (app, bundled ffmpeg, installer) | Smart App Control and SmartScreen block unsigned apps | Azure Artifact Signing (Microsoft) | about $9.99/month |
-| **Overwolf package signing** | Overwolf's `gep` and `recorder` packages refuse to load in an app that isn't registered and signed with Overwolf | Overwolf Developer Console | free |
+| Need | Free route | Status in the build |
+| --- | --- | --- |
+| Test on **your own PC** now | Turn Smart App Control off (below) and install the unsigned `.exe` | Built on every push |
+| Install on **other people's PCs** | Publish through the **Microsoft Store**. Individual developer accounts are free, and Microsoft signs Store packages (MSIX) for you, so Smart App Control accepts them | Built when the Store secrets exist |
+| Overwolf's game events and recorder working for **anyone** | Register the app in the free **Overwolf Developer Console** so builds get Overwolf's package signing | Switches on when the Overwolf secrets exist |
 
-The build already handles both. When the GitHub secrets below exist, every build is signed automatically. Tag builds (`v*`) refuse to publish an unsigned installer. Each build's summary lists every shipped `.exe`/`.dll` and whether it's validly signed.
+Each build's summary has a **Signature report** listing every shipped `.exe`/`.dll` and whether it's signed.
 
-## 1. Azure Artifact Signing (Windows code signing)
+## 1. Test on your own PC now
 
-Individual developers are eligible in the USA and Canada. Identity checks take a few business days.
+1. Open **Windows Security**, then **App & browser control**, then **Smart App Control settings**, and choose **Off**.
+2. Run `RivalsClipper-Setup-x.y.z.exe` from the latest build. When SmartScreen says "Windows protected your PC", click **More info** and then **Run anyway**.
 
-1. Create an Azure account at [portal.azure.com](https://portal.azure.com) (needs a card).
-2. Search for **Artifact Signing** (formerly Trusted Signing) and create an **Artifact Signing account** on the Basic plan. Pick a region; note the account name and the region's endpoint (for example `https://eus.codesigning.azure.net` for East US).
-3. In the account, open **Identity validations**, then **New identity**, then **Public** and **Individual**. Complete the Microsoft identity check with your government ID. Wait for status **Completed**.
-4. Open **Certificate profiles**, then **Create**, then **Public Trust**, and select the completed identity. Note the profile name.
-5. Create a service principal for GitHub Actions: **Microsoft Entra ID**, then **App registrations**, then **New registration** (name it `rivals-clipper-ci`). On it, create a **client secret**. Note the tenant ID, client (application) ID and the secret value.
-6. Back on the Artifact Signing account, go to **Access control (IAM)** and add the role **Artifact Signing Certificate Profile Signer** (older name: Trusted Signing Certificate Profile Signer) for `rivals-clipper-ci`.
+On current Windows 11 updates you can turn Smart App Control back on from the same page. Older builds only allowed re-enabling it by resetting Windows.
 
-## 2. Overwolf Developer Console (package signing)
+## 2. Microsoft Store (free signing for everyone else)
 
-1. Sign up at [console.overwolf.com](https://console.overwolf.com) and submit Rivals Clipper as a new ow-electron app. Overwolf assigns it an App UID.
-2. Per Overwolf: the first QA submission is unsigned. Signing applies from the first release after you have Developer Console access.
-3. Get the keys: **Profile**, then **API Keys** (`OW_CLI_API_KEY`), and **Release management**, then **App Keys** (`OW_BUILD_KEY`). `OW_CLI_EMAIL` is your console email.
+1. Sign up as an **individual developer** at [Partner Center](https://partner.microsoft.com/dashboard/registration) (free).
+2. **Apps and games**, then **New product**, then **MSIX or PWA app**, then reserve the name "Rivals Clipper".
+3. Open **Product management**, then **Product identity**. Copy three values: **Package/Identity/Name**, **Package/Identity/Publisher** (starts with `CN=`), and **Package/Properties/PublisherDisplayName**.
+4. Add them as GitHub secrets (table below). The next build also produces `RivalsClipper-x.y.z.appx`.
+5. In Partner Center, create a submission and upload that `.appx`. Microsoft certifies it (usually a few days) and signs it. People then install it from the Store.
 
-## 3. Add the GitHub secrets
+## 3. Overwolf Developer Console (free)
+
+1. Sign up at [console.overwolf.com](https://console.overwolf.com) and submit Rivals Clipper as a new ow-electron app. Overwolf assigns an App UID.
+2. Per Overwolf, the first QA submission is unsigned. Package signing applies from your first release after you have console access.
+3. Get your keys: **Profile**, then **API Keys** (`OW_CLI_API_KEY`), and **Release management**, then **App Keys** (`OW_BUILD_KEY`). `OW_CLI_EMAIL` is your console email.
+
+Overwolf's docs also ask for your own signature on the `.exe` for direct downloads. Store distribution covers that, because Microsoft signs the package.
+
+## GitHub secrets
 
 In the repo: **Settings**, then **Secrets and variables**, then **Actions**, then **New repository secret**.
 
 | Secret | Value |
 | --- | --- |
-| `AZURE_TENANT_ID` | Tenant ID from step 1.5 |
-| `AZURE_CLIENT_ID` | Client ID from step 1.5 |
-| `AZURE_CLIENT_SECRET` | Client secret value from step 1.5 |
-| `AZURE_SIGNING_ENDPOINT` | Region endpoint, e.g. `https://eus.codesigning.azure.net` |
-| `AZURE_SIGNING_ACCOUNT` | Artifact Signing account name |
-| `AZURE_CERT_PROFILE` | Certificate profile name |
-| `AZURE_PUBLISHER_NAME` | Exactly the name on the certificate (your validated legal name) |
+| `STORE_IDENTITY_NAME` | Package/Identity/Name |
+| `STORE_PUBLISHER` | Package/Identity/Publisher (`CN=...`) |
+| `STORE_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName |
 | `OW_CLI_EMAIL` | Overwolf console email |
 | `OW_CLI_API_KEY` | Overwolf API key |
 | `OW_BUILD_KEY` | Overwolf app build key |
 
-Then re-run the "Build Windows installer" workflow, or push to `main`. The run summary's **Signature report** shows what got signed.
+Tag builds (`v*`) refuse to build without the Overwolf secrets.
 
-## Notes
+## Other free option: SignPath Foundation
 
-- A newly signed app can still show a SmartScreen "unrecognized app" notice for a while until the certificate builds reputation. Smart App Control accepts validly signed apps.
-- The `gep` and `recorder` packages are downloaded and signed by Overwolf at runtime, so they don't need our certificate.
-- Electron's own DLLs come from Electron's build and aren't re-signed by us. The signature report shows their status; if Smart App Control objects to one, add `"signExts": [".dll"]` under `build.win`.
+[SignPath Foundation](https://signpath.org) signs open-source projects for free. It probably won't accept this project yet. It requires an established, released project with a verifiable reputation, a review team, and no proprietary components, and Overwolf's packages are proprietary. Worth revisiting later if the Store route doesn't work out.

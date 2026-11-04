@@ -35,19 +35,14 @@ jobs:
       - run: npm ci
       - run: npm run dist
         env:
-          # Signing turns on automatically when these repo secrets exist (docs/signing.md).
-          # Without them, branch builds are unsigned; tag builds refuse to ship unsigned.
+          # Free signing/distribution routes switch on when these repo secrets exist (docs/signing.md).
           RELEASE_BUILD: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '0' }}
           OW_CLI_EMAIL: ${{ secrets.OW_CLI_EMAIL }}
           OW_CLI_API_KEY: ${{ secrets.OW_CLI_API_KEY }}
           OW_BUILD_KEY: ${{ secrets.OW_BUILD_KEY }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-          AZURE_PUBLISHER_NAME: ${{ secrets.AZURE_PUBLISHER_NAME }}
+          STORE_IDENTITY_NAME: ${{ secrets.STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ secrets.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ secrets.STORE_PUBLISHER_DISPLAY_NAME }}
       - name: Report signature status of every shipped binary
         shell: pwsh
         run: |
@@ -64,9 +59,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: RivalsClipper-Setup
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.appx
       - name: Publish release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/*.appx
