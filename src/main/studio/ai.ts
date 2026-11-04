@@ -53,11 +53,13 @@ export async function writeCaptions(ai: AiClient | undefined, p: ReelProject, re
     .join('\n\n');
   const j = await askJson(ai, prompt);
   const arr: unknown[] = Array.isArray(j) ? j : Array.isArray(j?.lines) ? j.lines : [];
-  return arr
+  const out = arr
     .filter((x): x is string => typeof x === 'string')
     .map((x) => x.replace(/\s+/g, ' ').trim().slice(0, 80))
     .filter(Boolean)
     .slice(0, 30);
+  if (!out.length) throw new Error('The AI did not write any caption lines. Try again.');
+  return out;
 }
 
 export async function postCaption(ai: AiClient | undefined, p: ReelProject, format: ExportFormat): Promise<string> {

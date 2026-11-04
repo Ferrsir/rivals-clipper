@@ -22,7 +22,7 @@ const story: StyleRecipe = {
   echo: { on: true, strength: 0.65, onSlowmo: true },
   transition: 'flash',
   fadeOut: 1,
-  captions: { position: 'bottom', size: 0.062, uppercase: false, beatsPerLine: 4 },
+  captions: { position: 'bottom', size: 0.075, uppercase: false, beatsPerLine: 4 },
   impactSound: 0,
   mix: { game: 0.6, mic: 1, music: 0.95, duck: true },
 };

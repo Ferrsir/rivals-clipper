@@ -453,6 +453,18 @@ export function plan(input: PlanInput): Timeline {
     const d = an.drops[0];
     if (d !== undefined && d - M >= 0 && d - M <= duration) drop = round4(d - M);
     musicShort = an.durationSec - M < duration - 0.05;
+    if (sync && d !== undefined && tClips.length) {
+      const hero = tClips.find((c) => c.index === heroIdx);
+      const target = layout.introEnd > 0 ? q(layout.introEnd) : hero ? hero.kills[0] ?? hero.out[0] : undefined;
+      if (target !== undefined && (drop === undefined || Math.abs(target - drop) > 1.5 / fps)) {
+        const what = layout.introEnd > 0 ? 'The cut out of the hook card' : `Clip ${heroIdx + 1}, your big moment,`;
+        warnings.push(
+          target > d
+            ? `${what} can't land on the drop: the drop is only ${d.toFixed(1)} s into the song, and that moment comes ${target.toFixed(1)} s into the reel. Move it earlier, or use a song with a later drop.`
+            : `${what} couldn't be lined up with the song's drop.`,
+        );
+      }
+    }
     if (musicShort) warnings.push(`The song ends ${(duration - (an.durationSec - M)).toFixed(1)} s before the reel does. Pick a longer song, start it earlier, or drop a clip.`);
   }
   const offBeat = tClips.reduce((s, c) => s + c.onBeat.filter((b) => !b).length, 0);
