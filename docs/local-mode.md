@@ -64,6 +64,10 @@ picked that) and your mic, each into its own buffer. Saving a clip cuts the audi
 the video. Per-app game audio needs Windows 11 (or Windows 10 build 20348 or later); on older systems it falls back to
 everything you hear.
 
+If the helper exits unexpectedly, video keeps recording and audio retries after 2, 4, 8, 16 and 30 seconds.
+Already-buffered sound is retained; the interruption itself is silent. After five unsuccessful retries the app
+reports the failure. Closing the game or stopping recording cancels pending retries.
+
 Play in **borderless** or **fullscreen** on the monitor set in *Monitor to record* (0 = main monitor).
 
 ## Cost while you play
