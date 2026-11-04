@@ -42,6 +42,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Rivals Clipper"
+    },
+    "overwolf": {
+      "requireSigning": false
     }
   },
   "devDependencies": {

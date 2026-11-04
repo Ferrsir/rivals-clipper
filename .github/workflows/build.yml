@@ -34,6 +34,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist
+        env:
+          # Optional: Overwolf signing. Without these the installer is built unsigned,
+          # which is fine for personal use. Add them as repo secrets to sign builds.
+          OW_CLI_EMAIL: ${{ secrets.OW_CLI_EMAIL }}
+          OW_CLI_API_KEY: ${{ secrets.OW_CLI_API_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: RivalsClipper-Setup
