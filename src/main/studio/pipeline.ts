@@ -145,7 +145,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
   fs.mkdirSync(workDir, { recursive: true });
   fs.mkdirSync(o.reelsDir, { recursive: true });
   let font: string | undefined;
-  if (o.fontFile && (project.captions.some((c) => c.text.trim()) || project.intro?.text)) {
+  if (o.fontFile && (project.captions.some((c) => c.text.trim()) || project.intro?.text || project.outro?.text)) {
     font = path.join(workDir, 'caption-font' + path.extname(o.fontFile));
     if (!fs.existsSync(font)) fs.copyFileSync(o.fontFile, font);
   }
@@ -186,7 +186,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
         if (!fs.existsSync(image)) await runSimple(o.ffmpeg, ['-ss', String(first!.src[0]), '-i', c.videoFile, '-frames:v', '1', '-q:v', '2', image], workDir);
         blurred = true;
       }
-      jobs.push({ job: buildIntroJob({ image, blurred, seconds: tl.introEnd, size, fps, preview: req.preview, workDir }), label: 'intro card' });
+      jobs.push({ job: buildIntroJob({ image, blurred, seconds: tl.introEnd, size, fps, preview: req.preview, workDir, layout: project.intro.layout }), label: 'intro card' });
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
@@ -224,6 +224,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
       workDir,
       fontFile: font,
       intro: project.intro,
+      outro: project.outro,
     });
     await runFfmpeg(o.ffmpeg, job, workDir, (p) => report('assemble', clipShare + (1 - clipShare) * p, req.preview ? 'Rendering preview' : `Rendering ${fmts.map((x) => x.label).join(' + ')}`), o.signal);
     files.push(out);

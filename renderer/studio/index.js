@@ -572,6 +572,7 @@ function ideaCard(idea) {
     h('div', { class: 'st-row' }, h('div', { class: 'st-track-title' }, idea.title), h('div', { class: 'st-spacer' }), h('span', { class: 'st-tagpill' }, idea.source === 'ai' ? 'AI' : 'Quick')),
     idea.concept ? h('p', { class: 'st-idea-concept' }, idea.concept) : null,
     idea.hook ? h('div', { class: 'st-idea-hook' }, idea.hook) : null,
+    idea.endText ? h('div', { class: 'st-clip-sub st-wrap' }, `Ends with: “${idea.endText}”`) : null,
     idea.captions.length ? h('div', { class: 'st-clip-sub st-wrap' }, idea.captions.slice(0, 4).map((c) => `“${c}”`).join(' → ') + (idea.captions.length > 4 ? ' …' : '')) : null,
     h('div', { class: 'st-clip-sub st-wrap' }, `${idea.clipIds.length} clip${idea.clipIds.length === 1 ? '' : 's'}${heroes.length ? ' · ' + heroes.slice(0, 3).join(', ') : ''} · ${styleName}`),
     h(
@@ -1250,10 +1251,28 @@ function textPanel() {
   const intro = p.intro;
   return [
     h('h3', {}, 'Hook card'),
-    toggle({ label: 'Open with a hook card', checked: !!intro, onChange: (on) => change((pr) => (pr.intro = on ? { text: '', seconds: 4 } : null), [renderRight]), hint: 'An image with big text before the gameplay. The cut into gameplay lands on the drop.' }),
+    toggle({ label: 'Open with a hook card', checked: !!intro, onChange: (on) => change((pr) => (pr.intro = on ? { text: '', seconds: 4, layout: 'band' } : null), [renderRight]), hint: 'A picture with big text before the gameplay, like the reference edits. The cut into gameplay lands on the drop.' }),
     intro
       ? [
-          h('label', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Headline'), h('input', { value: intro.text, maxlength: 120, placeholder: 'e.g. Rate this Deadpool 1-10', oninput: (e) => change((pr) => (pr.intro.text = e.target.value)) })),
+          h(
+            'label',
+            { class: 'st-field' },
+            h('span', { class: 'st-label' }, 'Hook lines'),
+            h('textarea', {
+              rows: 3,
+              value: intro.text,
+              maxlength: 330,
+              placeholder: "One line, or a short back-and-forth, one per line:\nWho's stronger?\nHim?\nOr you?",
+              oninput: (e) => change((pr) => (pr.intro.text = e.target.value)),
+            }),
+            h('span', { class: 'st-note' }, 'Up to 4 lines. Each one shows in turn, so give each about 1.5 s.'),
+          ),
+          select({
+            label: 'Layout',
+            value: intro.layout ?? 'band',
+            options: [['band', 'Picture across the middle, text under it'], ['full', 'Picture fills the screen']],
+            onChange: (v) => change((pr) => (pr.intro.layout = v)),
+          }),
           h(
             'div',
             { class: 'st-row' },
@@ -1265,7 +1284,7 @@ function textPanel() {
               pr.intro.image = img.file;
               pr.intro.imageCredit = img.credit || undefined;
             }, [renderRight]) }) }, 'Find a picture'),
-            intro.image ? h('span', { class: 'st-note' }, intro.image.split(/[\\/]/).pop()) : h('span', { class: 'st-note' }, 'No image: uses a blurred frame of your first clip'),
+            intro.image ? h('span', { class: 'st-note' }, intro.image.split(/[\\/]/).pop()) : h('span', { class: 'st-note' }, 'No picture: uses a frame of your first clip'),
             intro.image ? h('button', { class: 'st-x', onclick: () => change((pr) => (delete pr.intro.image, delete pr.intro.imageCredit), [renderRight]) }, '×') : null,
           ),
           slider({ label: 'Length', min: 1, max: 12, step: 0.5, value: intro.seconds, format: (v) => `about ${v} s`, onInput: (v) => change((pr) => (pr.intro.seconds = v)), hint: 'Snaps to the beat, ideally ending on the drop' }),
@@ -1286,6 +1305,14 @@ function textPanel() {
     slider({ label: 'Size', min: 0.035, max: 0.11, step: 0.005, value: st.captions.size, format: (v) => `${Math.round(v * 1000)}`, onInput: (v) => change((pr) => (pr.style.captions.size = v)) }),
     slider({ label: 'Beats per line', min: 1, max: 16, step: 1, value: st.captions.beatsPerLine, format: (v) => `${v}`, onInput: (v) => change((pr) => (pr.style.captions.beatsPerLine = v)) }),
     toggle({ label: 'ALL CAPS', checked: st.captions.uppercase, onChange: (v) => change((pr) => (pr.style.captions.uppercase = v)) }),
+    h('h3', {}, 'End text'),
+    toggle({ label: 'Text over the last seconds', checked: !!p.outro, onChange: (on) => change((pr) => (pr.outro = on ? { text: 'Follow for part 2', seconds: 3 } : null), [renderRight]), hint: 'e.g. "Follow for part 2" or "Rate it 1-10". Shown big at the top while the reel fades out.' }),
+    p.outro
+      ? [
+          h('label', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Text'), h('input', { value: p.outro.text, maxlength: 100, oninput: (e) => change((pr) => (pr.outro.text = e.target.value)) })),
+          slider({ label: 'Length', min: 1, max: 8, step: 0.5, value: p.outro.seconds, format: (v) => `${v} s`, onInput: (v) => change((pr) => (pr.outro.seconds = v)) }),
+        ]
+      : null,
     h('h3', {}, 'Post caption'),
     post,
     creditsFor(p)

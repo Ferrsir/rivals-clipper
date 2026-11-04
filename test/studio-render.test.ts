@@ -96,7 +96,10 @@ function project(styleId: string, opts: { music?: boolean; intro?: boolean; form
   p.clips = [clip(1, [4.1], 20), clip(2, [3.5, 4.4], 40), clip(3, [3.2, 4.0, 4.9], 200)];
   if (opts.music !== false) p.music = { trackId: 'm', file: musicFile, title: 'Synth', start: 'auto' };
   p.captions = [{ text: 'They said Hela was a support' }, { text: 'They were wrong' }, { text: 'Watch this' }];
-  if (opts.intro) p.intro = { text: 'Rate this 1-10', seconds: 2 };
+  if (opts.intro) {
+    p.intro = { text: "Who's stronger?\nHim?\nOr you?", seconds: 3, layout: 'band' };
+    p.outro = { text: 'Comment who wins', seconds: 2 };
+  }
   return p;
 }
 

@@ -12,7 +12,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
+import type { OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
   width: number;
@@ -163,17 +163,41 @@ function intermediateCodec(preview: boolean, fps: number): string[] {
   return ['-c:v', 'libx264', '-preset', preview ? 'ultrafast' : 'veryfast', '-crf', preview ? '23' : '12', '-g', String(fps), '-pix_fmt', 'yuv420p', '-c:a', 'pcm_s16le', '-ar', '48000'];
 }
 
-/** Stage A for the intro card: a still image (or a blurred first frame) held for the intro's length. */
-export function buildIntroJob(o: { image: string; blurred: boolean; seconds: number; size: Size; fps: number; preview: boolean; workDir: string }): FfJob {
+/** Where the picture sits on a band-layout hook card, as fractions of the frame height. */
+export function introBand(size: Size): { center: number; height: number } {
+  return size.height >= size.width ? { center: 0.4, height: 0.4 } : { center: 0.4, height: 0.6 };
+}
+
+/**
+ * Stage A for the intro card: a still image held for the intro's length.
+ * band: the picture in a strip across the middle, over a blurred, darker copy of itself (the reference look).
+ * full: the picture fills the frame (blurred when it's just the first frame of the first clip).
+ */
+export function buildIntroJob(o: { image: string; blurred: boolean; seconds: number; size: Size; fps: number; preview: boolean; workDir: string; layout?: 'band' | 'full' }): FfJob {
   const frames = Math.max(1, Math.round(o.seconds * o.fps));
   const dur = frames / o.fps;
-  const key = hashOf({ v: 1, img: o.image, mt: safeMtime(o.image), frames, size: o.size, fps: o.fps, blurred: o.blurred, preview: o.preview });
+  const layout = o.layout ?? 'band';
+  const key = hashOf({ v: 2, img: o.image, mt: safeMtime(o.image), frames, size: o.size, fps: o.fps, blurred: o.blurred, preview: o.preview, layout });
   const output = path.join(o.workDir, `intro-${key}.mkv`);
-  const look = o.blurred ? ',boxblur=24:2,eq=brightness=-0.12:saturation=0.8' : '';
-  const filter = [
-    `[0:v]scale=${o.size.width}:${o.size.height}:force_original_aspect_ratio=increase,crop=${o.size.width}:${o.size.height},setsar=1${look},format=yuv420p,fps=${o.fps},trim=end_frame=${frames},setpts=PTS-STARTPTS[v]`,
-    `anullsrc=r=48000:cl=stereo,atrim=end=${r6(dur)},aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=2[ga][ma]`,
-  ].join(';\n');
+  const { width: W, height: H } = o.size;
+  const cover = `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
+  const tail = `format=yuv420p,fps=${o.fps},trim=end_frame=${frames},setpts=PTS-STARTPTS[v]`;
+  let video: string;
+  if (layout === 'band') {
+    const band = introBand(o.size);
+    const bw = Math.round((W * 0.96) / 2) * 2;
+    const bh = Math.round((H * band.height) / 2) * 2;
+    video = [
+      `[0:v]split=2[bgsrc][fgsrc]`,
+      `[bgsrc]${cover},boxblur=${Math.max(8, Math.round(W / 40))}:2,eq=brightness=-0.16:saturation=0.85[bg]`,
+      `[fgsrc]scale=${bw}:${bh}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[fg]`,
+      `[bg][fg]overlay=x=(W-w)/2:y=${Math.round(H * band.center)}-h/2,${tail}`,
+    ].join(';\n');
+  } else {
+    const look = o.blurred ? ',boxblur=24:2,eq=brightness=-0.12:saturation=0.8' : '';
+    video = `[0:v]${cover}${look},${tail}`;
+  }
+  const filter = [video, `anullsrc=r=48000:cl=stereo,atrim=end=${r6(dur)},aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=2[ga][ma]`].join(';\n');
   const args = ['-loop', '1', '-framerate', String(o.fps), '-t', r6(dur + 0.2), '-i', o.image, '-map', '[v]', '-map', '[ga]', '-map', '[ma]', ...intermediateCodec(o.preview, o.fps), output];
   return { args, filter, output, duration: dur };
 }
@@ -235,6 +259,7 @@ export interface AssembleOpts {
   workDir: string;
   fontFile?: string;
   intro?: IntroCard | null;
+  outro?: OutroText | null;
 }
 
 export function beatPulses(tl: Timeline, which: 'none' | 'downbeats' | 'all'): number[] {
@@ -338,8 +363,16 @@ export function wrapText(text: string, maxChars: number): string[] {
   return lines.slice(0, 3);
 }
 
-/** drawtext filters for captions and the intro headline. Text goes through files, so nothing needs escaping. */
-export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format' | 'size' | 'workDir' | 'fontFile' | 'intro'>): string[] {
+/** When each hook line shows: the intro split evenly, each line on until the next starts. */
+export function hookTimes(lines: number, introEnd: number): Array<[number, number]> {
+  if (lines <= 0 || introEnd <= 0) return [];
+  const step = introEnd / lines;
+  const r = (x: number) => Math.round(x * 1000) / 1000;
+  return Array.from({ length: lines }, (_, i) => [r(i * step), r(i === lines - 1 ? introEnd : (i + 1) * step)] as [number, number]);
+}
+
+/** drawtext filters for captions, the hook lines and the end text. Text goes through files, so nothing needs escaping. */
+export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format' | 'size' | 'workDir' | 'fontFile' | 'intro' | 'outro'>): string[] {
   if (!o.fontFile) return [];
   const { size, format, style } = o;
   const out: string[] = [];
@@ -347,28 +380,44 @@ export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format
   const safeW = size.width * (1 - format.safe.left - format.safe.right);
   const fontSize = Math.round(style.captions.size * size.width);
   const maxChars = Math.max(8, Math.floor((safeW * 0.94) / (fontSize * 0.56)));
-  const yFor = (pos: 'top' | 'middle' | 'bottom', lines: number) => {
-    const block = lines * fontSize * 1.18;
+  const yFor = (pos: 'top' | 'middle' | 'bottom' | number, lines: number, fs2: number) => {
+    const block = lines * fs2 * 1.18;
+    if (typeof pos === 'number') return Math.round(pos);
     if (pos === 'top') return Math.round(size.height * (format.safe.top + 0.06));
     if (pos === 'middle') return Math.round((size.height - block) / 2);
     return Math.round(size.height * (1 - format.safe.bottom - 0.05) - block);
   };
   const xCenter = Math.round(size.width * format.safe.left + safeW / 2);
   let n = 0;
-  const add = (text: string, start: number, end: number, pos: 'top' | 'middle' | 'bottom', scale = 1) => {
-    const t = style.captions.uppercase ? text.toUpperCase() : text;
+  const add = (text: string, start: number, end: number, pos: 'top' | 'middle' | 'bottom' | number, opts: { scale?: number; upper?: boolean; fade?: number } = {}) => {
+    const scale = opts.scale ?? 1;
+    const upper = opts.upper ?? style.captions.uppercase;
+    const t = upper ? text.toUpperCase() : text;
     const fs2 = Math.round(fontSize * scale);
-    const lines = wrapText(t, Math.floor(maxChars / scale));
+    // Capitals are wider than the average letter, so they wrap sooner.
+    const lines = wrapText(t, Math.max(6, Math.floor((maxChars / scale) * (upper ? 0.8 : 1))));
     const file = `cap${n++}.txt`;
     fs.writeFileSync(path.join(o.workDir, file), lines.join('\n'), 'utf8');
-    const y = yFor(pos, lines.length);
-    const fade = 0.08;
+    const y = yFor(pos, lines.length, fs2);
+    const fade = opts.fade ?? 0.08;
     out.push(
       `drawtext=fontfile=${font}:textfile=${file}:expansion=none:text_align=C:fontsize=${fs2}:line_spacing=${Math.round(fs2 * 0.15)}:fontcolor=white:borderw=${Math.max(2, Math.round(fs2 * 0.09))}:bordercolor=black@0.9:shadowx=0:shadowy=${Math.round(fs2 * 0.06)}:shadowcolor=black@0.5:x=${xCenter}-text_w/2:y=${y}:alpha='min(1,(t-${r3(start)})/${fade})':enable='between(t,${r3(start)},${r3(end)})'`,
     );
   };
-  if (o.intro?.text && o.timeline.introEnd > 0) add(o.intro.text, 0, o.timeline.introEnd, 'top', 1.25);
+  if (o.intro?.text && o.timeline.introEnd > 0) {
+    // Hook lines play one after another, fading in like the reference edits.
+    const lines = o.intro.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const band = (o.intro.layout ?? 'band') === 'band';
+    const times = hookTimes(lines.length, o.timeline.introEnd);
+    const b = introBand(size);
+    const under = size.height * (b.center + b.height / 2) + size.height * 0.03;
+    lines.forEach((line, i) => add(line, times[i][0], times[i][1], band ? under : 'middle', { scale: 1.2, upper: band ? true : undefined, fade: 0.25 }));
+  }
   for (const c of o.timeline.captions) add(c.text, c.start, c.end, style.captions.position);
+  if (o.outro?.text) {
+    const start = Math.max(o.timeline.introEnd, o.timeline.duration - o.outro.seconds);
+    add(o.outro.text, start, o.timeline.duration, 'top', { scale: 1.3, upper: true, fade: 0.3 });
+  }
   return out;
 }
 

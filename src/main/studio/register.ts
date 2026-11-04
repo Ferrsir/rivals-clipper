@@ -18,7 +18,7 @@ import { Vault } from './publish/vault';
 import { FORMATS, FORMAT_LIST, getFormat } from './formats';
 import { MusicLibrary } from './music-library';
 import { findFont, planFor, renderProject } from './pipeline';
-import { createProject, newId, ProjectStore, reelClipFromSidecar, sanitizeProject } from './projects';
+import { createProject, hookText, newId, ProjectStore, reelClipFromSidecar, sanitizeProject } from './projects';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
 import { STYLES, clone, getStyle } from './styles';
 
@@ -307,7 +307,10 @@ export function registerStudio(ctx: StudioContext): void {
     proj.clips = clips;
     proj.order = 'manual';
     proj.captions = (Array.isArray(idea.captions) ? idea.captions : []).filter((x) => typeof x === 'string' && x.trim()).slice(0, 14).map((text) => ({ text }));
-    proj.intro = typeof idea.hook === 'string' && idea.hook.trim() ? { text: idea.hook.trim().slice(0, 120), seconds: 4 } : null;
+    const hook = hookText(idea.hook);
+    // About 1.6 s per hook line, so each one can be read.
+    proj.intro = hook ? { text: hook, seconds: Math.min(8, Math.max(3, Math.round(hook.split('\n').length * 1.6 * 2) / 2)), layout: 'band' } : null;
+    proj.outro = typeof idea.endText === 'string' && idea.endText.trim() ? { text: idea.endText.trim().slice(0, 100), seconds: 3 } : null;
     if (typeof idea.postCaption === 'string') proj.caption = idea.postCaption.slice(0, 2200);
     const t = idea.music?.trackId ? music().get(idea.music.trackId) : undefined;
     if (t) proj.music = { trackId: t.id, file: t.file, title: t.title, start: 'auto' };
