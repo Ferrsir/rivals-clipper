@@ -36,6 +36,8 @@ export class StartCancelled extends Error {
 export interface LocalRecorderOptions {
   /** Resolves the ffmpeg binary (the bundled one). */
   ffmpeg: () => Promise<string>;
+  /** Main process owns recovery, including restarting detection for a changed resolution. */
+  onInterrupted?: () => void;
 }
 
 export class LocalRecorder implements ClipRecorder {
@@ -48,7 +50,6 @@ export class LocalRecorder implements ClipRecorder {
   private audio?: AudioCapture;
   private active?: ActiveClip;
   private stopping = false;
-  private restarts = 0;
   private lastStart?: { settings: Settings; game: GameProcess; clipsFolder: string };
   private stderrTail: string[] = [];
   private saving = new Set<Promise<void>>();
@@ -89,7 +90,7 @@ export class LocalRecorder implements ClipRecorder {
     const { localEncoder, captureMonitor } = localOptions(settings);
     const prefer: EncoderId | 'auto' = localEncoder;
     // After a crash, probe again: the screen resolution may have changed.
-    const probe = await probeCapture(ffmpeg, captureMonitor, prefer, this.restarts > 0);
+    const probe = await probeCapture(ffmpeg, captureMonitor, prefer, true);
     check();
     this.probe = probe;
     if (!probe.ok || !probe.encoder) throw new Error(probe.problem ?? 'Screen capture is not available');
@@ -151,7 +152,6 @@ export class LocalRecorder implements ClipRecorder {
       encoder: ENCODER_LABEL[probe.encoder.id],
       gpu: probe.captureGpu?.name,
     };
-    this.restarts = 0;
     return this.info;
   }
 
@@ -229,19 +229,14 @@ export class LocalRecorder implements ClipRecorder {
       if (this.ff !== proc) return;
       this.ff = undefined;
       if (this.stopping) return;
+      const wasRunning = !!this.info;
+      this.info = undefined;
       const why = this.stderrTail.slice(-3).join(' | ');
       this.log(`Screen recorder stopped unexpectedly (code ${code})${why ? `: ${why}` : ''}`);
-      // Save what we have of a clip in progress, then restart a few times (e.g. after a resolution change).
+      // Save what we have. Startup failures are retried by startBuffer's error path;
+      // established capture failures notify it here, so detection restarts with the new size too.
       if (this.active) this.stopClip();
-      if (this.restarts++ < 5 && this.lastStart) {
-        const { settings, game, clipsFolder } = this.lastStart;
-        setTimeout(() => {
-          if (this.stopping) return;
-          this.start(settings, game, clipsFolder).catch((err) => {
-            if (!(err instanceof StartCancelled)) this.log(`Recorder restart failed: ${(err as Error).message}`);
-          });
-        }, 2000 * this.restarts);
-      }
+      if (wasRunning) this.opts.onInterrupted?.();
     });
   }
 

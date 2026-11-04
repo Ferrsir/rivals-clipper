@@ -17,6 +17,7 @@ import { GameProcess, Recorder } from './recorder';
 import type { BufferInfo, ClipRecorder, SavedVideo } from './capture/types';
 import { LocalRecorder, StartCancelled } from './capture/local-recorder';
 import { GameWatcher } from './capture/game-watcher';
+import { CaptureRecovery } from './capture/recovery';
 import { chooseEngine, lateBy, type Engine } from './engine';
 import { ScreenDetector } from './vision/screen-detector';
 import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, localOptions, paths, sanitizeSettings, saveSettings } from './settings';
@@ -55,7 +56,15 @@ const state = new MatchState(loadHeroRoles());
 const overwolf = (app as { overwolf?: Electron.App['overwolf'] }).overwolf;
 const owRecorder = new Recorder((msg, extra) => status(msg, extra));
 // Local mode (no Overwolf): the built-in recorder, a process-list watcher and the screen detector.
-const localRecorder = new LocalRecorder((msg, extra) => status(msg, extra), { ffmpeg: localFfmpeg });
+const captureRecovery = new CaptureRecovery();
+const localRecorder = new LocalRecorder((msg, extra) => status(msg, extra), {
+  ffmpeg: localFfmpeg,
+  onInterrupted: () => {
+    if (engine !== 'local' || !gameRunning) return;
+    void detector.stop();
+    retryBuffer('Screen recording interrupted');
+  },
+});
 const gameWatcher = new GameWatcher();
 const detector = new ScreenDetector({
   ffmpeg: localFfmpeg,
@@ -367,7 +376,18 @@ function setupGep() {
 
 let bufferStarts = 0;
 
+function retryBuffer(reason: string) {
+  if (engine !== 'local' || !gameRunning) return;
+  const rec = recorder;
+  const run = bufferStarts;
+  const delay = captureRecovery.schedule(() => {
+    if (engine === 'local' && gameRunning && recorder === rec && bufferStarts === run) void startBuffer();
+  });
+  status(`${reason}. Retrying recording in ${delay / 1000} seconds.`);
+}
+
 async function startBuffer() {
+  captureRecovery.clearPending();
   gameRunning = true;
   const rec = recorder;
   const run = ++bufferStarts;
@@ -376,12 +396,14 @@ async function startBuffer() {
   try {
     const info = await rec.start(settings, gameProcess ?? {}, paths(settings.rootFolder).clips);
     if (overtaken()) return;
+    captureRecovery.reset();
     lastBufferInfo = info;
     const how = rec.kind === 'local' && info.encoder ? ` (${info.encoder}${info.gpu ? ` on ${info.gpu}` : ''})` : '';
     status(`Replay buffer running${how}. Go get some kills.`);
   } catch (err) {
     if (err instanceof StartCancelled || overtaken()) return;
     status(`Replay buffer failed to start: ${(err as Error).message}`);
+    if (rec.kind === 'local') retryBuffer(`Screen recording unavailable: ${(err as Error).message}`);
     return;
   }
   // Local mode: kills come from the screen. Started after the recorder so it knows the capture works.
@@ -424,6 +446,7 @@ function applyEngine(reconsider = false): void {
   engine = next;
   log?.write('engine', { engine: next, setting: settings.engine, packagesProblem });
   if (prev) {
+    captureRecovery.reset();
     // Switching while running: stop the old engine. Its clip in progress still saves.
     const old = recorder;
     gameRunning = false;
@@ -457,6 +480,7 @@ function setupLocalMode() {
   });
   gameWatcher.on('exit', () => {
     if (engine !== 'local') return;
+    captureRecovery.reset();
     gameRunning = false;
     inMatch = false;
     gameProcess = undefined;
@@ -630,6 +654,7 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  captureRecovery.reset();
   globalShortcut.unregisterAll();
   gameWatcher.stop();
   void detector.shutdown().catch(() => undefined);
