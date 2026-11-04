@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('clipper', {
   queryClips: (q: unknown) => ipcRenderer.invoke('clips:query', q),
   clipFacets: () => ipcRenderer.invoke('clips:facets'),
   deleteClip: (videoFile: string) => ipcRenderer.invoke('clip:delete', videoFile),
+  aiTag: (videoFile: string) => ipcRenderer.invoke('clip:aiTag', videoFile),
+  aiTagUntagged: () => ipcRenderer.invoke('clips:aiTagUntagged'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: unknown) => ipcRenderer.invoke('settings:set', patch),
   listMics: () => ipcRenderer.invoke('mics:list'),

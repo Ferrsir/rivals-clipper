@@ -30,6 +30,8 @@ export interface Settings {
   assistsExtendClip: boolean;
   /** Auto-clip kills in the Practice Range too. Off by default; the manual hotkey always works. */
   clipPractice: boolean;
+  /** After a match, show a few frames of each new clip to your signed-in AI for style tags and a summary. */
+  aiTagging: boolean;
   /** Which AI you signed in with. 'none' = skipped the sign-in screen. */
   aiProvider: 'claude' | 'codex' | 'none';
   /** Set once the first-launch sign-in screen has been completed or skipped. */
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   manualClipHotkey: 'F9',
   assistsExtendClip: false,
   clipPractice: false,
+  aiTagging: true,
   aiProvider: 'none',
   onboarded: false,
 };
@@ -101,6 +104,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     manualClipHotkey: typeof r.manualClipHotkey === 'string' ? r.manualClipHotkey.trim().slice(0, 40) : base.manualClipHotkey,
     assistsExtendClip: bool(r.assistsExtendClip, base.assistsExtendClip),
     clipPractice: bool(r.clipPractice, base.clipPractice),
+    aiTagging: bool(r.aiTagging, base.aiTagging),
     aiProvider: oneOf(r.aiProvider, ['claude', 'codex', 'none'] as const, base.aiProvider),
     onboarded: bool(r.onboarded, base.onboarded),
   };

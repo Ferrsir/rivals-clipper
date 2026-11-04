@@ -49,3 +49,6 @@ label.check > input { display: inline-block; width: auto; margin: 0; }
 .chip.on { color: #111; background: var(--accent); border-color: var(--accent); }
 .notice { margin: 12px 20px 0; padding: 10px 14px; border: 1px solid var(--accent); border-radius: 8px; background: rgba(255, 204, 51, 0.08); }
 .notice.error { border-color: #ff6b6b; background: rgba(255, 107, 107, 0.1); color: var(--text); }
+.summary { font-style: italic; margin: 4px 0 2px; }
+.small { font-size: 12px; }
+.ai-all { margin-left: auto; }

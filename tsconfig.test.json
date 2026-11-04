@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["test/**/*.ts", "src/shared/**/*.ts", "src/main/streak.ts", "src/main/scoring.ts", "src/main/match-state.ts", "src/main/ai-auth.ts", "src/main/library.ts", "src/main/settings.ts", "src/main/clip-store.ts", "src/main/event-log.ts"]
+  "include": ["test/**/*.ts", "src/shared/**/*.ts", "src/main/streak.ts", "src/main/scoring.ts", "src/main/match-state.ts", "src/main/ai-auth.ts", "src/main/library.ts", "src/main/settings.ts", "src/main/clip-store.ts", "src/main/event-log.ts", "src/main/ai-tagger.ts"]
 }
