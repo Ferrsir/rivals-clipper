@@ -14,6 +14,7 @@ import { MatchState, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
 import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
 import { StreakTracker } from './streak';
+import { registerStudio } from './studio/register';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -384,6 +385,7 @@ app.whenReady().then(() => {
   prepareRoot();
   if (!fs.existsSync(paths(settings.rootFolder).settings)) saveSettings({ ...DEFAULT_SETTINGS, ...settings });
   setupIpc();
+  registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
   createWindow();
   registerHotkey();
   status(lastStatus);

@@ -50,6 +50,19 @@ The first launch downloads Overwolf's `gep` and `recorder` packages, which can t
 
 To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main`, and publishes a Release when you push a tag like `v0.2.0`. Publishing it to other people requires registering the app with Overwolf; personal use does not.
 
+## The Studio (reel maker)
+
+Open the **Studio** tab to turn clips into a TikTok, Reel, Short or YouTube edit.
+
+1. **Clips**: add clips from your library, or press *Fill with best* (or *AI pick*) to fill the reel to the format's ideal length.
+2. **Music**: press *Add music* or drop MP3/WAV/M4A/FLAC files into `F:\RivalsClips\music`. Each song is analysed for tempo, beats and the drop. Suggestions change with the format and the edit style, with links to safe sources (YouTube Audio Library, NCS, StreamBeats, Pixabay, TikTok's sound library).
+3. **Style**: pick a preset (Story edit, Velocity, Beat cuts, Cinematic, Raw) or type a change in plain English and the AI adjusts the recipe. Every kill and cut lands on a beat, and your best kill lands on the drop.
+4. **Clip**: trim, nudge kill markers, drag the vertical crop box, punch in, and turn **your mic on or off per clip** (it lives on its own audio track).
+5. **Text**: hook card at the start, story captions that change on the beat, and an AI-written post caption.
+6. **Preview** renders a quick low-res version. **Export** saves full-quality files to `F:\RivalsClips\exports\reels`, for several formats at once if you like, plus an optional copy without music so you can add the same song inside TikTok or Instagram (the app tells you where the song should start).
+
+Exports use the ffmpeg build bundled with the app (from the `ffmpeg-static` package, GPL licensed), and can use your graphics card (NVENC, AMF or Quick Sync) when available.
+
 ## Settings worth knowing
 
 See [docs/resolution-guide.md](docs/resolution-guide.md) for why recording at 1440p or above matters for vertical TikTok/Reels crops, and when to use 120 fps.
@@ -72,6 +85,8 @@ Code map:
 | `src/main/recorder.ts` | Overwolf recorder setup: game capture, audio tracks, replay buffer |
 | `src/main/clip-store.ts` | Clip sidecar JSON read/write |
 | `src/main/ffmpeg.ts` | Exports with or without the mic track |
+| `src/main/studio/` | The Studio: beat detection (`beats.ts`), edit planner (`planner.ts`), ffmpeg graph builder (`render.ts`, `pipeline.ts`), music library and suggestions, AI helpers, IPC (`register.ts`) |
+| `renderer/studio/` | The Studio screen (plain ES modules) |
 | `renderer/` | The app window |
 
 ## Roadmap
@@ -80,8 +95,8 @@ Code map:
 2. ~~Phase 1: clipper~~
 3. Phase 2: library with SQLite index, filters, bulk cleanup
 4. Phase 3: AI style tags (Claude or ChatGPT through your own sign-in)
-5. Phase 4: Reel Maker: pick clips and music, beat-synced cuts, 9:16 and 16:9 export
-6. Phase 5: edit-style recipes (speed ramps, zoom punches, shake, flashes, text)
+5. ~~Phase 4: Reel Maker: pick clips and music, beat-synced cuts, 9:16 and 16:9 export~~ (first version, needs testing on Windows)
+6. ~~Phase 5: edit-style recipes (speed ramps, zoom punches, shake, flashes, text)~~ (first version)
 7. Phase 6: polish
 
 ## License
