@@ -56,4 +56,20 @@ export interface ClipSidecar {
   scoreBreakdown: Record<string, number>;
   /** Your 1–5 star rating, if you've given one. */
   rating?: number;
+  /** What your signed-in AI saw in a few frames of the clip. Optional; added after the clip is saved. */
+  ai?: ClipAiInfo;
+}
+
+export interface ClipAiInfo {
+  /** Play-style tags such as "flank", "dive", "ult-combo", lowercase with dashes. */
+  tags: string[];
+  /** One short line describing the play. */
+  summary: string;
+  /** 1 (nothing special) to 10 (incredible). */
+  hype: number;
+  provider: 'claude' | 'codex';
+  /** Epoch ms when tagged. */
+  at: number;
+  /** Set when tagging failed; tags/summary are then empty. */
+  error?: string;
 }
