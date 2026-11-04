@@ -54,7 +54,12 @@ same card, so frames never pass through the CPU:
 - Monitor plugged into the **RTX 5080**: NVIDIA NVENC.
 - Monitor plugged into the **motherboard** (AMD graphics): AMD AMF on the iGPU. The app tells you to move the cable
   to the GeForce, which is better for the game too. If AMF fails, frames are copied to NVENC.
-- Last resort: CPU encoding (x264), capped at 1080p.
+- Last resort: CPU encoding (x264), capped to fit within 1920x1080 at 60 fps, preserving the monitor's aspect ratio.
+
+The recording resolution setting is a maximum height: 1080p, 1440p or 4K. A smaller monitor is never
+upscaled. Native resolution keeps GPU frames on the graphics card. Choosing a smaller recording size
+uses a CPU resize before hardware encoding because the bundled FFmpeg has no D3D11 scaling filter.
+The status log reports the actual output size and frame rate.
 
 The encoded video stays in memory (60 s at 1440p60 and the default 35 Mbps is about 260 MB of RAM). Nothing is written to disk until
 a clip is saved. Keyframes are 1 s apart, so a clip starts within a second of the requested pre-roll.

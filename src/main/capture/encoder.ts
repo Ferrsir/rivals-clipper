@@ -7,6 +7,7 @@
 // the CPU. If that fails, frames are copied to system memory and sent to whichever encoder works.
 
 import { execFile } from 'node:child_process';
+import { defaultBitrate, resolveResolution, type Settings } from '../settings';
 
 export type EncoderId = 'nvenc' | 'amf' | 'qsv' | 'x264';
 
@@ -108,6 +109,25 @@ export interface RecordOptions {
   height?: number;
 }
 
+/** Apply the UI's resolution choice, avoiding upscaling and bounding the CPU fallback's cost. */
+export function planRecording(settings: Settings, native: { width: number; height: number }, encoder: EncoderChoice) {
+  const requested = resolveResolution(settings.resolution, native);
+  let factor = Math.min(1, requested.height / native.height);
+  if (encoder.id === 'x264') factor = Math.min(factor, 1920 / native.width, 1080 / native.height);
+  const even = (value: number) => Math.max(2, Math.floor(value / 2) * 2);
+  const height = even(native.height * factor);
+  const width = Math.max(2, Math.round(native.width * height / native.height / 2) * 2);
+  const scaled = width !== native.width || height !== native.height;
+  const fps = encoder.id === 'x264' ? Math.min(60, settings.fps) : settings.fps;
+  return {
+    width, height, fps,
+    bitrateKbps: settings.bitrateKbps || defaultBitrate(height, fps),
+    // Bundled FFmpeg has no D3D11 scaling filter. Resizing needs a CPU copy, then GPU encoding.
+    encoder: scaled ? { ...encoder, gpuFrames: false } : encoder,
+    scaleHeight: scaled ? height : undefined,
+  };
+}
+
 export function ddagrabSource(outputIdx: number, fps: number): string {
   return `ddagrab=output_idx=${outputIdx}:framerate=${fps}:draw_mouse=0`;
 }
@@ -133,7 +153,7 @@ export function encoderArgs(enc: EncoderChoice, fps: number, kbps: number): stri
 export function videoFilter(o: RecordOptions): string | undefined {
   if (o.encoder.gpuFrames) return undefined;
   const parts = ['hwdownload', 'format=bgra'];
-  const h = o.scaleHeight && o.height && o.scaleHeight < o.height ? o.scaleHeight : undefined;
+  const h = o.scaleHeight && o.height && o.scaleHeight <= o.height ? o.scaleHeight : undefined;
   if (h) parts.push(`scale=-2:${h}:flags=bilinear`);
   switch (o.encoder.id) {
     case 'nvenc':
