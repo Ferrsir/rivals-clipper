@@ -97,6 +97,7 @@ function prepareRoot() {
     settings = { ...settings, rootFolder: fallback };
     ensureFolders(fallback);
   }
+  log?.flushSync();
   log = new EventLog(paths(settings.rootFolder).logs);
 }
 
@@ -448,6 +449,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  log?.flushSync();
   void recorder.stop().catch(() => undefined);
 });
 app.on('window-all-closed', () => app.quit());
