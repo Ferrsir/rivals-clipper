@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('clipper', {
   status: () => ipcRenderer.invoke('status'),
   listClips: () => ipcRenderer.invoke('clips:list'),
+  queryClips: (q: unknown) => ipcRenderer.invoke('clips:query', q),
+  clipFacets: () => ipcRenderer.invoke('clips:facets'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: unknown) => ipcRenderer.invoke('settings:set', patch),
   listMics: () => ipcRenderer.invoke('mics:list'),
