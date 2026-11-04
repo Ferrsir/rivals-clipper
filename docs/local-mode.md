@@ -84,6 +84,12 @@ A recorder process that stays alive but emits no encoded video for 15 seconds is
 The check uses a monotonic clock and runs every two seconds. Any footage already buffered is saved
 through the ordinary interrupted-clip path; footage absent during the stall cannot be recovered.
 
+Closing the app waits for an active clip to finish conversion and metadata writing before exiting.
+If conversion fails, the app reports a recovery folder under `clips/.recording/` containing the raw
+video and any audio already written. Keep that folder until the footage is recovered. Successful
+clips clean up their temporary files. Clip names include a unique suffix to avoid replacing another
+clip triggered at the same time.
+
 ## Cost while you play
 
 Measured, not guessed:
