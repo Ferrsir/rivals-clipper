@@ -77,8 +77,10 @@ export class ScreenDetector {
   }
 
   async start(settings: Settings): Promise<void> {
+    // Reserve ownership before the first await. An immediate stop/new start must win.
+    const gen = this.gen + 1;
     await this.stop();
-    const gen = ++this.gen;
+    if (gen !== this.gen) return;
     const stale = () => gen !== this.gen;
     this.stopping = false;
     this.lastSettings = settings;
@@ -86,6 +88,7 @@ export class ScreenDetector {
     const opts = localOptions(settings);
     this.fps = opts.detectionFps;
     const ffmpeg = await this.o.ffmpeg();
+    if (stale()) return;
     const monitor = opts.captureMonitor;
     const size = await probeScreenSize(ffmpeg, monitor);
     if (stale()) return;
@@ -113,11 +116,14 @@ export class ScreenDetector {
     const pipeline = new DetectionPipeline(
       {
         gameEvent: (key, value, at) => {
+          if (stale() || this.stopping) return;
           if (key === 'match_start') this.inMatch = true;
           if (key === 'match_end') this.inMatch = false;
           this.o.sink.gameEvent(key, value, at);
         },
-        infoUpdate: (feature, key, value) => this.o.sink.infoUpdate(feature, key, value),
+        infoUpdate: (feature, key, value) => {
+          if (!stale() && !this.stopping) this.o.sink.infoUpdate(feature, key, value);
+        },
       },
       ocrOn ? this.ocr : undefined,
       {
@@ -129,10 +135,12 @@ export class ScreenDetector {
       },
       {
         onHudVerified: () => {
+          if (stale() || this.stopping) return;
           this.memory.hudVerified = true;
           this.saveMemory();
         },
         onNameLearned: (name) => {
+          if (stale() || this.stopping) return;
           this.memory.learnedName = name;
           this.saveMemory();
           this.o.log(`Learned your in-game name from the kill feed: ${name}`);

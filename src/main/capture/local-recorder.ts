@@ -124,7 +124,7 @@ export class LocalRecorder implements ClipRecorder {
       audio.on('track', (name: string, st: { mode: string; device: string }) =>
         this.log(`${name === 'mic' ? 'Mic' : 'Game audio'} recording from ${st.mode === 'process' ? 'Marvel Rivals only' : st.device || st.mode}`),
       );
-      audio.on('exit', (code: number) => this.log(`Audio capture stopped (code ${code}). Clips will be silent until the recorder restarts.`));
+      audio.on('exit', (code: number) => this.log(`Audio capture stopped (code ${code}). Video recording continues while audio recovers.`));
       audio.start({
         gamePid: settings.gameAudio === 'game-only' ? game.pid : undefined,
         desktopAudio: settings.gameAudio === 'desktop',
@@ -301,7 +301,7 @@ export class LocalRecorder implements ClipRecorder {
         for (const label of ['game', 'mic'] as const) {
           const ring = label === 'game' ? audio.game : audio.mic;
           // A mic track is only written when the mic actually opened.
-          if (label === 'mic' && !audio.tracks.mic) continue;
+          if (label === 'mic' && !audio.tracks.mic && ring.endEpoch === 0) continue;
           if (label === 'game' && !audio.tracks.game && ring.endEpoch === 0) continue;
           const pcm = ring.extract(startEpoch, endEpoch);
           const file = `${base}.${label}.wav`;

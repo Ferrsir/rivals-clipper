@@ -55,6 +55,8 @@ export interface AudioCaptureOptions {
   bufferMs: number;
 }
 
+type SpawnAudio = (bin: string, args: string[]) => ChildProcessWithoutNullStreams;
+
 /**
  * Events: 'status' (message: string), 'track' (track: 'game' | 'mic', status: TrackStatus), 'exit' (code).
  */
@@ -65,8 +67,12 @@ export class AudioCapture extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
   private parser = new AudioChunkParser();
   private stopping = false;
+  private restartTimer?: NodeJS.Timeout;
+  private retries = 0;
+  private opts?: AudioCaptureOptions;
 
-  constructor(private bin: string, bufferMs: number) {
+  constructor(private bin: string, bufferMs: number, private spawnAudio: SpawnAudio = (bin, args) =>
+    spawn(bin, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })) {
     super();
     this.game = new PcmRing(AUDIO_FORMAT, bufferMs);
     this.mic = new PcmRing(AUDIO_FORMAT, bufferMs);
@@ -77,16 +83,28 @@ export class AudioCapture extends EventEmitter {
   }
 
   start(opts: AudioCaptureOptions): void {
-    if (this.proc) return;
+    if (this.proc || this.restartTimer) return;
+    this.opts = { ...opts };
+    this.retries = 0;
+    this.stopping = false;
+    this.launch();
+  }
+
+  private launch(): void {
+    if (this.stopping || !this.opts) return;
+    const opts = this.opts;
     this.game.setMaxMs(opts.bufferMs);
     this.mic.setMaxMs(opts.bufferMs);
     const args = ['capture'];
     if (opts.desktopAudio || !opts.gamePid) args.push('--game-loopback');
     if (opts.gamePid) args.push('--game-pid', String(opts.gamePid));
     if (opts.mic) args.push('--mic', opts.mic);
-    this.stopping = false;
-    const proc = spawn(this.bin, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = this.spawnAudio(this.bin, args);
+    const startedAt = Date.now();
     this.proc = proc;
+    // An incomplete message from the previous process cannot prefix the new wire stream.
+    this.parser = new AudioChunkParser();
+    proc.stdin.on('error', () => undefined); // shutdown can race a helper that has already exited
     proc.stdout.on('data', (d: Buffer) =>
       this.parser.push(d, (c) => {
         const ring = c.track === 1 ? this.mic : this.game;
@@ -103,22 +121,39 @@ export class AudioCapture extends EventEmitter {
       }
     });
     proc.on('error', (err) => this.emit('status', `Audio capture failed to start: ${err.message}`));
-    proc.on('exit', (code) => {
+    // close waits for stdout to drain, preserving the last audio chunks before recovery.
+    proc.on('close', (code) => {
+      if (this.proc !== proc) return;
       this.proc = undefined;
-      if (!this.stopping) this.emit('exit', code);
+      delete this.tracks.game;
+      delete this.tracks.mic;
+      if (this.stopping) return;
+      this.emit('exit', code);
+      if (Date.now() - startedAt >= 30_000) this.retries = 0;
+      if (this.retries >= 5) {
+        this.emit('status', 'Audio capture could not recover after five attempts. Restart recording in Settings.');
+        return;
+      }
+      const delay = Math.min(30_000, 2000 * 2 ** this.retries++);
+      this.emit('status', `Audio capture interrupted. Retrying in ${delay / 1000} seconds (${this.retries}/5).`);
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = undefined;
+        this.launch();
+      }, delay);
     });
   }
 
   async stop(): Promise<void> {
-    const proc = this.proc;
-    if (!proc) return;
     this.stopping = true;
-    await new Promise<void>((resolve) => {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = undefined;
+    const proc = this.proc;
+    if (proc) await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
         proc.kill();
         resolve();
       }, 2000);
-      proc.once('exit', () => {
+      proc.once('close', () => {
         clearTimeout(t);
         resolve();
       });

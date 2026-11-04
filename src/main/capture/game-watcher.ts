@@ -30,8 +30,10 @@ export class GameWatcher extends EventEmitter {
   private timer?: NodeJS.Timeout;
   private current?: GameSeen;
   private busy = false;
+  private generation = 0;
 
-  constructor(private intervalMs = 3000, private exe = GAME_EXE) {
+  constructor(private intervalMs = 3000, private exe = GAME_EXE,
+    private query?: (done: (err: Error | null, stdout: string) => void) => void) {
     super();
   }
 
@@ -40,7 +42,8 @@ export class GameWatcher extends EventEmitter {
   }
 
   start(): void {
-    if (this.timer || process.platform !== 'win32') return;
+    if (this.timer || (process.platform !== 'win32' && !this.query)) return;
+    this.generation++;
     const tick = () => void this.check();
     tick();
     this.timer = setInterval(tick, this.intervalMs);
@@ -48,6 +51,7 @@ export class GameWatcher extends EventEmitter {
 
   /** Stops watching. Starting again reports a game that is already running as launched. */
   stop(): void {
+    this.generation++;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.current = undefined;
@@ -56,10 +60,13 @@ export class GameWatcher extends EventEmitter {
   private check(): Promise<void> {
     if (this.busy) return Promise.resolve();
     this.busy = true;
+    const generation = this.generation;
     return new Promise((resolve) => {
-      execFile('tasklist', ['/FO', 'CSV', '/NH', '/FI', `IMAGENAME eq ${this.exe}`], { windowsHide: true, timeout: 10_000 }, (err, stdout) => {
+      const query = this.query ?? ((done: (err: Error | null, stdout: string) => void) =>
+        execFile('tasklist', ['/FO', 'CSV', '/NH', '/FI', `IMAGENAME eq ${this.exe}`], { windowsHide: true, timeout: 10_000 }, done));
+      query((err, stdout) => {
         this.busy = false;
-        if (err) return resolve();
+        if (err || generation !== this.generation) return resolve();
         this.update(parseTasklist(String(stdout), this.exe));
         resolve();
       });
