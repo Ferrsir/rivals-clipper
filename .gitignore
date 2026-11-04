@@ -4,3 +4,4 @@ dist-test/
 release/
 *.log
 .env
+native/bin/
