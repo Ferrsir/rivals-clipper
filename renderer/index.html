@@ -45,10 +45,27 @@
 
       <section id="tab-clipper" class="view">
         <div class="panel clips">
-          <h2>Clips <span id="count" class="muted"></span></h2>
-          <div class="sort">Sort:
-            <select id="sort"><option value="new">Newest</option><option value="score">Best score</option></select>
+          <h2>Library <span id="count" class="muted"></span></h2>
+          <div class="filters">
+            <input id="q" type="search" placeholder="Search hero, map, tag…">
+            <select id="fHero"><option value="">All heroes</option></select>
+            <select id="fMap"><option value="">All maps</option></select>
+            <select id="fType"><option value="">All modes</option></select>
+            <select id="fKills">
+              <option value="0">Any kills</option><option value="2">2+ kills</option><option value="3">3+ kills</option>
+              <option value="4">4+ kills</option><option value="5">5+ kills</option><option value="6">Team wipe (6)</option>
+            </select>
+            <select id="fRating">
+              <option value="0">Any rating</option><option value="3">3★ and up</option><option value="4">4★ and up</option><option value="5">5★ only</option>
+            </select>
+            <select id="sort">
+              <option value="new">Newest</option><option value="score">Best score</option>
+              <option value="kills">Most kills</option><option value="rating">My rating</option>
+            </select>
+            <button id="clearFilters" class="link">Clear</button>
           </div>
+          <div id="tagChips" class="chips"></div>
+          <p id="emptyLibrary" class="muted hidden"></p>
           <ul id="clipList"></ul>
         </div>
       </section>

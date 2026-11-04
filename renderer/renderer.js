@@ -45,20 +45,92 @@ function clipRow(c) {
   return li;
 }
 
-function replace(updated) {
+// A clip was saved or changed (rating, mic): refresh counts and re-run the current filters.
+async function replace(updated) {
   if (!updated) return;
-  const i = clips.findIndex((c) => c.videoFile === updated.videoFile);
-  if (i >= 0) clips[i] = updated;
-  else clips.unshift(updated);
-  renderClips();
+  await refreshFacets();
+  await runQuery();
 }
 
-function renderClips() {
-  const sorted = [...clips].sort((a, b) => ($('sort').value === 'score' ? b.score - a.score : b.createdAt - a.createdAt));
-  const ul = $('clipList');
-  ul.replaceChildren(...sorted.map(clipRow));
-  $('count').textContent = `(${clips.length})`;
+// ---------- library filters ----------
+const activeTags = new Set();
+let libraryTotal = 0;
+
+function currentQuery() {
+  return {
+    text: $('q').value,
+    hero: $('fHero').value || undefined,
+    map: $('fMap').value || undefined,
+    gameType: $('fType').value || undefined,
+    minKills: Number($('fKills').value) || undefined,
+    minRating: Number($('fRating').value) || undefined,
+    tags: [...activeTags],
+    sort: $('sort').value,
+    limit: 200,
+  };
 }
+
+function fillSelect(el, facets, allLabel) {
+  const keep = el.value;
+  el.replaceChildren(new Option(allLabel, ''), ...facets.map((f) => new Option(`${f.value} (${f.count})`, f.value)));
+  el.value = facets.some((f) => f.value === keep) ? keep : '';
+}
+
+async function refreshFacets() {
+  const f = await clipper.clipFacets();
+  libraryTotal = f.total;
+  fillSelect($('fHero'), f.heroes, 'All heroes');
+  fillSelect($('fMap'), f.maps, 'All maps');
+  fillSelect($('fType'), f.gameTypes, 'All modes');
+  for (const t of [...activeTags]) if (!f.tags.some((x) => x.value === t)) activeTags.delete(t);
+  $('tagChips').replaceChildren(
+    ...f.tags.map((t) => {
+      const b = document.createElement('button');
+      b.className = `chip${activeTags.has(t.value) ? ' on' : ''}`;
+      b.textContent = `${t.value} ${t.count}`;
+      b.onclick = () => {
+        if (activeTags.has(t.value)) activeTags.delete(t.value);
+        else activeTags.add(t.value);
+        b.classList.toggle('on');
+        void runQuery();
+      };
+      return b;
+    }),
+  );
+}
+
+async function runQuery() {
+  const r = await clipper.queryClips(currentQuery());
+  clips = r.items;
+  renderClips(r.total);
+}
+
+let queryTimer;
+function queueQuery() {
+  clearTimeout(queryTimer);
+  queryTimer = setTimeout(runQuery, 150);
+}
+
+function renderClips(total = clips.length) {
+  $('clipList').replaceChildren(...clips.map(clipRow));
+  $('count').textContent = total === libraryTotal ? `(${libraryTotal})` : `(${total} of ${libraryTotal})`;
+  const empty = $('emptyLibrary');
+  empty.classList.toggle('hidden', clips.length > 0);
+  empty.textContent = libraryTotal
+    ? 'No clips match these filters.'
+    : 'No clips yet. Play a match and your kills will show up here, ranked.';
+}
+
+$('q').addEventListener('input', queueQuery);
+for (const id of ['fHero', 'fMap', 'fType', 'fKills', 'fRating']) $(id).addEventListener('change', runQuery);
+$('clearFilters').addEventListener('click', () => {
+  $('q').value = '';
+  for (const id of ['fHero', 'fMap', 'fType']) $(id).value = '';
+  $('fKills').value = '0';
+  $('fRating').value = '0';
+  activeTags.clear();
+  void refreshFacets().then(runQuery);
+});
 
 async function loadSettingsForm() {
   const s = await clipper.getSettings();
@@ -97,7 +169,7 @@ $('pickFolder').addEventListener('click', async () => {
   if (p) $('rootFolder').value = p;
 });
 $('openFolder').addEventListener('click', () => clipper.openFolder());
-$('sort').addEventListener('change', renderClips);
+$('sort').addEventListener('change', runQuery);
 
 clipper.onStatus(renderStatus);
 clipper.onClip(replace);
@@ -227,6 +299,6 @@ $('skipSignin').addEventListener('click', async () => {
 
   renderStatus(await clipper.status());
   await loadSettingsForm();
-  clips = await clipper.listClips();
-  renderClips();
+  await refreshFacets();
+  await runQuery();
 })();

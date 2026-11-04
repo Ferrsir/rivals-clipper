@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipEvent, ClipSidecar, HeroRole } from '../shared/types';
 import { AiProvider, checkStatus, createAiClient, login, logout, openInstaller } from './ai-auth';
-import { clipFileName, listClips, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
+import { clipFileName, sidecarPath, updateSidecar, writeSidecar } from './clip-store';
+import { Library, type ClipQuery } from './library';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
 import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
@@ -54,6 +55,8 @@ let packagesProblem: string | undefined;
 const readyPackages = new Set<string>();
 /** Shared AI client: the Studio and AI tagging call this. */
 export const ai = createAiClient(() => settings.aiProvider);
+/** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
+export const library = new Library(() => paths(settings.rootFolder).clips);
 /** Clips saved during the current match, so the match outcome can be added when it ends. */
 let matchClips: string[] = [];
 
@@ -313,7 +316,9 @@ function createWindow() {
 
 function setupIpc() {
   ipcMain.handle('status', () => ({ msg: lastStatus, gameRunning, buffer: recorder.info, clipping: !!pending, packagesProblem }));
-  ipcMain.handle('clips:list', () => listClips(paths(settings.rootFolder).clips));
+  ipcMain.handle('clips:list', () => library.query({ limit: 200 }).items);
+  ipcMain.handle('clips:query', (_e, q: ClipQuery) => library.query(q ?? {}));
+  ipcMain.handle('clips:facets', () => library.facets());
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
     const rootChanged = patch.rootFolder && patch.rootFolder !== settings.rootFolder;

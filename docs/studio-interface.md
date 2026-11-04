@@ -52,7 +52,8 @@ It runs on the user's own Claude Code or Codex sign-in, one-shot, with read-only
 - Read `ClipSidecar` v1 (`src/shared/types.ts`) through `listClips(clipsFolder)` in `src/main/clip-store.ts`.
 - Kill time inside a clip = `event.at - startTimeEpoch` (ms).
 - Audio: track 0 is game, track 1 is mic when `audioTracks` has two entries; honour `useMic`.
-- The Library will add a SQLite index and export a query function. The sidecar stays backward compatible (only new optional fields).
+- For filtered or ranked clips, use the Library: `import { library } from '../main'` and call `library.query({ hero, map, gameType, tags, minKills, minRating, text, sort: 'new' | 'score' | 'kills' | 'rating', limit, offset })`. It returns `{ items, total }`. `library.facets()` lists heroes, maps, modes and tags with counts. In the renderer, the same calls are `clipper.queryClips(q)` and `clipper.clipFacets()`. The pure `queryClips(clips, q)` lives in `src/main/library.ts`.
+- The Library indexes sidecars in memory and rescans only changed files, so it needs no database module. The sidecar stays backward compatible (only new optional fields).
 - The Studio never writes into `clips/`.
 
 ## Storage
