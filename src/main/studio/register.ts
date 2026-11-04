@@ -1,0 +1,268 @@
+// The Studio's main-process side: IPC handlers on "studio:*" channels (see docs/studio-interface.md).
+
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { AiClient } from '../ai-auth';
+import { listClips } from '../clip-store';
+import { Settings, paths } from '../settings';
+import type { ClipSidecar } from '../../shared/types';
+import type { FormatId, ReelClip, ReelProject, RenderRequest, StudioInit } from '../../shared/studio';
+import { musicIdeas, pickClips, postCaption, tweakStyle, writeCaptions } from './ai';
+import { findFfmpeg } from './ffmpeg-bin';
+import { FORMATS, FORMAT_LIST, getFormat } from './formats';
+import { MusicLibrary } from './music-library';
+import { findFont, planFor, renderProject } from './pipeline';
+import { createProject, newId, ProjectStore, reelClipFromSidecar, sanitizeProject } from './projects';
+import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
+import { STYLES, clone, getStyle } from './styles';
+
+export interface StudioContext {
+  getSettings: () => Settings;
+  ffmpegPath: () => string | undefined;
+  ai?: AiClient;
+}
+
+export function registerStudio(ctx: StudioContext): void {
+  const root = () => ctx.getSettings().rootFolder;
+  const p = () => paths(root());
+  const studioDir = () => path.join(root(), 'studio');
+  const musicDir = () => path.join(root(), 'music');
+  const reelsDir = () => path.join(root(), 'exports', 'reels');
+
+  const ffmpeg = async () => {
+    const info = await findFfmpeg(ctx.ffmpegPath());
+    if (!info.ok || !info.path) throw new Error(info.problem ?? 'ffmpeg not available');
+    return info.path;
+  };
+
+  // Library and store follow the root folder if it changes.
+  let lib: MusicLibrary | undefined;
+  let libDir = '';
+  const music = () => {
+    if (!lib || libDir !== musicDir()) {
+      libDir = musicDir();
+      lib = new MusicLibrary(libDir, ffmpeg);
+    }
+    return lib;
+  };
+  const store = () => new ProjectStore(path.join(studioDir(), 'projects'));
+  const analysisFor = (proj: ReelProject) => (proj.music ? music().get(proj.music.trackId)?.analysis ?? null : null);
+  const within = (file: string) => {
+    const rel = path.relative(path.resolve(root()), path.resolve(file));
+    return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  };
+
+  const handle = (channel: string, fn: (e: IpcMainInvokeEvent, ...args: any[]) => unknown) => {
+    ipcMain.removeHandler(channel);
+    ipcMain.handle(channel, async (e, ...args) => {
+      try {
+        return await fn(e, ...args);
+      } catch (err) {
+        // Electron strips custom error fields; keep the message readable.
+        throw new Error((err as Error).message || String(err));
+      }
+    });
+  };
+
+  handle('studio:init', async (): Promise<StudioInit> => {
+    const ff = await findFfmpeg(ctx.ffmpegPath());
+    let ai = { signedIn: false, provider: 'none' };
+    try {
+      if (ctx.ai) ai = await ctx.ai.status();
+    } catch {
+      /* not signed in */
+    }
+    return {
+      formats: FORMAT_LIST,
+      styles: clone(STYLES),
+      paths: { root: root(), studio: studioDir(), music: musicDir(), reels: reelsDir() },
+      ffmpeg: { ok: ff.ok, path: ff.path, version: ff.version, gpuEncoders: ff.gpuEncoders, problem: ff.problem },
+      ai,
+    };
+  });
+
+  // ---------- clips ----------
+  handle('studio:clips', () => listClips(p().clips, 1000).map((c) => ({ ...c, reel: reelClipFromSidecar(c) })));
+
+  handle('studio:autoFill', (_e, proj: unknown, seconds: number) => {
+    const project = sanitizeProject(proj);
+    const used = new Set(project.clips.map((c) => c.videoFile));
+    const pool = listClips(p().clips, 1000)
+      .filter((c) => !used.has(c.videoFile) && fs.existsSync(c.videoFile))
+      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score);
+    const target = Math.max(5, Math.min(600, Number(seconds) || getFormat(project.format).idealSeconds[1]));
+    const fmt = getFormat(project.format);
+    const added: ReelClip[] = [];
+    for (const c of pool) {
+      const trial = { ...project, clips: [...project.clips, ...added, reelClipFromSidecar(c)] };
+      const tl = planFor(trial, analysisFor(project), project.fps, fmt.maxSeconds);
+      if (tl.duration > target * 1.1 && added.length) break;
+      added.push(trial.clips[trial.clips.length - 1]);
+      if (tl.duration >= target) break;
+    }
+    // Weakest first so the best one closes the reel.
+    return added.sort((a, b) => a.score - b.score);
+  });
+
+  // ---------- projects ----------
+  handle('studio:projects:list', () => store().list());
+  handle('studio:projects:get', (_e, id: string) => store().get(id) ?? null);
+  handle('studio:projects:create', (_e, opts: { name?: string; format?: FormatId; styleId?: string }) => store().save(createProject(opts ?? {})));
+  handle('studio:projects:save', (_e, proj: unknown) => store().save(proj));
+  handle('studio:projects:delete', (_e, id: string) => store().delete(id));
+  handle('studio:projects:duplicate', (_e, id: string) => {
+    const src = store().get(id);
+    if (!src) throw new Error('Project not found');
+    return store().save({ ...src, id: newId(), name: `${src.name} copy`, createdAt: Date.now(), lastExports: [] });
+  });
+  handle('studio:style', (_e, id: string) => getStyle(id));
+
+  // ---------- planning ----------
+  handle('studio:plan', (_e, proj: unknown) => {
+    const project = sanitizeProject(proj);
+    const fmt = getFormat(project.format);
+    return planFor(project, analysisFor(project), project.fps, fmt.maxSeconds);
+  });
+
+  // ---------- rendering ----------
+  const jobs = new Map<string, AbortController>();
+  handle('studio:render', async (e, proj: unknown, req: RenderRequest) => {
+    const project = sanitizeProject(proj);
+    const jobId = newId();
+    const ac = new AbortController();
+    jobs.set(jobId, ac);
+    const ff = await findFfmpeg(ctx.ffmpegPath());
+    if (!ff.ok || !ff.path) throw new Error(ff.problem ?? 'ffmpeg not available');
+    const formats = (Array.isArray(req?.formats) ? req.formats : [project.format]).filter((f): f is FormatId => f in FORMATS);
+    const request: RenderRequest = { preview: !!req?.preview, formats, noMusicCopy: !!req?.noMusicCopy, gpu: !!req?.gpu };
+    const enc = request.gpu && ff.gpuEncoders.length ? { name: ff.gpuEncoders[0] as 'h264_nvenc' } : { name: 'libx264' as const };
+    const send = (msg: object) => {
+      if (!e.sender.isDestroyed()) e.sender.send('studio:render:progress', { jobId, ...msg });
+    };
+    void (async () => {
+      try {
+        const files = await renderProject({
+          ffmpeg: ff.path!,
+          project,
+          analysis: analysisFor(project),
+          req: request,
+          studioDir: studioDir(),
+          reelsDir: reelsDir(),
+          fontFile: findFont(),
+          encoder: enc,
+          onProgress: (pr) => send(pr),
+          signal: ac.signal,
+        });
+        if (!request.preview) {
+          if (project.music) music().markUsed(project.music.trackId);
+          const saved = store().get(project.id);
+          if (saved) store().save({ ...saved, lastExports: [...(saved.lastExports ?? []), ...files.map((f) => ({ file: f, format: guessFormat(f, formats), at: Date.now() }))] });
+        }
+        send({ stage: 'done', pct: 1, message: request.preview ? 'Preview ready' : `Saved ${files.length} file${files.length === 1 ? '' : 's'}`, files });
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (ac.signal.aborted) send({ stage: 'cancelled', pct: 0, message: 'Cancelled' });
+        else send({ stage: 'error', pct: 0, message: 'Render failed', error: msg });
+      } finally {
+        jobs.delete(jobId);
+      }
+    })();
+    return { jobId };
+  });
+  handle('studio:render:cancel', (_e, jobId: string) => jobs.get(jobId)?.abort());
+
+  // ---------- music ----------
+  handle('studio:music:list', () => music().list());
+  handle('studio:music:import', async (e, files?: string[]) => {
+    let list = Array.isArray(files) ? files.filter((f) => typeof f === 'string') : [];
+    if (!list.length) {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const r = await dialog.showOpenDialog(win!, {
+        title: 'Add music',
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'webm'] }],
+      });
+      if (r.canceled) return [];
+      list = r.filePaths;
+    }
+    return music().import(list, (msg) => {
+      if (!e.sender.isDestroyed()) e.sender.send('studio:music:progress', { message: msg });
+    });
+  });
+  handle('studio:music:analyze', (_e, id: string) => music().analyze(id, true));
+  handle('studio:music:analyzePending', async (e) => {
+    await music().analyzePending((t) => {
+      if (!e.sender.isDestroyed()) e.sender.send('studio:music:updated', t);
+    });
+    return music().list();
+  });
+  handle('studio:music:update', (_e, id: string, patch: object) => music().update(id, patch));
+  handle('studio:music:remove', (_e, id: string, deleteFile: boolean) => music().remove(id, !!deleteFile));
+  handle('studio:music:suggest', (_e, proj: unknown) => {
+    const project = sanitizeProject(proj);
+    const fmt = getFormat(project.format);
+    const tl = planFor(project, null, project.fps, fmt.maxSeconds);
+    const seconds = Math.max(fmt.idealSeconds[0], tl.duration || fmt.idealSeconds[1]);
+    return { ranked: suggestFromLibrary(music().list(), project.style, fmt, seconds), sources: sourcesFor(fmt, project.style), note: fmt.music.note, seconds };
+  });
+  handle('studio:music:aiIdeas', async (_e, proj: unknown) => {
+    const project = sanitizeProject(proj);
+    const fmt = getFormat(project.format);
+    const tl = planFor(project, null, project.fps, fmt.maxSeconds);
+    const prompt = aiMusicPrompt({
+      format: fmt,
+      style: project.style,
+      reelSeconds: Math.max(fmt.idealSeconds[0], tl.duration),
+      heroes: project.clips.map((c) => c.hero).filter((h): h is string => !!h),
+      tags: project.clips.flatMap((c) => c.tags),
+      library: music()
+        .list()
+        .map((t) => ({ title: t.title, artist: t.artist, bpm: t.analysis?.bpm })),
+    });
+    return musicIdeas(ctx.ai, prompt);
+  });
+
+  // ---------- AI ----------
+  handle('studio:ai:status', async () => (ctx.ai ? ctx.ai.status() : { signedIn: false, provider: 'none' }));
+  handle('studio:ai:tweakStyle', (_e, proj: unknown, request: string) => tweakStyle(ctx.ai, sanitizeProject(proj).style, String(request ?? '')));
+  handle('studio:ai:captions', (_e, proj: unknown, request: string, lines: number) => writeCaptions(ctx.ai, sanitizeProject(proj), String(request ?? ''), Math.max(2, Math.min(20, Number(lines) || 6))));
+  handle('studio:ai:postCaption', (_e, proj: unknown) => {
+    const project = sanitizeProject(proj);
+    return postCaption(ctx.ai, project, getFormat(project.format));
+  });
+  handle('studio:ai:pickClips', async (_e, proj: unknown, seconds: number) => {
+    const project = sanitizeProject(proj);
+    const fmt = getFormat(project.format);
+    const all = listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
+    const ids = await pickClips(ctx.ai, all, fmt, project.style.name, Number(seconds) || fmt.idealSeconds[1]);
+    const byId = new Map<string, ClipSidecar>(all.map((c) => [c.id, c]));
+    return ids.map((id) => reelClipFromSidecar(byId.get(id)!));
+  });
+
+  // ---------- files ----------
+  handle('studio:pickImage', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const r = await dialog.showOpenDialog(win!, { title: 'Intro image', properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
+    return r.canceled ? undefined : r.filePaths[0];
+  });
+  handle('studio:show', (_e, file: string) => {
+    if (typeof file === 'string' && fs.existsSync(file)) shell.showItemInFolder(file);
+  });
+  handle('studio:open', (_e, file: string) => {
+    if (typeof file === 'string' && within(file) && fs.existsSync(file)) return shell.openPath(file);
+  });
+  handle('studio:openFolder', (_e, which: 'reels' | 'music') => {
+    const dir = which === 'music' ? musicDir() : reelsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    return shell.openPath(dir);
+  });
+  handle('studio:openExternal', (_e, url: string) => {
+    if (typeof url === 'string' && /^https:\/\/[^\s]+$/i.test(url)) return shell.openExternal(url);
+  });
+}
+
+function guessFormat(file: string, formats: FormatId[]): FormatId {
+  const m = path.basename(file).match(/_(tiktok|reels|shorts|youtube1440|youtube)(?:_nomusic)?\.mp4$/);
+  return (m?.[1] as FormatId) ?? formats[0];
+}
