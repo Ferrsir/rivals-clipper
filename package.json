@@ -10,18 +10,12 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "npm run build && ow-electron .",
+    "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
-    "dist": "npm run build && ow-electron-builder --publish=never",
+    "dist": "npm run build && electron-builder --publish=never",
     "harness": "npm run build && node dist/tools/harness.js",
     "build:native": "powershell -ExecutionPolicy Bypass -File scripts/build-native.ps1"
-  },
-  "overwolf": {
-    "packages": [
-      "gep",
-      "recorder"
-    ]
   },
   "build": {
     "appId": "com.ferris.rivalsclipper",
@@ -47,9 +41,6 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Rivals Clipper"
     },
-    "overwolf": {
-      "requireSigning": false
-    },
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
       "node_modules/tesseract.js/**",
@@ -73,9 +64,10 @@
   },
   "devDependencies": {
     "@overwolf/ow-electron": "44.9.0",
-    "@overwolf/ow-electron-builder": "26.18.0",
     "@overwolf/ow-electron-packages-types": "1.1.14",
     "@types/node": "22.15.0",
+    "electron": "45.2.2",
+    "electron-builder": "26.18.0",
     "typescript": "5.8.3"
   }
 }

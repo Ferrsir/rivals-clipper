@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { AudioChunkParser, PcmRing, encodeChunk, wavHeader } from '../src/main/capture/audio-buffer';
 import { TS_PACKET, TsReplayBuffer } from '../src/main/capture/ts-buffer';
-import { encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
+import { ddagrabSource, encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
 import { parseTasklist, GameWatcher } from '../src/main/capture/game-watcher';
 import { chooseEngine, lateBy } from '../src/main/engine';
 import { DEFAULT_SETTINGS, localOptions } from '../src/main/settings';
@@ -144,6 +145,15 @@ test('wav header describes 16-bit PCM', () => {
 });
 
 // ---------- encoder choice ----------
+
+test('screen capture options exist in the Windows ffmpeg build', { skip: process.platform !== 'win32' }, () => {
+  const bundled = require('ffmpeg-static') as string;
+  const bin = fs.existsSync(bundled) ? bundled : process.env.FFMPEG || 'ffmpeg';
+  const help = execFileSync(bin, ['-hide_banner', '-h', 'filter=ddagrab'], { encoding: 'utf8', windowsHide: true });
+  for (const option of ddagrabSource(0, 60).slice('ddagrab='.length).split(':')) {
+    assert.match(help, new RegExp(`\\b${option.split('=')[0]}\\s+<`));
+  }
+});
 
 const NVIDIA: GpuAdapter = { index: 0, vendorId: '10de', deviceId: '2c02', name: 'NVIDIA GeForce RTX 5080', vendor: 'nvidia' };
 const AMD: GpuAdapter = { index: 1, vendorId: '1002', deviceId: '13c0', name: 'AMD Radeon(TM) Graphics', vendor: 'amd' };

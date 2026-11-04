@@ -109,7 +109,7 @@ export interface RecordOptions {
 }
 
 export function ddagrabSource(outputIdx: number, fps: number): string {
-  return `ddagrab=output_idx=${outputIdx}:framerate=${fps}:draw_mouse=0:dup_frames=1`;
+  return `ddagrab=output_idx=${outputIdx}:framerate=${fps}:draw_mouse=0`;
 }
 
 /** Video encoder flags. Keyframe every second and no B-frames, so clips can start on any second. */

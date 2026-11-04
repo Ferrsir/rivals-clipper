@@ -616,6 +616,8 @@ if (overwolf) {
 }
 
 app.whenReady().then(() => {
+  // Standalone builds also migrate settings saved by the old Overwolf installer.
+  if (!overwolf) settings = { ...settings, engine: 'local' };
   prepareRoot();
   if (!fs.existsSync(paths(settings.rootFolder).settings)) saveSettings({ ...DEFAULT_SETTINGS, ...settings });
   setupIpc();
