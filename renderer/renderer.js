@@ -10,6 +10,9 @@ function renderStatus(s) {
   if (s.clipping) bits.push('● clipping');
   $('status').textContent = bits.join('  ·  ');
   $('status').classList.toggle('live', !!s.buffer);
+  const warn = $('packagesWarning');
+  warn.textContent = s.packagesProblem ?? '';
+  warn.classList.toggle('hidden', !s.packagesProblem);
 }
 
 function clipRow(c) {

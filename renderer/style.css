@@ -48,3 +48,4 @@ label.check > input { display: inline-block; width: auto; margin: 0; }
 .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; color: var(--muted); }
 .chip.on { color: #111; background: var(--accent); border-color: var(--accent); }
 .notice { margin: 12px 20px 0; padding: 10px 14px; border: 1px solid var(--accent); border-radius: 8px; background: rgba(255, 204, 51, 0.08); }
+.notice.error { border-color: #ff6b6b; background: rgba(255, 107, 107, 0.1); color: var(--text); }
