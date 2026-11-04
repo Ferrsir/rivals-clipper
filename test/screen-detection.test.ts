@@ -6,8 +6,21 @@ import { findBands, signature, viewFor } from '../src/main/vision/image';
 import { DEFAULT_REGIONS, hudFilterGraph, layoutFor, region, type HudLayout, type RegionId } from '../src/main/vision/layout';
 import { prepareForOcr, otsu } from '../src/main/vision/ocr';
 import { score } from '../src/main/vision/harness';
+import { DetectionPipeline } from '../src/main/vision/pipeline';
 
 // ---------- layout ----------
+
+test('screen crops are released when text reading is disabled', async () => {
+  const pipeline = new DetectionPipeline({ gameEvent: () => {}, infoUpdate: () => {} }, undefined,
+    { layout: layoutFor(1920, 1080), frameMs: 100, ocr: false });
+  // Reproduce many changing feed rows without depending on the HUD's pixel detector.
+  let id = 0;
+  pipeline.analyzer.analyze = (_frame, t) => [{ kind: 'feed-row', id: ++id, t, box: { x0: 0, y0: 0, x1: 100, y1: 20 },
+    crop: { w: 100, h: 20, data: new Uint8Array(2000) } }];
+  for (let i = 0; i < 1000; i++) await pipeline.processFrame(new Uint8Array(0), i * 100);
+  const crops = (pipeline as unknown as { crops: Map<string, unknown> }).crops;
+  assert.equal(crops.size, 0, 'disabled OCR must not retain a crop for every feed row');
+});
 
 test('HUD regions scale with the screen and stay anchored', () => {
   for (const [w, h] of [[1920, 1080], [2560, 1440], [3840, 2160], [3440, 1440]]) {

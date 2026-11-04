@@ -139,6 +139,9 @@ export class DetectionPipeline {
       if (this.keepTrace && ob.kind === 'hud' && ob.matchHud) this.trace.push(ob);
       this.fusion.onObservation(ob);
     }
+    // OCR requests take ownership synchronously above. Unrequested crops (notably
+    // when OCR is off or failed) must not accumulate throughout a long session.
+    this.crops.clear();
     if (this.o.awaitOcr && this.inflight.length) {
       const wait = this.inflight;
       this.inflight = [];
