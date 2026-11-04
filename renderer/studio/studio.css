@@ -103,7 +103,8 @@
 
 /* Clip library */
 .st-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.st-filters > input { grid-column: 1 / -1; }
+.st-filters > input, .st-filters > .st-link { grid-column: 1 / -1; }
+.st-filters > .st-link { justify-self: start; }
 .st-filters input { min-width: 0; }
 .st-filters select { padding: 5px 4px; }
 .st-cliplist { display: flex; flex-direction: column; gap: 8px; }

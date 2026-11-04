@@ -20,7 +20,10 @@ const S = {
   preview: null,
   suggest: null,
   aiIdeas: null,
-  filters: { q: '', minKills: 0, sort: 'score' },
+  filters: { q: '', minKills: 0, sort: 'score', hero: '', map: '', gameType: '', minRating: 0 },
+  /** Clip ids that match the filters, in order, from the Library index. null until the first answer. */
+  clipView: null,
+  facets: null,
   busy: {},
   safeZones: true,
   styleUndo: null,
@@ -212,6 +215,7 @@ export async function mount(el) {
   try {
     const [init, projects, library, tracks] = await Promise.all([api.init(), api.projects.list(), api.clips(), api.music.list()]);
     Object.assign(S, { init, projects, library, tracks });
+    refreshClipView();
   } catch (err) {
     clear(root, h('div', { class: 'st-loading error' }, `The studio couldn't start: ${err.message}`));
     return;
@@ -228,7 +232,8 @@ export async function mount(el) {
   });
   window.clipper?.onClip?.(async () => {
     S.library = await api.clips().catch(() => S.library);
-    if (S.leftTab === 'clips') renderLeft();
+    S.facets = null;
+    refreshClipView();
   });
   audio.addEventListener('ended', () => {
     playingTrack = null;
@@ -360,7 +365,10 @@ function renderTop() {
       { class: 'st-menu' },
       (E.undoBtn = h('button', { title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', disabled: !hist.past.length, onclick: undo }, 'Undo')),
       (E.redoBtn = h('button', { title: 'Redo (Ctrl+Shift+Z or Ctrl+Y)', 'aria-label': 'Redo', disabled: !hist.future.length, onclick: redo }, 'Redo')),
-      h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`),
+      // Uploads are optional and parked for now: the button shows once an account has keys.
+      S.publish.some((x) => x.configured)
+        ? h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`)
+        : null,
       h('button', { title: 'Duplicate this reel', onclick: async () => {
         if (saveSoon.pending()) saveSoon.flush();
         const d = await api.projects.duplicate(p.id);
@@ -406,27 +414,72 @@ const thumbObserver = new IntersectionObserver(
   { rootMargin: '200px' },
 );
 
+let clipQuerySeq = 0;
+/** Ask the Library index for the clips that match the filters, then redraw the list. */
+async function refreshClipView() {
+  const f = S.filters;
+  const seq = ++clipQuerySeq;
+  try {
+    const [view, facets] = await Promise.all([
+      api.clipQuery({ text: f.q, hero: f.hero, map: f.map, gameType: f.gameType, minKills: f.minKills, minRating: f.minRating, sort: f.sort }),
+      S.facets ? Promise.resolve(S.facets) : api.clipFacets(),
+    ]);
+    if (seq !== clipQuerySeq) return; // a newer query is on its way
+    S.clipView = view;
+    S.facets = facets;
+  } catch {
+    S.clipView = null; // fall back to filtering here
+  }
+  if (S.leftTab === 'clips') {
+    const focused = document.activeElement?.matches?.('.st-filters input[type=search]');
+    renderLeft();
+    if (focused) focusSearch();
+  }
+}
+
+function filteredClips() {
+  const f = S.filters;
+  if (S.clipView) {
+    const byId = new Map(S.library.map((c) => [c.id, c]));
+    return S.clipView.ids.map((id) => byId.get(id)).filter(Boolean);
+  }
+  const q = f.q.trim().toLowerCase();
+  return S.library
+    .filter((c) => c.reel.kills >= f.minKills && (!q || [c.hero, c.match?.map, ...(c.tags || [])].filter(Boolean).join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (f.sort === 'new' ? b.createdAt - a.createdAt : f.sort === 'kills' ? b.reel.kills - a.reel.kills || b.score - a.score : b.score - a.score));
+}
+
 function clipsPanel() {
   const f = S.filters;
-  const q = f.q.trim().toLowerCase();
-  let list = S.library.filter((c) => {
-    const kills = c.reel.kills;
-    if (kills < f.minKills) return false;
-    if (!q) return true;
-    return [c.hero, c.match?.map, ...(c.tags || [])].filter(Boolean).join(' ').toLowerCase().includes(q);
-  });
-  list = list.sort((a, b) => (f.sort === 'new' ? b.createdAt - a.createdAt : f.sort === 'kills' ? b.reel.kills - a.reel.kills || b.score - a.score : b.score - a.score));
+  const list = filteredClips();
   const inReel = new Map();
   for (const c of S.project.clips) inReel.set(c.videoFile, (inReel.get(c.videoFile) ?? 0) + 1);
   const ai = S.init.ai.signedIn;
   const target = fmt().idealSeconds[1];
+  const setFilter = (k, v) => {
+    f[k] = v;
+    refreshClipView();
+  };
+  const facet = (key, all, items) =>
+    select({ value: f[key], options: [['', all], ...(items ?? []).map((x) => [x.value, `${x.value} (${x.count})`])], onChange: (v) => setFilter(key, v) });
+  const active = ['hero', 'map', 'gameType'].some((k) => f[k]) || f.minKills || f.minRating || f.q;
 
   const controls = h(
     'div',
     { class: 'st-filters' },
-    h('input', { type: 'search', placeholder: 'Search', title: 'Search by hero, map or tag', value: f.q, oninput: debounce((e) => ((f.q = e.target.value), renderLeft(), focusSearch()), 200) }),
-    select({ value: f.minKills, options: [[0, 'Any kills'], [2, '2+ kills'], [3, '3+ kills'], [4, '4+ kills']], onChange: (v) => ((f.minKills = Number(v)), renderLeft()) }),
-    select({ value: f.sort, options: [['score', 'Best'], ['kills', 'Most kills'], ['new', 'Newest']], onChange: (v) => ((f.sort = v), renderLeft()) }),
+    h('input', { type: 'search', placeholder: 'Search hero, map, tag', title: 'Search by hero, map, mode, tag or who you eliminated', value: f.q, oninput: debounce((e) => setFilter('q', e.target.value), 200) }),
+    facet('hero', 'Any hero', S.facets?.heroes),
+    facet('map', 'Any map', S.facets?.maps),
+    facet('gameType', 'Any mode', S.facets?.gameTypes),
+    select({ value: f.minKills, options: [[0, 'Any kills'], [2, '2+ kills'], [3, '3+ kills'], [4, '4+ kills'], [6, 'Team wipe']], onChange: (v) => setFilter('minKills', Number(v)) }),
+    select({ value: f.minRating, options: [[0, 'Any rating'], [3, '3★ and up'], [4, '4★ and up'], [5, '5★ only']], onChange: (v) => setFilter('minRating', Number(v)) }),
+    select({ value: f.sort, options: [['score', 'Best'], ['kills', 'Most kills'], ['rating', 'Top rated'], ['new', 'Newest']], onChange: (v) => setFilter('sort', v) }),
+    active
+      ? h('button', { class: 'st-link', onclick: () => {
+          Object.assign(f, { q: '', hero: '', map: '', gameType: '', minKills: 0, minRating: 0 });
+          refreshClipView();
+        } }, `Clear filters (${list.length} of ${S.library.length})`)
+      : null,
   );
   const actions = h(
     'div',
@@ -1441,7 +1494,7 @@ function openExport() {
             h('div', { class: 'st-label' }, 'Upload when it\'s done'),
             connected.map((st) => toggle({ label: st.platform === 'tiktok' && st.tiktokMode !== 'direct' ? `Send to TikTok drafts (${st.account ?? 'TikTok'})` : `Upload to ${st.label} (${st.account ?? st.label})`, checked: false, onChange: (v) => (v ? autoUpload.add(st.platform) : autoUpload.delete(st.platform)), hint: 'Uses the matching export: TikTok for TikTok, Reels for Instagram, Shorts or YouTube for YouTube' })),
           ]
-        : null,
+        : h('p', { class: 'st-note' }, h('a', { href: '#', onclick: (e) => (e.preventDefault(), close(), openAccounts(root, S, () => (renderTop(), renderCenter()))) }, 'Upload accounts'), ' (optional, for later)'),
       toggle({ label: gpuOk ? `Faster export on the graphics card (${S.init.ffmpeg.gpuEncoders[0].replace('h264_', '').toUpperCase()})` : 'Faster export on the graphics card (not available)', checked: gpu, disabled: !gpuOk, onChange: (v) => (gpu = v) }),
       h(
         'div',

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AiClient } from '../ai-auth';
 import { listClips } from '../clip-store';
+import { Library, queryClips, type ClipQuery, type ClipSort } from '../library';
 import { Settings, paths } from '../settings';
 import type { ClipSidecar } from '../../shared/types';
 import type { FormatId, FreeMedia, PublishPlatform, PublishRequest, ReelClip, ReelIdea, ReelProject, RenderRequest, StudioInit } from '../../shared/studio';
@@ -108,7 +109,32 @@ export function registerStudio(ctx: StudioContext): void {
   });
 
   // ---------- clips ----------
-  handle('studio:clips', () => listClips(p().clips, 1000).map((c) => ({ ...c, reel: reelClipFromSidecar(c) })));
+  // The same index and filters as the Library screen, so both show the same clips.
+  const clipIndex = new Library(() => p().clips);
+  handle('studio:clips', () => {
+    clipIndex.refresh();
+    return queryClips(clipIndex.all(), { sort: 'new', limit: 5000 }).items.map((c) => ({ ...c, reel: reelClipFromSidecar(c) }));
+  });
+  handle('studio:clips:query', (_e, raw: unknown) => {
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 100) : undefined);
+    const num = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(99, Number(v)) : undefined);
+    const sorts: ClipSort[] = ['new', 'score', 'kills', 'rating'];
+    const q: ClipQuery = {
+      text: str(r.text),
+      hero: str(r.hero),
+      map: str(r.map),
+      gameType: str(r.gameType),
+      minKills: num(r.minKills),
+      minRating: num(r.minRating),
+      sort: sorts.includes(r.sort as ClipSort) ? (r.sort as ClipSort) : 'score',
+      limit: 5000,
+    };
+    clipIndex.refresh();
+    const res = queryClips(clipIndex.all(), q);
+    return { ids: res.items.map((c) => c.id), total: res.total };
+  });
+  handle('studio:clips:facets', () => clipIndex.facets());
 
   handle('studio:autoFill', (_e, proj: unknown, seconds: number) => {
     const project = sanitizeProject(proj);
