@@ -112,7 +112,68 @@ const planSoon = debounce(async () => {
 }, 120);
 
 /** Apply a change to the project, then save and re-plan. */
+// ---------- undo / redo ----------
+// Every edit goes through change(), which keeps a copy of the reel before it.
+// Quick bursts (dragging a slider, typing, dragging on the timeline) become one step.
+const UNDO_LIMIT = 100;
+const MERGE_MS = 700;
+const hist = { projectId: null, past: [], future: [], lastAt: 0 };
+
+function resetHistory() {
+  hist.projectId = S.project?.id ?? null;
+  hist.past = [];
+  hist.future = [];
+  hist.lastAt = 0;
+  undoButtons();
+}
+
+function undoButtons() {
+  if (E.undoBtn) E.undoBtn.disabled = !hist.past.length;
+  if (E.redoBtn) E.redoBtn.disabled = !hist.future.length;
+}
+
+function recordUndo() {
+  if (hist.projectId !== S.project.id) resetHistory();
+  const now = Date.now();
+  if (now - hist.lastAt > MERGE_MS || !hist.past.length) {
+    hist.past.push(structuredClone(S.project));
+    if (hist.past.length > UNDO_LIMIT) hist.past.shift();
+  }
+  hist.future = [];
+  hist.lastAt = now;
+  undoButtons();
+}
+
+function restore(snapshot) {
+  S.project = snapshot;
+  const entry = S.projects.find((x) => x.id === snapshot.id);
+  if (entry) Object.assign(entry, { name: snapshot.name, clips: snapshot.clips.length });
+  if (S.sel && !snapshot.clips.some((c) => c.uid === S.sel)) S.sel = null;
+  S.preview = null;
+  saveSoon(S.project);
+  planSoon.flush();
+  renderAll();
+  undoButtons();
+}
+
+function undo() {
+  if (hist.projectId !== S.project?.id || !hist.past.length) return;
+  hist.future.push(structuredClone(S.project));
+  hist.lastAt = 0;
+  restore(hist.past.pop());
+  toast(root, 'Undone', 'info', 1200);
+}
+
+function redo() {
+  if (hist.projectId !== S.project?.id || !hist.future.length) return;
+  hist.past.push(structuredClone(S.project));
+  hist.lastAt = 0;
+  restore(hist.future.pop());
+  toast(root, 'Redone', 'info', 1200);
+}
+
 function change(fn, parts = []) {
+  recordUndo();
   fn(S.project);
   saveSoon(S.project);
   planSoon();
@@ -130,6 +191,7 @@ async function openProject(id) {
   S.suggest = null;
   S.aiIdeas = null;
   S.styleUndo = null;
+  resetHistory();
   planSoon.flush();
   refreshSuggestions();
   renderAll();
@@ -296,6 +358,8 @@ function renderTop() {
     h(
       'div',
       { class: 'st-menu' },
+      (E.undoBtn = h('button', { title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', disabled: !hist.past.length, onclick: undo }, 'Undo')),
+      (E.redoBtn = h('button', { title: 'Redo (Ctrl+Shift+Z or Ctrl+Y)', 'aria-label': 'Redo', disabled: !hist.future.length, onclick: redo }, 'Redo')),
       h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`),
       h('button', { title: 'Duplicate this reel', onclick: async () => {
         if (saveSoon.pending()) saveSoon.flush();
@@ -1397,7 +1461,19 @@ function openExport() {
 function onKey(e) {
   if (!root?.isConnected || root.closest('.hidden')) return;
   const tag = (e.target.tagName || '').toLowerCase();
-  if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
+  if (document.querySelector('.st-modal')) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+    return;
+  }
+  if (mod && !e.altKey && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    redo();
+    return;
+  }
   if (e.code === 'Space') {
     const v = E.center?.querySelector('video.st-preview');
     if (v) {
