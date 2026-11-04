@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { installGracefulShutdown } from '../src/main/shutdown';
+import { installGracefulShutdown, sendIfOpen } from '../src/main/shutdown';
 
 function fakeApp() {
   const app = Object.assign(new EventEmitter(), { exits: 0, quit() {
@@ -36,4 +36,20 @@ test('shutdown reports cleanup errors and still permits the final quit', async (
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(app.exits, 1);
   assert.equal(errors.length, 1);
+});
+
+test('closed windows and failed renderer delivery cannot interrupt clip-save cleanup', async () => {
+  const app = fakeApp();
+  let saved = false;
+  const closed = { isDestroyed: () => true, get webContents(): never { throw new Error('window destroyed'); } };
+  const crashed = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: () => { throw new Error('renderer closed'); } } };
+  installGracefulShutdown(app, async () => {
+    assert.equal(sendIfOpen(closed, 'status', {}), false);
+    assert.equal(sendIfOpen(crashed, 'clip-saved', {}), false);
+    saved = true;
+  }, () => assert.fail('UI delivery interrupted cleanup'));
+  app.quit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved, true);
+  assert.equal(app.exits, 1);
 });
