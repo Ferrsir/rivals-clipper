@@ -66,6 +66,11 @@ everything you hear.
 
 Play in **borderless** or **fullscreen** on the monitor set in *Monitor to record* (0 = main monitor).
 
+If screen recording cannot start, it retries while the game is running, backing off to one attempt
+every 30 seconds. An unexpected recorder exit uses the same recovery path and restarts detection
+after the replay buffer is ready, so resolution changes get a fresh HUD layout. Closing the game,
+switching engines or quitting cancels pending recovery.
+
 ## Cost while you play
 
 Measured, not guessed:
