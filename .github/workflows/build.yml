@@ -39,6 +39,7 @@ jobs:
           # which is fine for personal use. Add them as repo secrets to sign builds.
           OW_CLI_EMAIL: ${{ secrets.OW_CLI_EMAIL }}
           OW_CLI_API_KEY: ${{ secrets.OW_CLI_API_KEY }}
+          OW_BUILD_KEY: ${{ secrets.OW_BUILD_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: RivalsClipper-Setup
