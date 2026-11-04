@@ -302,7 +302,7 @@ export function effectsChain(o: Pick<AssembleOpts, 'timeline' | 'style' | 'size'
   }
   if (st.transition === 'flash') for (const c of tl.cuts) if (!flashTimes.some((t) => Math.abs(t - c) < 0.05)) flashTimes.push(c);
   const flash = decayExpr([...new Set(flashTimes.map((t) => Math.round(t * 1000) / 1000))].sort((a, b) => a - b), st.flash.duration, 't', st.flash.on ? st.flash.strength : 0.45);
-  const dips = st.transition === 'dip' ? tl.cuts.map((c) => `between(t,${r3(c - 0.18)},${r3(c + 0.18)})*(1-abs(t-${r3(c)})/0.18)`).join('+') : '0';
+  const dips = st.transition === 'dip' ? tl.cuts.map((c) => `between(t,${r3(c - 0.18)},${r3(c + 0.18)})*(1-abs(t-${r3(c)})/0.18)`).join('+') || '0' : '0';
   const g = st.grade;
   const needEq = flash !== '0' || dips !== '0' || g.contrast !== 1 || g.saturation !== 1 || g.brightness !== 0 || g.gamma !== 1;
   if (needEq) {

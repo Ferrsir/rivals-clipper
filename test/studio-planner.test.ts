@@ -172,3 +172,15 @@ test('sanitizeStyle clamps hostile values', () => {
   assert.equal(s.transition, 'flash');
   assert.equal(s.captions.size, 0.12);
 });
+
+test('cinematic dip transition with a single clip builds a valid eq expression', async () => {
+  const { effectsChain } = await import('../src/main/studio/render');
+  const style = getStyle('cinematic');
+  style.transition = 'dip';
+  const tl = plan({ clips: [clip('a', [8], 50)], style, fps: 60, analysis: grid(120, 60, 4) });
+  assert.equal(tl.cuts.length, 0);
+  const chain = effectsChain({ timeline: tl, style, size: { width: 1080, height: 1920 }, fps: 60, preview: false });
+  const eq = chain.find((f) => f.startsWith('eq='));
+  assert.ok(eq);
+  assert.ok(!/\(\)|,\)/.test(eq), eq);
+});

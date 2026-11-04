@@ -52,13 +52,25 @@ export function fmtTime(s, withTenths = false) {
 
 export function debounce(fn, ms) {
   let t;
+  let last = [];
   const d = (...a) => {
     clearTimeout(t);
-    t = setTimeout(() => fn(...a), ms);
+    last = a;
+    t = setTimeout(() => {
+      t = undefined;
+      fn(...a);
+    }, ms);
   };
+  /** Run now, with these arguments or the pending call's. */
   d.flush = (...a) => {
     clearTimeout(t);
-    fn(...a);
+    t = undefined;
+    fn(...(a.length ? a : last));
+  };
+  d.pending = () => t !== undefined;
+  d.cancel = () => {
+    clearTimeout(t);
+    t = undefined;
   };
   return d;
 }

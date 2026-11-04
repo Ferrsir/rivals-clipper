@@ -80,11 +80,12 @@ async function guarded(key, fn, okMsg) {
 
 // ---------- persistence ----------
 
-const saveSoon = debounce(async () => {
-  if (!S.project) return;
+// The pending save is bound to the project that was edited, so switching reels can't save the wrong one.
+const saveSoon = debounce(async (proj = S.project) => {
+  if (!proj) return;
   try {
-    const saved = await api.projects.save(S.project);
-    S.project.updatedAt = saved.updatedAt;
+    const saved = await api.projects.save(proj);
+    proj.updatedAt = saved.updatedAt;
     const row = S.projects.find((p) => p.id === saved.id);
     if (row) Object.assign(row, { name: saved.name, updatedAt: saved.updatedAt, clips: saved.clips.length });
   } catch (err) {
@@ -108,12 +109,13 @@ const planSoon = debounce(async () => {
 /** Apply a change to the project, then save and re-plan. */
 function change(fn, parts = []) {
   fn(S.project);
-  saveSoon();
+  saveSoon(S.project);
   planSoon();
   for (const p of parts) p();
 }
 
 async function openProject(id) {
+  if (saveSoon.pending()) saveSoon.flush();
   const p = id ? await api.projects.get(id) : null;
   S.project = p ?? (await api.projects.create({ format: 'tiktok', styleId: 'story' }));
   if (!S.projects.some((x) => x.id === S.project.id)) S.projects.unshift({ id: S.project.id, name: S.project.name, updatedAt: S.project.updatedAt, clips: S.project.clips.length });
@@ -231,7 +233,7 @@ function renderTop() {
       title: 'Your reels',
       onchange: async (e) => {
         if (e.target.value === '__new') {
-          saveSoon.flush();
+          if (saveSoon.pending()) saveSoon.flush();
           const created = await api.projects.create({ format: p.format, styleId: p.style.id });
           S.projects.unshift({ id: created.id, name: created.name, updatedAt: created.updatedAt, clips: 0 });
           await openProject(created.id);
@@ -288,13 +290,14 @@ function renderTop() {
       'div',
       { class: 'st-menu' },
       h('button', { title: 'Duplicate this reel', onclick: async () => {
-        saveSoon.flush();
+        if (saveSoon.pending()) saveSoon.flush();
         const d = await api.projects.duplicate(p.id);
         S.projects.unshift({ id: d.id, name: d.name, updatedAt: d.updatedAt, clips: d.clips.length });
         await openProject(d.id);
       } }, 'Duplicate'),
       h('button', { title: 'Delete this reel (your clips and exports stay)', onclick: async () => {
         if (!confirm(`Delete "${p.name}"? Your clips and exported videos are kept.`)) return;
+        saveSoon.cancel();
         await api.projects.remove(p.id);
         S.projects = S.projects.filter((x) => x.id !== p.id);
         await openProject(S.projects[0]?.id);
@@ -1063,7 +1066,7 @@ function drawTL(playhead) {
 // ---------- rendering ----------
 
 async function startRender(req) {
-  saveSoon.flush();
+  saveSoon.flush(S.project);
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
   try {
     const { jobId } = await api.render(S.project, request);
