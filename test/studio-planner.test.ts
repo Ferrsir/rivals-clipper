@@ -232,3 +232,21 @@ test('hook lines share the hook card in turn, under the picture band', async () 
   assert.match(f[4], /between\(t,27,30\)/);
   assert.equal(fs.readFileSync(path.join(workDir, 'cap4.txt'), 'utf8').replace(/\n/g, ' '), 'COMMENT WHO WINS');
 });
+
+test('hook text fits under the picture on landscape exports too', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { textFilters } = await import('../src/main/studio/render');
+  const { FORMATS } = await import('../src/main/studio/formats');
+  for (const [fmt, size] of [[FORMATS.youtube, { width: 1920, height: 1080 }], [FORMATS.youtube1440, { width: 2560, height: 1440 }], [FORMATS.tiktok, { width: 1080, height: 1920 }]] as const) {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hookfit-'));
+    const timeline = { introEnd: 3, duration: 20, captions: [] } as any;
+    const [f] = textFilters({ timeline, style: getStyle('story'), format: fmt, size, workDir, fontFile: '/fonts/x.ttf', intro: { text: 'POV: you main Deadpool and nobody believes you', seconds: 3, layout: 'band' } });
+    const y = Number(/:y=(\d+):/.exec(f)![1]);
+    const fontsize = Number(/:fontsize=(\d+):/.exec(f)![1]);
+    const lines = fs.readFileSync(path.join(workDir, 'cap0.txt'), 'utf8').split('\n').length;
+    const bottom = y + lines * fontsize * 1.18;
+    assert.ok(bottom <= size.height * (1 - fmt.safe.bottom) + 1, `${fmt.id}: text ends at ${Math.round(bottom)} of ${size.height}`);
+  }
+});

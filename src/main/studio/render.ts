@@ -378,7 +378,8 @@ export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format
   const out: string[] = [];
   const font = path.basename(o.fontFile);
   const safeW = size.width * (1 - format.safe.left - format.safe.right);
-  const fontSize = Math.round(style.captions.size * size.width);
+  // Sized from the short side, so 16:9 exports get the same text size as 9:16 ones instead of nearly double.
+  const fontSize = Math.round(style.captions.size * Math.min(size.width, size.height));
   const maxChars = Math.max(8, Math.floor((safeW * 0.94) / (fontSize * 0.56)));
   const yFor = (pos: 'top' | 'middle' | 'bottom' | number, lines: number, fs2: number) => {
     const block = lines * fs2 * 1.18;
@@ -389,13 +390,19 @@ export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format
   };
   const xCenter = Math.round(size.width * format.safe.left + safeW / 2);
   let n = 0;
-  const add = (text: string, start: number, end: number, pos: 'top' | 'middle' | 'bottom' | number, opts: { scale?: number; upper?: boolean; fade?: number } = {}) => {
-    const scale = opts.scale ?? 1;
+  const add = (text: string, start: number, end: number, pos: 'top' | 'middle' | 'bottom' | number, opts: { scale?: number; upper?: boolean; fade?: number; maxHeight?: number } = {}) => {
+    let scale = opts.scale ?? 1;
     const upper = opts.upper ?? style.captions.uppercase;
     const t = upper ? text.toUpperCase() : text;
-    const fs2 = Math.round(fontSize * scale);
     // Capitals are wider than the average letter, so they wrap sooner.
-    const lines = wrapText(t, Math.max(6, Math.floor((maxChars / scale) * (upper ? 0.8 : 1))));
+    const wrap = (sc: number) => wrapText(t, Math.max(6, Math.floor((maxChars / sc) * (upper ? 0.8 : 1))));
+    let lines = wrap(scale);
+    // Shrink until the block fits the space it has (e.g. under the hook picture on a landscape export).
+    for (let i = 0; i < 8 && opts.maxHeight && lines.length * fontSize * scale * 1.18 > opts.maxHeight; i++) {
+      scale *= 0.88;
+      lines = wrap(scale);
+    }
+    const fs2 = Math.round(fontSize * scale);
     const file = `cap${n++}.txt`;
     fs.writeFileSync(path.join(o.workDir, file), lines.join('\n'), 'utf8');
     const y = yFor(pos, lines.length, fs2);
@@ -411,7 +418,8 @@ export function textFilters(o: Pick<AssembleOpts, 'timeline' | 'style' | 'format
     const times = hookTimes(lines.length, o.timeline.introEnd);
     const b = introBand(size);
     const under = size.height * (b.center + b.height / 2) + size.height * 0.03;
-    lines.forEach((line, i) => add(line, times[i][0], times[i][1], band ? under : 'middle', { scale: 1.2, upper: band ? true : undefined, fade: 0.25 }));
+    const room = size.height * (1 - format.safe.bottom) - under;
+    lines.forEach((line, i) => add(line, times[i][0], times[i][1], band ? under : 'middle', { scale: 1.2, upper: band ? true : undefined, fade: 0.25, maxHeight: band ? Math.max(room, size.height * 0.08) : undefined }));
   }
   for (const c of o.timeline.captions) add(c.text, c.start, c.end, style.captions.position);
   if (o.outro?.text) {

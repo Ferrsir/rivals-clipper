@@ -62,7 +62,7 @@ const vertical = () => fmt().height > fmt().width;
 const trackOf = (id) => S.tracks.find((t) => t.id === id);
 const currentTrack = () => (S.project?.music ? trackOf(S.project.music.trackId) : undefined);
 const clipByUid = (uid) => S.project.clips.find((c) => c.uid === uid);
-const planKey = () => JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + (S.project?.music?.file ?? '') + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro);
+const planKey = () => JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + (S.project?.music?.file ?? '') + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null);
 const pct = (v) => `${Math.round(v * 100)}%`;
 const x100 = (v) => `${Math.round(v * 100)}`;
 
@@ -1021,6 +1021,7 @@ function clipInspector() {
   crop.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     crop.setPointerCapture(e.pointerId);
+    recordUndo(); // keep the crop as it was before the drag
     const g = crop._geom;
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1035,7 +1036,9 @@ function clipInspector() {
     };
     const up = () => {
       crop.removeEventListener('pointermove', move);
-      change(() => undefined);
+      // The drag already changed the clip; save it without a second undo step.
+      saveSoon(S.project);
+      planSoon();
     };
     crop.addEventListener('pointermove', move);
     crop.addEventListener('pointerup', up, { once: true });
@@ -1108,9 +1111,8 @@ function clipInspector() {
     killList,
     vertical() || c.cropZoom > 1 ? h('p', { class: 'st-note' }, 'Drag the box on the video to choose what stays in frame.') : null,
     slider({ label: 'Punch in', min: 1, max: 2, step: 0.05, value: c.cropZoom, format: (z) => `${z.toFixed(2)}×`, onInput: (z) => {
-      c.cropZoom = z;
+      setNum('cropZoom', z); // through change(), so Undo gets the zoom from before
       placeCrop();
-      setNum('cropZoom', z);
     }, hint: 'Zooms into the middle of the crop, like the reference edits' }),
     c.hasMic
       ? toggle({ label: 'Use my mic in this clip', checked: c.useMic, onChange: (on) => setNum('useMic', on), hint: 'Your mic is on its own track, so it can be left out per clip' })
