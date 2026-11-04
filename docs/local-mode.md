@@ -14,10 +14,10 @@ which records what the game plays to your speakers, not anything inside the game
 
 Settings, **Kill detection**, *How kills are detected*:
 
-- **Automatic** (default): Overwolf if its packages load, otherwise local mode. An installer that isn't signed by
+- **Automatic** (legacy option): Overwolf if its packages load, otherwise local mode. An installer that isn't signed by
   Overwolf can't load them (see [run-with-overwolf.md](run-with-overwolf.md)), so with that installer the app
   switches to local mode by itself, about a minute after it starts.
-- **Built-in screen detection**: always local mode, even if Overwolf works.
+- **Built-in screen detection** (default): always local mode, even if Overwolf works. No Overwolf account or ads are needed.
 - **Overwolf only**: never local mode.
 
 Then just play. The status bar says which encoder and graphics card are recording, and the Kill detection panel

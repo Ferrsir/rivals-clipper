@@ -75,7 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiTagging: true,
   aiProvider: 'none',
   onboarded: false,
-  engine: 'auto',
+  engine: 'local',
   captureMonitor: 0,
   localEncoder: 'auto',
   playerName: '',
@@ -193,7 +193,7 @@ export function localOptions(s: Partial<Settings>) {
   };
   const encoders = ['auto', 'nvenc', 'amf', 'qsv', 'x264'] as const;
   return {
-    engine: (['auto', 'overwolf', 'local'] as const).includes(s.engine as never) ? (s.engine as Settings['engine']) : 'auto',
+    engine: (['auto', 'overwolf', 'local'] as const).includes(s.engine as never) ? (s.engine as Settings['engine']) : 'local',
     captureMonitor: Math.round(num(s.captureMonitor, 0, 7, 0)),
     localEncoder: encoders.includes(s.localEncoder as never) ? (s.localEncoder as Settings['localEncoder']) : 'auto',
     playerName: typeof s.playerName === 'string' ? s.playerName.trim().slice(0, 40) : '',

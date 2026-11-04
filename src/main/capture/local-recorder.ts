@@ -137,7 +137,14 @@ export class LocalRecorder implements ClipRecorder {
       this.log('Audio helper (rc-audio.exe) is missing, so local clips will have no sound. Reinstall Rivals Clipper to fix this.');
     }
 
-    await this.waitForVideo(10_000, check);
+    try {
+      await this.waitForVideo(10_000, check);
+    } catch (err) {
+      // A failed start must not leave screen/audio capture running in the background.
+      // A newer start owns its own resources and must not be torn down here.
+      if (gen === this.gen) await this.teardown();
+      throw err;
+    }
     this.info = {
       width: scaleHeight ? Math.round((width * scaleHeight) / height / 2) * 2 : width,
       height: outH,
@@ -208,6 +215,11 @@ export class LocalRecorder implements ClipRecorder {
     const proc = spawn(ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.ff = proc;
     this.stderrTail = [];
+    proc.once('error', (err) => {
+      this.stderrTail.push(err.message);
+      if (this.ff === proc) this.ff = undefined;
+      this.log(`Screen recorder could not start: ${err.message}`);
+    });
     proc.stdout.on('data', (d: Buffer) => this.ts.push(d));
     proc.stderr.on('data', (d: Buffer) => {
       for (const line of d.toString('utf8').split(/\r?\n/)) {
@@ -277,12 +289,12 @@ export class LocalRecorder implements ClipRecorder {
     }
 
     const tmp = path.join(clip.folder, '.recording');
-    fs.mkdirSync(tmp, { recursive: true });
     const base = path.join(tmp, clip.fileName);
     const videoTs = `${base}.ts`;
     const out = path.join(clip.folder, `${clip.fileName}.mp4`);
     const temps = [videoTs];
     try {
+      fs.mkdirSync(tmp, { recursive: true });
       await fs.promises.writeFile(videoTs, result.data);
       const tracks: Array<{ file: string; label: 'game' | 'mic' }> = [];
       if (audio) {
