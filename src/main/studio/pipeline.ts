@@ -60,6 +60,15 @@ function stamp(d = new Date()): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`;
 }
 
+/** One base name per export, shared by its format variants, that no earlier export in `dir` already uses. */
+export function uniqueExportBase(dir: string, name: string, d = new Date()): string {
+  const root = `${safeName(name)}_${stamp(d)}`;
+  const taken = new Set(fs.existsSync(dir) ? fs.readdirSync(dir) : []);
+  const used = (b: string) => [...taken].some((f) => f.startsWith(`${b}_`));
+  if (!used(root)) return root;
+  for (let n = 2; ; n++) if (!used(`${root}-${n}`)) return `${root}-${n}`;
+}
+
 export function runFfmpeg(ffmpeg: string, job: FfJob, cwd: string, onPct: (pct: number) => void, signal?: AbortSignal): Promise<void> {
   const script = path.join(cwd, `graph-${hashOf([job.output, job.filter]).slice(0, 10)}.txt`);
   fs.writeFileSync(script, job.filter, 'utf8');
@@ -150,6 +159,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
   }
 
   const files: string[] = [];
+  const base = req.preview ? '' : uniqueExportBase(o.reelsDir, project.name);
   let gi = 0;
   const totalGroups = groups.size;
   const report = (stage: RenderProgress['stage'], within: number, message: string) =>
@@ -194,7 +204,6 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
       fs.renameSync(tmp, job.output);
     }
 
-    const base = `${safeName(project.name)}_${stamp()}`;
     const out = req.preview ? path.join(workDir, `preview-${Date.now()}.mp4`) : path.join(o.reelsDir, `${base}_${f.id}.mp4`);
     const noMusicAudio = !req.preview && req.noMusicCopy && project.music ? path.join(workDir, `nomusic-${Date.now()}.m4a`) : undefined;
     const anyMic = clips.some((c) => c.useMic && c.hasMic);

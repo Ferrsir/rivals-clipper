@@ -399,7 +399,7 @@ function clipsPanel() {
         h('div', { class: 'st-tags' }, (c.reel.tags || []).slice(0, 4).join(' ')),
       ),
       h('button', { class: 'st-add', title: n ? `In the reel ${n === 1 ? 'once' : n + ' times'}. Add it again` : 'Add to the reel', onclick: () => {
-        change((p) => p.clips.push({ ...c.reel, uid: Math.random().toString(36).slice(2, 10) }), [renderLeft, renderStrip]);
+        change((p) => p.clips.push({ ...structuredClone(c.reel), uid: Math.random().toString(36).slice(2, 10) }), [renderLeft, renderStrip]);
       } }, '+'),
     );
     grid.append(card);
