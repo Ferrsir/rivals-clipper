@@ -68,8 +68,8 @@ interface KoItem {
   assist?: boolean;
 }
 
-/** Nobody respawns and gets KO'd by you again this fast, so the same name again is the same KO. */
-const SAME_VICTIM_MS = 8000;
+/** A KO stays in the list for a few seconds; the same name again that soon is the same KO seen twice (nobody respawns and dies to you again that fast). */
+const SAME_VICTIM_MS = 5000;
 
 interface FeedItem {
   id: number;

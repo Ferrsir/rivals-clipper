@@ -39,7 +39,7 @@ rows, and until then a kill-feed row alone can't tell your kill from your death 
 | VICTORY / DEFEAT | Match result | Yes |
 | The map label, top left | Map name, or the Practice Range | Yes |
 
-A KO-list name and a feed row within 1.5 s of each other are one KO, and the same name again within 8 s is the
+A KO-list name and a feed row within 1.5 s of each other are one KO, and the same name again within 5 s is the
 same KO shown twice. Each KO is reported with the time it showed
 on screen, and the clip reaches back by however long detection took, so clips start where they should.
 

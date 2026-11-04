@@ -329,8 +329,8 @@ test('the same name KO\'d twice within a few seconds is one KO shown twice', () 
   h.fusion.onOcr('ko', 1, words(['BALLADS1', 10]), 1200);
   h.ko(3500, 2);
   h.fusion.onOcr('ko', 2, words(['BALLADSI', 10]), 3700);
-  h.ko(15_000, 3);
-  h.fusion.onOcr('ko', 3, words(['BALLADS1', 10]), 15_200);
+  h.ko(12_000, 3);
+  h.fusion.onOcr('ko', 3, words(['BALLADS1', 10]), 12_200);
   assert.equal(h.kills().length, 2);
 });
 
