@@ -4,6 +4,7 @@
 import { api } from './api.js';
 import { clear, debounce, fileUrl, fmtTime, h, select, slider, toast, toggle } from './dom.js';
 import { TIMELINE_HEIGHT, clipHue, drawTimeline } from './timeline.js';
+import { PLATFORM_OF_FORMAT, formatOfFile, openAccounts, openFreeSearch, platformLabel, uploadRequest } from './share.js';
 
 const S = {
   init: null,
@@ -23,6 +24,10 @@ const S = {
   busy: {},
   safeZones: true,
   styleUndo: null,
+  publish: [],
+  uploads: [],
+  ideas: null,
+  ideaRequest: '',
 };
 let root;
 const E = {};
@@ -151,6 +156,8 @@ export async function mount(el) {
   }
   build();
   api.on('studio:render:progress', onProgress);
+  api.on('studio:publish:progress', onUploadProgress);
+  S.publish = await api.publish.status().catch(() => []);
   api.on('studio:music:progress', (m) => toast(root, m.message));
   api.on('studio:music:updated', (t) => {
     upsertTrack(t);
@@ -289,6 +296,7 @@ function renderTop() {
     h(
       'div',
       { class: 'st-menu' },
+      h('button', { title: 'Connect YouTube, TikTok and Instagram for uploading', onclick: () => openAccounts(root, S, () => (renderTop(), renderCenter())) }, `Accounts${S.publish.some((x) => x.connected) ? ` (${S.publish.filter((x) => x.connected).length})` : ''}`),
       h('button', { title: 'Duplicate this reel', onclick: async () => {
         if (saveSoon.pending()) saveSoon.flush();
         const d = await api.projects.duplicate(p.id);
@@ -315,11 +323,11 @@ function renderLeft() {
   const tabs = h(
     'div',
     { class: 'st-tabs' },
-    [['clips', `Clips (${S.library.length})`], ['music', `Music (${S.tracks.length})`]].map(([id, label]) =>
+    [['ideas', 'Ideas'], ['clips', `Clips (${S.library.length})`], ['music', `Music (${S.tracks.length})`]].map(([id, label]) =>
       h('button', { class: S.leftTab === id ? 'on' : '', onclick: () => ((S.leftTab = id), renderLeft()) }, label),
     ),
   );
-  clear(E.left, tabs, S.leftTab === 'clips' ? clipsPanel() : musicPanel());
+  clear(E.left, tabs, S.leftTab === 'clips' ? clipsPanel() : S.leftTab === 'ideas' ? ideasPanel() : musicPanel());
 }
 
 const thumbObserver = new IntersectionObserver(
@@ -407,6 +415,104 @@ function clipsPanel() {
   return h('div', { class: 'st-panel' }, controls, actions, grid);
 }
 
+// ---------- ideas ----------
+
+function ideasPanel() {
+  const f = fmt();
+  const ai = S.init.ai.signedIn;
+  const req = h('input', { placeholder: 'Your own idea (optional), e.g. "Hela carries"', maxlength: 300, value: S.ideaRequest, oninput: (e) => (S.ideaRequest = e.target.value) });
+  const getAi = () =>
+    guarded('ideas-ai', async () => {
+      S.ideas = await api.ideas.ai(f.id, S.ideaRequest);
+    }, null);
+  req.addEventListener('keydown', (e) => e.key === 'Enter' && ai && getAi());
+  const head = [
+    h('p', { class: 'st-note' }, `Reel ideas for ${f.label}, in the style of your reference edits: a hook card, a short story in captions and the best play on the drop. Each one picks clips from your library and the kind of music and picture to match.`),
+    h('div', { class: 'st-row' }, req),
+    h(
+      'div',
+      { class: 'st-row' },
+      h('button', { class: 'st-btn small primary', disabled: !ai || S.busy['ideas-ai'], title: ai ? 'Claude/ChatGPT writes 5 ideas from your clips' : 'Sign in under Settings, Account to use AI', onclick: getAi }, S.busy['ideas-ai'] ? 'Thinking… (up to a minute)' : 'Get AI ideas'),
+      h('button', { class: 'st-btn small', disabled: S.busy['ideas-quick'], title: 'Instant ideas from your clip tags, no AI needed', onclick: () => guarded('ideas-quick', async () => (S.ideas = await api.ideas.quick(f.id)), null) }, 'Quick ideas'),
+    ),
+  ];
+  const list = h('div', { class: 'st-ideas' });
+  if (!S.library.length) list.append(h('p', { class: 'st-empty' }, 'Record some clips first. Ideas are built from your own plays.'));
+  else if (!S.ideas) list.append(h('p', { class: 'st-empty' }, ai ? 'Press Get AI ideas, or Quick ideas for instant ones.' : 'Press Quick ideas. Sign in with Claude or ChatGPT (Settings) for more creative AI ideas.'));
+  else if (!S.ideas.length) list.append(h('p', { class: 'st-empty' }, 'No ideas from these clips yet. Clips with kills work best.'));
+  for (const idea of S.ideas ?? []) list.append(ideaCard(idea));
+  return h('div', { class: 'st-panel' }, head, list);
+}
+
+function ideaCard(idea) {
+  const styleName = S.init.styles.find((x) => x.id === idea.styleId)?.name ?? idea.styleId;
+  const track = idea.music.trackId ? trackOf(idea.music.trackId) : null;
+  const heroes = [...new Set(idea.clipIds.map((id) => S.library.find((c) => c.id === id)?.hero).filter(Boolean))];
+  const redraw = () => renderLeft();
+  return h(
+    'div',
+    { class: 'st-idea-card' },
+    h('div', { class: 'st-row' }, h('div', { class: 'st-track-title' }, idea.title), h('div', { class: 'st-spacer' }), h('span', { class: 'st-tagpill' }, idea.source === 'ai' ? 'AI' : 'Quick')),
+    idea.concept ? h('p', { class: 'st-idea-concept' }, idea.concept) : null,
+    idea.hook ? h('div', { class: 'st-idea-hook' }, idea.hook) : null,
+    idea.captions.length ? h('div', { class: 'st-clip-sub st-wrap' }, idea.captions.slice(0, 4).map((c) => `“${c}”`).join(' → ') + (idea.captions.length > 4 ? ' …' : '')) : null,
+    h('div', { class: 'st-clip-sub st-wrap' }, `${idea.clipIds.length} clip${idea.clipIds.length === 1 ? '' : 's'}${heroes.length ? ' · ' + heroes.slice(0, 3).join(', ') : ''} · ${styleName}`),
+    h(
+      'div',
+      { class: 'st-idea-row' },
+      h('span', { class: 'st-label' }, 'Music'),
+      h('span', { class: 'st-wrap' }, track ? `${track.title}${track.analysis ? ` · ${Math.round(track.analysis.bpm)} BPM` : ''}` : [idea.music.mood, idea.music.bpm ? `${idea.music.bpm[0]}–${idea.music.bpm[1]} BPM` : null].filter(Boolean).join(' · ') || 'Any'),
+      h('button', { class: 'st-link', onclick: () => openFreeSearch(root, { kind: 'audio', query: idea.music.search, onPick: (t) => {
+        upsertTrack(t);
+        idea.music.trackId = t.id;
+        toast(root, `Added "${t.title}" to your music`);
+        redraw();
+      } }) }, track ? 'Change' : 'Find music'),
+    ),
+    idea.hook
+      ? h(
+          'div',
+          { class: 'st-idea-row' },
+          h('span', { class: 'st-label' }, 'Picture'),
+          idea.image ? h('img', { class: 'st-idea-thumb', src: fileUrl(idea.image.file), alt: '' }) : h('span', { class: 'st-wrap muted' }, idea.imageIdea || 'Blurred frame of the first clip'),
+          h('button', { class: 'st-link', onclick: () => openFreeSearch(root, { kind: 'image', query: idea.imageSearch || idea.imageIdea, onPick: (img) => {
+            idea.image = img;
+            redraw();
+          } }) }, idea.image ? 'Change' : 'Find picture'),
+        )
+      : null,
+    idea.why ? h('p', { class: 'st-note' }, idea.why) : null,
+    h('button', { class: 'st-btn small primary', disabled: S.busy['apply-' + idea.id], onclick: () => guarded('apply-' + idea.id, async () => {
+      if (saveSoon.pending()) saveSoon.flush();
+      let proj = await api.ideas.apply(idea);
+      if (idea.image && proj.intro) {
+        proj.intro.image = idea.image.file;
+        proj.intro.imageCredit = idea.image.credit || undefined;
+        proj = await api.projects.save(proj);
+      }
+      S.projects.unshift({ id: proj.id, name: proj.name, updatedAt: proj.updatedAt, clips: proj.clips.length });
+      await openProject(proj.id);
+      S.leftTab = 'clips';
+      S.rightTab = 'text';
+      renderAll();
+    }, `Made "${idea.title}". Check the captions, then press Preview.`) }, S.busy['apply-' + idea.id] ? 'Making it…' : 'Make this reel'),
+  );
+}
+
+/** Credit lines the licences of the song and hook picture ask for. */
+function creditsFor(p) {
+  const parts = [];
+  const t = p.music ? trackOf(p.music.trackId) : null;
+  if (t?.credit) parts.push(`Music: ${t.credit}`);
+  if (p.intro?.imageCredit) parts.push(`Picture: ${p.intro.imageCredit}`);
+  return parts.join('\n');
+}
+
+/** Credit lines that aren't in the post caption yet. */
+function missingCredits(p) {
+  return creditsFor(p).split('\n').filter((line) => line && !(p.caption ?? '').includes(line)).join('\n');
+}
+
 function focusSearch() {
   const s = E.left.querySelector('input[type=search]');
   if (s) {
@@ -437,6 +543,13 @@ function musicPanel() {
         refreshSuggestions();
         if (added.length && !p.music) useTrack(added[0]);
       }, null) }, S.busy.import ? 'Adding…' : 'Add music'),
+      h('button', { class: 'st-btn small', title: 'Search Creative Commons songs you can use in videos', onclick: () => openFreeSearch(root, { kind: 'audio', query: 'phonk', onPick: (t) => {
+        upsertTrack(t);
+        refreshSuggestions();
+        if (!S.project.music) useTrack(t);
+        toast(root, `Added "${t.title}"${t.credit ? '. Its credit goes in your post caption' : ''}`);
+        renderLeft();
+      } }) }, 'Find free music'),
       h('button', { class: 'st-btn small ghost', onclick: () => api.openFolder('music') }, 'Open folder'),
     ),
     h('p', { class: 'st-note' }, f.music.note),
@@ -513,6 +626,7 @@ function musicPanel() {
           'div',
           { class: 'st-track-main' },
           h('div', { class: 'st-track-title' }, t.title, t.artist ? h('span', { class: 'muted' }, ` · ${t.artist}`) : null),
+          t.credit ? h('div', { class: 'st-clip-sub st-wrap', title: 'Put this in your post caption' }, `Credit: ${t.credit}`) : null,
           h('div', { class: 'st-clip-sub' }, a ? `${Math.round(a.bpm)} BPM · ${fmtTime(a.durationSec)} · energy ${x100(a.energy)}${a.drops.length ? ` · drop ${fmtTime(a.drops[0])}` : ''}` : t.analysisError ? `Couldn't read: ${t.analysisError}` : 'Finding the beat…'),
           select({ value: t.license, options: LICENSES, onChange: async (v) => {
             upsertTrack(await api.music.update(t.id, { license: v }));
@@ -630,7 +744,7 @@ function renderCenter() {
   const err = job?.stage === 'error' ? h('div', { class: 'st-error' }, h('b', {}, 'Render failed. '), job.error || '') : null;
   const wrap = h('div', { class: 'st-stage-wrap' }, stage);
   wrap.style.setProperty('--ar', String(ar));
-  clear(E.center, wrap, info, warn, err, done);
+  clear(E.center, wrap, info, warn, err, done, uploadsBox());
 }
 
 function exportDone(job) {
@@ -639,9 +753,90 @@ function exportDone(job) {
     'div',
     { class: 'st-done' },
     h('b', {}, 'Exported. '),
-    job.files.map((f) => h('div', {}, h('a', { href: '#', onclick: (e) => (e.preventDefault(), api.show(f)) }, f.split(/[\\/]/).pop()))),
+    job.files.map((f) => {
+      const { format, noMusic } = formatOfFile(f);
+      const platform = PLATFORM_OF_FORMAT[format];
+      const st = S.publish.find((x) => x.platform === platform);
+      return h(
+        'div',
+        { class: 'st-row st-done-row' },
+        h('a', { href: '#', onclick: (e) => (e.preventDefault(), api.show(f)) }, f.split(/[\\/]/).pop()),
+        h('div', { class: 'st-spacer' }),
+        st
+          ? st.connected
+            ? h('button', { class: 'st-btn small', disabled: S.uploads.some((u) => u.file === f && u.platform === platform && !['done', 'error'].includes(u.stage)), onclick: () => startUpload(S.project, f, platform) }, platform === 'tiktok' && st.tiktokMode !== 'direct' ? 'Send to TikTok drafts' : `Upload to ${st.label}`)
+            : h('button', { class: 'st-btn small ghost', title: `Opens ${st.label}'s upload page, shows the file and copies your caption`, onclick: () => postByHand(f, st) }, `Post on ${st.label}`)
+          : null,
+        noMusic ? h('span', { class: 'st-note' }, 'no music') : null,
+      );
+    }),
     job.files.some((f) => f.includes('_nomusic')) && S.project.music ? h('p', { class: 'st-note' }, `For the no-music copy: add "${S.project.music.title}" in the app and set the sound to start at ${fmtTime(startAt, true)}.`) : null,
+    h('div', { class: 'st-row' }, h('span', { class: 'st-note st-wrap' }, `In ${S.init.paths.reels}`), h('div', { class: 'st-spacer' }), h('button', { class: 'st-btn small ghost', onclick: () => api.openFolder('reels') }, 'Open folder')),
   );
+}
+
+function uploadsBox() {
+  if (!S.uploads.length) return null;
+  return h(
+    'div',
+    { class: 'st-uploads' },
+    S.uploads.slice(-6).map((u) =>
+      h(
+        'div',
+        { class: 'st-upload ' + u.stage },
+        h('div', { class: 'st-row' }, h('b', {}, platformLabel(u.platform)), h('span', { class: 'st-clip-sub' }, u.file.split(/[\\/]/).pop()), h('div', { class: 'st-spacer' }), u.url ? h('a', { href: '#', onclick: (e) => (e.preventDefault(), api.openExternal(u.url)) }, 'Open') : null),
+        u.stage === 'error' ? h('div', { class: 'st-warn' }, u.error || u.message) : h('div', { class: 'st-clip-sub' }, u.message),
+        ['uploading', 'processing'].includes(u.stage) ? h('div', { class: 'st-bar' }, h('div', { style: { width: pct(u.pct || 0) } })) : null,
+      ),
+    ),
+  );
+}
+
+async function startUpload(project, file, platform) {
+  const st = S.publish.find((x) => x.platform === platform);
+  const t = project.music ? trackOf(project.music.trackId) : null;
+  if (platform !== 'tiktok' && t && !['own', 'royalty-free'].includes(t.license) && !file.includes('_nomusic')) {
+    if (!confirm(`"${t.title}" isn't marked as royalty-free or yours, so ${st?.label ?? platform} may mute or block the upload. Upload anyway?`)) return;
+  }
+  try {
+    const { uploadId } = await api.publish.upload(uploadRequest(project, file, platform, missingCredits(project)));
+    S.uploads.push({ uploadId, platform, file, stage: 'uploading', pct: 0, message: 'Starting upload' });
+  } catch (err) {
+    toast(root, err.message, 'error', 8000);
+  }
+  renderCenter();
+}
+
+async function autoUploadAfterExport(job, files) {
+  const proj = job.snapshot;
+  for (const platform of job.autoUpload) {
+    const mine = files.filter((f) => PLATFORM_OF_FORMAT[formatOfFile(f).format] === platform);
+    if (!mine.length) {
+      toast(root, `Nothing to upload to ${platformLabel(platform)}: export its format too.`, 'warn', 7000);
+      continue;
+    }
+    const st = S.publish.find((x) => x.platform === platform);
+    // TikTok drafts: the no-music copy, so you can add the official sound in the app.
+    const pick = platform === 'tiktok' && st?.tiktokMode !== 'direct' ? mine.find((f) => f.includes('_nomusic')) ?? mine[0] : mine.find((f) => !f.includes('_nomusic')) ?? mine[0];
+    await startUpload(proj, pick, platform);
+  }
+}
+
+function onUploadProgress(p) {
+  const u = S.uploads.find((x) => x.uploadId === p.uploadId);
+  if (!u) return;
+  Object.assign(u, p);
+  if (p.stage === 'done') toast(root, p.message);
+  if (p.stage === 'error') toast(root, `${platformLabel(p.platform)}: ${p.error}`, 'error', 9000);
+  renderCenter();
+}
+
+function postByHand(file, st) {
+  api.show(file);
+  const caption = [S.project.caption?.trim(), missingCredits(S.project)].filter(Boolean).join('\n\n');
+  if (caption) navigator.clipboard?.writeText(caption).catch(() => undefined);
+  api.openExternal(st.uploadPageUrl);
+  toast(root, `Opened ${st.label}. Drag the highlighted file in${caption ? ' and paste your caption (it\'s copied)' : ''}.`, 'info', 8000);
 }
 
 // ---------- right: inspector ----------
@@ -947,10 +1142,14 @@ function textPanel() {
             { class: 'st-row' },
             h('button', { class: 'st-btn small', onclick: async () => {
               const img = await api.pickImage();
-              if (img) change((pr) => (pr.intro.image = img), [renderRight]);
+              if (img) change((pr) => ((pr.intro.image = img), delete pr.intro.imageCredit), [renderRight]);
             } }, intro.image ? 'Change image' : 'Pick image'),
+            h('button', { class: 'st-btn small', title: 'Search free Creative Commons pictures', onclick: () => openFreeSearch(root, { kind: 'image', query: intro.text, onPick: (img) => change((pr) => {
+              pr.intro.image = img.file;
+              pr.intro.imageCredit = img.credit || undefined;
+            }, [renderRight]) }) }, 'Find a picture'),
             intro.image ? h('span', { class: 'st-note' }, intro.image.split(/[\\/]/).pop()) : h('span', { class: 'st-note' }, 'No image: uses a blurred frame of your first clip'),
-            intro.image ? h('button', { class: 'st-x', onclick: () => change((pr) => delete pr.intro.image, [renderRight]) }, '×') : null,
+            intro.image ? h('button', { class: 'st-x', onclick: () => change((pr) => (delete pr.intro.image, delete pr.intro.imageCredit), [renderRight]) }, '×') : null,
           ),
           slider({ label: 'Length', min: 1, max: 12, step: 0.5, value: intro.seconds, format: (v) => `about ${v} s`, onInput: (v) => change((pr) => (pr.intro.seconds = v)), hint: 'Snaps to the beat, ideally ending on the drop' }),
         ]
@@ -972,6 +1171,15 @@ function textPanel() {
     toggle({ label: 'ALL CAPS', checked: st.captions.uppercase, onChange: (v) => change((pr) => (pr.style.captions.uppercase = v)) }),
     h('h3', {}, 'Post caption'),
     post,
+    creditsFor(p)
+      ? h(
+          'div',
+          { class: 'st-credit' },
+          h('div', { class: 'st-note' }, 'Your song or picture needs a credit in the post:'),
+          creditsFor(p).split('\n').map((line) => h('div', { class: 'st-clip-sub st-wrap' }, line)),
+          creditsFor(p).split('\n').every((line) => (p.caption ?? '').includes(line)) ? h('span', { class: 'st-good' }, 'In the caption') : h('button', { class: 'st-btn small', onclick: () => change((pr) => (pr.caption = [pr.caption?.trim(), creditsFor(pr)].filter(Boolean).join('\n\n')), [renderRight]) }, 'Add to caption'),
+        )
+      : null,
     h(
       'div',
       { class: 'st-row' },
@@ -1065,12 +1273,38 @@ function drawTL(playhead) {
 
 // ---------- rendering ----------
 
+/** "Saved to <folder>" with buttons to pick another folder on this PC, open it, or go back to the default. */
+function exportFolderRow() {
+  const label = h('span', { class: 'st-wrap' }, S.init.paths.reels);
+  const isDefault = () => /[\\/]exports[\\/]reels$/i.test(S.init.paths.reels) && S.init.paths.reels.startsWith(S.init.paths.root);
+  const reset = h('button', { class: 'st-btn small ghost', hidden: isDefault(), onclick: async () => update(await api.exportDir.reset()) }, 'Use default');
+  const update = (dir) => {
+    S.init.paths.reels = dir;
+    label.textContent = dir;
+    reset.hidden = isDefault();
+  };
+  return h(
+    'div',
+    { class: 'st-export-folder' },
+    h('div', { class: 'st-note' }, 'Saved to ', label),
+    h(
+      'div',
+      { class: 'st-row' },
+      h('button', { class: 'st-btn small', onclick: async () => update(await api.exportDir.choose()) }, 'Change folder'),
+      h('button', { class: 'st-btn small ghost', onclick: () => api.openFolder('reels') }, 'Open folder'),
+      reset,
+    ),
+  );
+}
+
 async function startRender(req) {
   saveSoon.flush(S.project);
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
   try {
-    const { jobId } = await api.render(S.project, request);
-    S.job = { jobId, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+    // Uploads use the reel as it was rendered, even if it is edited while the export runs.
+    const snapshot = structuredClone(S.project);
+    const { jobId } = await api.render(snapshot, request);
+    S.job = { jobId, autoUpload: req.autoUpload ?? [], snapshot, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
   } catch (err) {
     toast(root, err.message, 'error', 7000);
   }
@@ -1085,6 +1319,7 @@ function onProgress(p) {
     // The job belongs to the reel it was started from, which may not be the one open now.
     // The main process has already recorded the export on that reel's history.
     const here = S.job.projectId === S.project.id;
+    if (!S.job.preview && S.job.autoUpload?.length && p.files?.length) autoUploadAfterExport(S.job, p.files);
     if (S.job.preview) {
       if (here && p.files?.[0]) S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
     } else if (here) {
@@ -1110,6 +1345,8 @@ function openExport() {
   const gpuOk = S.init.ffmpeg.gpuEncoders.length > 0;
   let noMusic = !!p.music && fmt().music.inAppLibrary;
   let gpu = false;
+  const autoUpload = new Set();
+  const connected = S.publish.filter((x) => x.connected);
   const close = () => modal.remove();
   const rows = S.init.formats.map((f) => {
     const warn = p.music && t && !['own', 'royalty-free'].includes(t.license) && f.platform === 'YouTube';
@@ -1127,12 +1364,19 @@ function openExport() {
       'div',
       { class: 'st-dialog' },
       h('h2', {}, 'Export'),
-      h('p', { class: 'st-note' }, `Saved to ${S.init.paths.reels}`),
+      exportFolderRow(),
       rows,
       h('hr'),
       p.music ? toggle({ label: 'Also save a copy without music', checked: noMusic, onChange: (v) => (noMusic = v), hint: 'Add the same song in TikTok or Instagram for full reach and no mute' }) : null,
       fmt().fpsOptions.length > 1
         ? select({ label: `Frame rate for ${fmt().label}`, value: p.fps, options: fmt().fpsOptions.map((x) => [x, `${x} fps`]), onChange: (v) => change((pr) => (pr.fps = Number(v))) })
+        : null,
+      h('hr'),
+      connected.length
+        ? [
+            h('div', { class: 'st-label' }, 'Upload when it\'s done'),
+            connected.map((st) => toggle({ label: st.platform === 'tiktok' && st.tiktokMode !== 'direct' ? `Send to TikTok drafts (${st.account ?? 'TikTok'})` : `Upload to ${st.label} (${st.account ?? st.label})`, checked: false, onChange: (v) => (v ? autoUpload.add(st.platform) : autoUpload.delete(st.platform)), hint: 'Uses the matching export: TikTok for TikTok, Reels for Instagram, Shorts or YouTube for YouTube' })),
+          ]
         : null,
       toggle({ label: gpuOk ? `Faster export on the graphics card (${S.init.ffmpeg.gpuEncoders[0].replace('h264_', '').toUpperCase()})` : 'Faster export on the graphics card (not available)', checked: gpu, disabled: !gpuOk, onChange: (v) => (gpu = v) }),
       h(
@@ -1142,7 +1386,7 @@ function openExport() {
         h('button', { class: 'st-btn primary', onclick: () => {
           if (!chosen.size) return;
           close();
-          startRender({ preview: false, formats: [...chosen], noMusicCopy: noMusic, gpu });
+          startRender({ preview: false, formats: [...chosen], noMusicCopy: noMusic, gpu, autoUpload: [...autoUpload] });
         } }, 'Export'),
       ),
     ),

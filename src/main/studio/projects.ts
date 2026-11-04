@@ -119,7 +119,7 @@ export function sanitizeProject(p: any): ReelProject {
     : [];
   const intro: IntroCard | null =
     p.intro && typeof p.intro === 'object'
-      ? { image: typeof p.intro.image === 'string' && p.intro.image ? p.intro.image : undefined, text: String(p.intro.text ?? '').slice(0, 120), seconds: num(p.intro.seconds, 1, 15, 4) }
+      ? { image: typeof p.intro.image === 'string' && p.intro.image ? p.intro.image : undefined, imageCredit: typeof p.intro.imageCredit === 'string' && p.intro.imageCredit ? p.intro.imageCredit.slice(0, 300) : undefined, text: String(p.intro.text ?? '').slice(0, 120), seconds: num(p.intro.seconds, 1, 15, 4) }
       : null;
   const music =
     p.music && typeof p.music.file === 'string' && p.music.file

@@ -11,7 +11,7 @@ import { clipFileName, sidecarPath, updateSidecar, writeSidecar } from './clip-s
 import { Library, type ClipQuery } from './library';
 import { EventLog } from './event-log';
 import { exportClip } from './ffmpeg';
-import { MatchState, parseMaybeJson } from './match-state';
+import { MatchState, isPracticeMode, parseMaybeJson } from './match-state';
 import { GameProcess, Recorder } from './recorder';
 import { DEFAULT_SETTINGS, Settings, ensureFolders, loadSettings, paths, saveSettings } from './settings';
 import { StreakTracker } from './streak';
@@ -161,10 +161,19 @@ function onClipSaved(video: { filePath?: string; duration: number; startTimeEpoc
   pushClip(saved);
 }
 
+let practiceNoticeShown = false;
+
 function handleKill(now: number, total?: number) {
-  const action = streak.onKill(now);
-  if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
-  else if (action.type === 'extend') scheduleStop(action.stopAt, now);
+  if (!settings.clipPractice && isPracticeMode(state.context)) {
+    log.write('skip', { reason: 'practice', context: state.context });
+    if (!practiceNoticeShown) status('Practice Range: auto-clips are off here (manual hotkey still works)');
+    practiceNoticeShown = true;
+  } else {
+    const action = streak.onKill(now);
+    if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
+    else if (action.type === 'extend') scheduleStop(action.stopAt, now);
+  }
+  // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
   setTimeout(() => pending?.events.push(state.describeKill(total, now)), 400);
 }
@@ -201,6 +210,7 @@ function onGameEvent(feature: string, key: string, value: unknown) {
     case 'match_start':
       state.onMatchStart();
       matchClips = [];
+      practiceNoticeShown = false;
       status('Match started');
       break;
     case 'round_start':

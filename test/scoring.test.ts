@@ -57,3 +57,30 @@ test('Windows args with spaces stay one argument', () => {
   assert.equal(quoteWinArg('say "hi"'), '"say ""hi"""');
   assert.equal(quoteWinArg(''), '""');
 });
+
+import { isPracticeMode } from '../src/main/match-state';
+import { accountOf } from '../src/main/ai-auth';
+
+test('Practice Range is detected from GEP game_type, mode or map', () => {
+  assert.equal(isPracticeMode({ gameType: 'Practice' }), true);
+  assert.equal(isPracticeMode({ gameMode: 'Practice Range' }), true);
+  assert.equal(isPracticeMode({ map: 'Practice Range' }), true);
+  assert.equal(isPracticeMode({ gameType: 'Quick match', gameMode: 'Convoy' }), false);
+  assert.equal(isPracticeMode({ gameType: 'Competitive' }), false);
+  assert.equal(isPracticeMode({}), false);
+});
+
+test('match state picks up game_type so practice kills can be skipped', () => {
+  const s = new MatchState();
+  s.onInfoUpdate('match_info', 'game_type', 'Practice', 0);
+  assert.equal(isPracticeMode(s.context), true);
+  s.onMatchStart();
+  s.onInfoUpdate('match_info', 'game_type', 'Competitive', 0);
+  assert.equal(isPracticeMode(s.context), false);
+});
+
+test('signed-in account label is read from CLI status output', () => {
+  assert.equal(accountOf(JSON.stringify({ loggedIn: true, email: 'f@example.com' })), 'f@example.com');
+  assert.equal(accountOf(JSON.stringify({ loggedIn: true })), undefined);
+  assert.equal(accountOf('Logged in using ChatGPT (f@example.com)'), 'f@example.com');
+});
