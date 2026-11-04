@@ -25,7 +25,7 @@ import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 import { findFfmpeg } from './studio/ffmpeg-bin';
 import { AiTagger, untagged } from './ai-tagger';
-import { installGracefulShutdown } from './shutdown';
+import { installGracefulShutdown, sendIfOpen } from './shutdown';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -116,7 +116,7 @@ const tagger = new AiTagger({
     }
   },
   save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
-  canRun: () => !inMatch && !pending,
+  canRun: () => !quitting && !inMatch && !pending,
   enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
   onTagged: (clip) => {
     pushClip(clip);
@@ -168,11 +168,11 @@ function statusPayload(extra?: unknown) {
 function status(msg: string, extra?: unknown) {
   lastStatus = msg;
   log?.write('status', { msg, extra });
-  win?.webContents.send('status', statusPayload(extra));
+  sendIfOpen(win, 'status', statusPayload(extra));
 }
 
 function pushClip(clip: ClipSidecar) {
-  win?.webContents.send('clip-saved', clip);
+  sendIfOpen(win, 'clip-saved', clip);
 }
 
 // ---------- storage root (F: drive by default) ----------
@@ -508,6 +508,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   void win.loadFile(path.join(__dirname, '../../renderer/index.html'));
+  win.once('closed', () => { win = undefined; });
 }
 
 function setupIpc() {
@@ -581,7 +582,7 @@ function setupIpc() {
   }));
   ipcMain.handle('ai:install', (_e, provider: AiProvider) => openInstaller(provider));
   ipcMain.handle('ai:login', async (_e, provider: AiProvider) => {
-    const result = await login(provider, (s) => win?.webContents.send('ai-status', s));
+    const result = await login(provider, s => sendIfOpen(win, 'ai-status', s));
     if (result.loggedIn) {
       settings = { ...settings, aiProvider: provider, onboarded: true };
       saveSettings(settings);
