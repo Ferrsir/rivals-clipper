@@ -165,11 +165,12 @@ function handleKill(now: number, total?: number) {
     log.write('skip', { reason: 'practice', context: state.context });
     if (!practiceNoticeShown) status('Practice Range: auto-clips are off here (manual hotkey still works)');
     practiceNoticeShown = true;
-    return;
+  } else {
+    const action = streak.onKill(now);
+    if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
+    else if (action.type === 'extend') scheduleStop(action.stopAt, now);
   }
-  const action = streak.onKill(now);
-  if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
-  else if (action.type === 'extend') scheduleStop(action.stopAt, now);
+  // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
   setTimeout(() => pending?.events.push(state.describeKill(total, now)), 400);
 }
