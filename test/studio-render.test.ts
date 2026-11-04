@@ -196,3 +196,34 @@ test('a punched-in, off-centre crop and a muted clip still render', { skip, time
   const tl = planFor(p, analysis, 30, FORMATS.youtube.maxSeconds);
   checkVideo(files[0], outputSize(FORMATS.youtube, true), tl.duration);
 });
+
+test('cancelling during final assembly leaves no completed-looking or partial MP4', { skip, timeout: 240_000 }, async () => {
+  const p = project('raw', { music: false });
+  p.clips = p.clips.slice(0, 1);
+  const ac = new AbortController();
+  const studioDir = path.join(dir, 'cancel-studio');
+  const reelsDir = path.join(dir, 'cancel-reels');
+  let assembling = false;
+  await assert.rejects(renderProject({
+    ffmpeg: FF!, project: p, analysis: null,
+    req: { preview: false, formats: ['tiktok'], noMusicCopy: false, gpu: false },
+    studioDir, reelsDir, encoder: { name: 'libx264' }, signal: ac.signal,
+    onProgress: progress => { if (progress.stage === 'assemble') { assembling = true; ac.abort(); } },
+  }), /cancelled/);
+  assert.equal(assembling, true);
+  assert.deepEqual(fs.readdirSync(reelsDir), []);
+});
+
+test('a cancelled render never starts a cached or new export', { skip }, async () => {
+  const p = project('raw', { music: false });
+  const ac = new AbortController();
+  ac.abort();
+  const reelsDir = path.join(dir, 'pre-cancelled-reels');
+  await assert.rejects(renderProject({
+    ffmpeg: FF!, project: p, analysis: null,
+    req: { preview: false, formats: ['tiktok'], noMusicCopy: false, gpu: false },
+    studioDir: path.join(dir, 'pre-cancelled-studio'), reelsDir,
+    encoder: { name: 'libx264' }, signal: ac.signal, onProgress: () => assert.fail('render started after cancellation'),
+  }), /cancelled/);
+  assert.equal(fs.existsSync(reelsDir), false);
+});
