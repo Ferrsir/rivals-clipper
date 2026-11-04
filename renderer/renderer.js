@@ -2,7 +2,7 @@
 const $ = (id) => document.getElementById(id);
 let clips = [];
 
-const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
+const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
 
 function renderStatus(s) {
   const bits = [s.msg];
@@ -158,7 +158,8 @@ function renderProviderCards(container, statuses, compact) {
     const statusEl = card.querySelector('.pstatus');
     const btn = card.querySelector('.act');
     const active = ai.provider === p && statuses[p].loggedIn;
-    statusEl.textContent = active ? 'Signed in, active.' : st.text;
+    const acct = statuses[p].account ? ` (${statuses[p].account})` : '';
+    statusEl.textContent = active ? `Signed in${acct}, active. Uses the ${CLI[p]} login on this PC.` : st.text;
     btn.textContent = active ? 'Active' : st.action;
     btn.disabled = active;
     btn.onclick = () => doAction(p, st.kind, btn, statusEl);
@@ -184,8 +185,18 @@ async function refreshAi() {
   renderProviderCards($('signin'), ai, false);
   renderProviderCards($('accountList'), ai, true);
   const active = ai.provider !== 'none' && ai[ai.provider]?.loggedIn ? LABEL[ai.provider] : null;
-  $('accountBadge').textContent = active ? `Signed in: ${active}` : 'Not signed in';
+  const acct = active && ai[ai.provider].account ? ` (${ai[ai.provider].account})` : '';
+  $('accountBadge').textContent = active ? `Signed in: ${active}${acct}` : 'Not signed in';
   return ai;
+}
+
+function showAutoSigninNotice(provider, st) {
+  const who = st.account ? ` as ${st.account}` : '';
+  const el = $('autoSigninNotice');
+  el.innerHTML = `Signed in automatically with <b>${LABEL[provider]}</b>${who}, using the ${CLI[provider]} login already on this PC. <button class="link" id="openAccount">Change in Settings</button> <button class="link" id="dismissNotice">Dismiss</button>`;
+  el.classList.remove('hidden');
+  $('openAccount').onclick = () => { showTab('settings'); el.classList.add('hidden'); };
+  $('dismissNotice').onclick = () => el.classList.add('hidden');
 }
 
 function enterApp() {
@@ -206,10 +217,12 @@ $('skipSignin').addEventListener('click', async () => {
   const signedIn = s.provider !== 'none' && s[s.provider]?.loggedIn;
   if (s.onboarded && (signedIn || s.provider === 'none')) enterApp();
   else if (!s.onboarded && (s.claude.loggedIn || s.codex.loggedIn)) {
-    // Already signed in from before: pick it automatically ("logs you in" on open).
-    await clipper.ai.use(s.claude.loggedIn ? 'claude' : 'codex');
+    // Already signed in from before: pick it automatically ("logs you in" on open), and say so.
+    const picked = s.claude.loggedIn ? 'claude' : 'codex';
+    await clipper.ai.use(picked);
     await refreshAi();
     enterApp();
+    showAutoSigninNotice(picked, s[picked]);
   } else $('signin').classList.remove('hidden');
 
   renderStatus(await clipper.status());

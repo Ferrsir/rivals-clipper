@@ -47,10 +47,28 @@ export const api = {
     postCaption: (project) => call('studio:ai:postCaption', project),
     pickClips: (project, seconds) => call('studio:ai:pickClips', project, seconds),
   },
+  ideas: {
+    quick: (format) => call('studio:ideas:quick', format),
+    ai: (format, request) => call('studio:ideas:ai', format, request),
+    apply: (idea) => call('studio:ideas:apply', idea),
+  },
+  free: {
+    search: (kind, q) => call('studio:free:search', kind, q),
+    downloadMusic: (item) => call('studio:free:downloadMusic', item),
+    downloadImage: (item) => call('studio:free:downloadImage', item),
+  },
+  publish: {
+    status: () => call('studio:publish:status'),
+    configure: (platform, cfg) => call('studio:publish:configure', platform, cfg),
+    connect: (platform) => call('studio:publish:connect', platform),
+    disconnect: (platform, forget) => call('studio:publish:disconnect', platform, forget),
+    upload: (req) => call('studio:publish:upload', req),
+  },
   pickImage: () => call('studio:pickImage'),
   show: (file) => call('studio:show', file),
   open: (file) => call('studio:open', file),
   openFolder: (which) => call('studio:openFolder', which),
+  exportDir: { choose: () => call('studio:exportDir:choose'), reset: () => call('studio:exportDir:reset') },
   openExternal: (url) => call('studio:openExternal', url),
   on: (ch, cb) => bridge().on(ch, cb),
 };
