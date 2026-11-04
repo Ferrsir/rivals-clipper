@@ -80,6 +80,10 @@ every 30 seconds. An unexpected recorder exit uses the same recovery path and re
 after the replay buffer is ready, so resolution changes get a fresh HUD layout. Closing the game,
 switching engines or quitting cancels pending recovery.
 
+A recorder process that stays alive but emits no encoded video for 15 seconds is also restarted.
+The check uses a monotonic clock and runs every two seconds. Any footage already buffered is saved
+through the ordinary interrupted-clip path; footage absent during the stall cannot be recovered.
+
 ## Cost while you play
 
 Measured, not guessed:
