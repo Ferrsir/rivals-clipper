@@ -198,6 +198,8 @@ export interface ReelClip {
   preserveKillFeed?: boolean;
   followCharacter?: boolean;
   cropTrack?: Array<{t:number;x:number}>;
+  /** Footage you dropped into the Studio yourself (not from the clip library). */
+  external?: boolean;
   /** Horizontal centre of the vertical crop, 0 = left edge, 1 = right edge. */
   cropX: number;
   /** Vertical centre of the crop, used when cropZoom > 1. */
@@ -242,6 +244,59 @@ export interface ReelProject {
   /** Post caption and hashtags for the upload. */
   caption?: string;
   lastExports?: Array<{ file: string; format: FormatId; at: number }>;
+  /** Pictures laid over the footage, e.g. a face swap that follows someone's face. */
+  overlays?: ImageOverlay[];
+  /** Subtitles tied to moments inside a clip, so they stay on the right words when the clip is retimed. */
+  subtitles?: ClipSubtitle[];
+  /** Your own videos and pictures that this project can use. */
+  assets?: MediaAsset[];
+}
+
+/** A video or picture you dropped into the Studio. */
+export interface MediaAsset {
+  id: string;
+  kind: 'video' | 'image';
+  file: string;
+  name: string;
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  hasAudio?: boolean;
+}
+
+/** Positions are fractions of the clip's full source frame; times are seconds inside the clip. */
+export interface OverlayKey {
+  t: number;
+  x: number;
+  y: number;
+  size: number;
+}
+
+export interface ImageOverlay {
+  id: string;
+  /** Image file (one of the project's assets). */
+  image: string;
+  /** Which clip it sits on. */
+  clipUid: string;
+  /** Source seconds inside that clip. */
+  from: number;
+  to: number;
+  /** face: follow the face the AI located in the frames. fixed: stay at x/y. */
+  anchor: 'face' | 'fixed';
+  /** Centre and width, fractions of the source frame. */
+  x: number;
+  y: number;
+  size: number;
+  shape: 'circle' | 'square';
+  track?: OverlayKey[];
+}
+
+export interface ClipSubtitle {
+  clipUid: string;
+  /** Source seconds inside the clip. */
+  from: number;
+  to: number;
+  text: string;
 }
 
 export interface OutroText {
@@ -395,6 +450,11 @@ export interface ReelIdea {
     search: string;
   };
   postCaption?: string;
+  /** Pictures over clips. onClip is a library clip id or "asset:<id>". */
+  overlays?: Array<{ assetId: string; onClip: string; from: number; to: number; anchor: 'face' | 'fixed'; x: number; y: number; size: number; shape?: 'circle' | 'square' }>;
+  subtitles?: Array<{ onClip: string; from: number; to: number; text: string }>;
+  /** Your own media the plan may use; clipIds can include "asset:<id>" for your videos. */
+  assets?: MediaAsset[];
   /** Why this would do well. */
   why: string;
   source: 'ai' | 'quick';

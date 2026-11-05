@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../../shared/types';
-import type { CaptionLine, FormatId, IntroCard, MusicTrack, ReelClip, ReelIdea, ReelProject } from '../../shared/studio';
+import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
 
@@ -54,6 +54,10 @@ export function reconcileProjectSources(project: ReelProject, library: ClipSidec
   const byFile = new Map(library.map(c => [path.resolve(c.videoFile), c]));
   const warnings = new Set(project.sourceWarnings ?? []);
   const clips = project.clips.map(clip => {
+    if (clip.external) {
+      if (!fs.existsSync(clip.videoFile)) warnings.add(`Your clip is missing: ${path.basename(clip.videoFile)}. Add it again or remove it.`);
+      return clip;
+    }
     const source = byFile.get(path.resolve(clip.videoFile));
     if (!source) {
       warnings.add(`Source unavailable in the clip library: ${path.basename(clip.videoFile)}. Replace or remove this clip before rendering.`);
@@ -74,7 +78,7 @@ export function reconcileProjectSources(project: ReelProject, library: ClipSidec
 
 export function createProject(opts: { name?: string; format?: FormatId; styleId?: string } = {}): ReelProject {
   const format = getFormat(opts.format ?? 'tiktok');
-  const style = getStyle(opts.styleId ?? 'story');
+  const style = getStyle(opts.styleId ?? 'montage');
   const now = Date.now();
   return {
     version: 1,
@@ -95,14 +99,56 @@ export function createProject(opts: { name?: string; format?: FormatId; styleId?
 }
 
 /** Apply an AI edit plan to trusted library sources, never to paths supplied by the model. */
+/** A video you dropped into the Studio, as a reel clip. It has no kill markers, so it is trimmed to the beat. */
+export function externalClip(a: MediaAsset): ReelClip {
+  const dur = Math.max(0.5, a.durationSec || 5);
+  return {
+    uid: newId(),
+    clipId: `asset:${a.id}`,
+    videoFile: a.file,
+    external: true,
+    kills: 0,
+    score: 0,
+    tags: ['your clip'],
+    durationSec: dur,
+    width: a.width || 0,
+    height: a.height || 0,
+    fps: 30,
+    hasMic: false,
+    hits: [],
+    in: 0,
+    out: dur,
+    useMic: false,
+    preserveKillFeed: false,
+    followCharacter: false,
+    cropX: 0.5,
+    cropY: 0.5,
+    cropZoom: 1,
+  };
+}
+
+/** Apply an AI edit plan to trusted library sources, never to paths supplied by the model. */
 export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: MusicTrack[]): ReelProject {
   if (!idea || !Array.isArray(idea.clipIds)) throw new Error('Not an edit plan.');
   const byId = new Map(library.map(c => [c.id, c]));
+  const assets = sanitizeAssets(idea.assets).filter(a => fs.existsSync(a.file));
+  const assetById = new Map(assets.map(a => [a.id, a]));
   const used = new Set<string>();
-  const clips = idea.clipIds.map(id => {
-    const source = byId.get(id);
-    if (!source || used.has(id)) throw new Error('The edit plan selects an unavailable or repeated clip.');
+  const uidFor = new Map<string, string>();
+  const clips: ReelClip[] = [];
+  for (const id of idea.clipIds) {
+    if (used.has(id)) throw new Error('The edit plan selects a repeated clip.');
     used.add(id);
+    if (id.startsWith('asset:')) {
+      const asset = assetById.get(id.slice(6));
+      if (!asset || asset.kind !== 'video') throw new Error('The edit plan uses one of your files that is not a video or is missing.');
+      const clip = externalClip(asset);
+      uidFor.set(id, clip.uid);
+      clips.push(clip);
+      continue;
+    }
+    const source = byId.get(id);
+    if (!source) throw new Error('The edit plan selects an unavailable clip.');
     const clip = reelClipFromSidecar(source);
     const edit = idea.clipEdits?.find(e => e.clipId === id);
     if (edit) {
@@ -111,13 +157,21 @@ export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: 
       clip.in = edit.in;
       clip.out = Math.min(edit.out, clip.durationSec);
     }
-    return clip;
-  });
+    uidFor.set(id, clip.uid);
+    clips.push(clip);
+  }
   if (!clips.length) throw new Error('The edit plan contains no clips.');
   const project = createProject({name:idea.title, format:idea.format, styleId:idea.styleId});
   project.clips = clips;
+  project.assets = assets;
   project.targetSeconds = idea.targetSeconds;
   project.caption = idea.postCaption;
+  project.overlays = sanitizeOverlays((idea.overlays ?? []).map(o => {
+    const image = assetById.get(o.assetId.replace(/^asset:/, ''));
+    const clipUid = uidFor.get(o.onClip);
+    return image?.kind === 'image' && clipUid ? { ...o, image: image.file, clipUid } : null;
+  }));
+  project.subtitles = sanitizeSubtitles((idea.subtitles ?? []).map(t => ({ ...t, clipUid: uidFor.get(t.onClip) })));
   const track = tracks.find(t => t.id === idea.music?.trackId);
   if (track) {
     const start = idea.music.start ?? 'auto';
@@ -161,8 +215,11 @@ function sanitizeClip(c: any): ReelClip | null {
     width: num(c.width, 0, 10000, 0),
     height: num(c.height, 0, 10000, 0),
     fps: num(c.fps, 1, 480, 60),
-    preserveKillFeed: c.preserveKillFeed !== false,
-    followCharacter: c.followCharacter !== false,
+    external: c.external === true || undefined,
+    // Your own footage may not be Marvel Rivals, so it only gets the kill-feed box when asked.
+    preserveKillFeed: c.external === true ? c.preserveKillFeed === true : c.preserveKillFeed !== false,
+    // The game camera keeps your hero centred, so a centred crop is the default. Tracking is opt-in.
+    followCharacter: c.followCharacter === true,
     hasMic: !!c.hasMic,
     hits: Array.isArray(c.hits) ? c.hits.map(Number).filter((h: number) => Number.isFinite(h) && h >= 0 && h <= dur).sort((a: number, b: number) => a - b).slice(0, 40) : [],
     in: inn,
@@ -181,7 +238,7 @@ export function sanitizeProject(p: any): ReelProject {
   if (!p || typeof p !== 'object') return base;
   const format = FORMATS[p.format as FormatId] ? (p.format as FormatId) : base.format;
   const f = getFormat(format);
-  const style = sanitizeStyle(p.style, getStyle(typeof p.style?.id === 'string' ? p.style.id : 'story'));
+  const style = sanitizeStyle(p.style, getStyle(typeof p.style?.id === 'string' ? p.style.id : 'montage'));
   const captions: CaptionLine[] = Array.isArray(p.captions)
     ? p.captions
         .filter((c: any) => c && typeof c.text === 'string')
@@ -228,7 +285,80 @@ export function sanitizeProject(p: any): ReelProject {
         : null,
     caption: typeof p.caption === 'string' ? p.caption.slice(0, 2200) : undefined,
     lastExports: Array.isArray(p.lastExports) ? p.lastExports.slice(-20) : undefined,
+    assets: sanitizeAssets(p.assets),
+    overlays: sanitizeOverlays(p.overlays),
+    subtitles: sanitizeSubtitles(p.subtitles),
   };
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
+const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi|m4v)$/i;
+
+export function sanitizeAssets(raw: unknown): MediaAsset[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MediaAsset[] = [];
+  for (const a of raw.slice(0, 40)) {
+    if (!a || typeof a.file !== 'string' || !path.isAbsolute(a.file)) continue;
+    const kind = a.kind === 'image' && IMAGE_EXT.test(a.file) ? 'image' : a.kind === 'video' && VIDEO_EXT.test(a.file) ? 'video' : null;
+    if (!kind) continue;
+    out.push({
+      id: typeof a.id === 'string' && /^[a-z0-9]{1,20}$/i.test(a.id) ? a.id : newId(),
+      kind,
+      file: a.file,
+      name: String(a.name ?? path.basename(a.file)).slice(0, 120),
+      durationSec: Number.isFinite(a.durationSec) ? num(a.durationSec, 0, 36000, 0) : undefined,
+      width: Number.isFinite(a.width) ? num(a.width, 0, 20000, 0) : undefined,
+      height: Number.isFinite(a.height) ? num(a.height, 0, 20000, 0) : undefined,
+      hasAudio: a.hasAudio === undefined ? undefined : !!a.hasAudio,
+    });
+  }
+  return out;
+}
+
+function frac(v: unknown, d: number): number {
+  return num(v, 0, 1, d);
+}
+
+export function sanitizeOverlays(raw: unknown): ImageOverlay[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ImageOverlay[] = [];
+  for (const o of raw.slice(0, 40)) {
+    if (!o || typeof o.image !== 'string' || !IMAGE_EXT.test(o.image) || typeof o.clipUid !== 'string') continue;
+    const from = num(o.from, 0, 36000, 0);
+    const to = num(o.to, from + 0.05, 36000, from + 3);
+    const track = Array.isArray(o.track)
+      ? o.track
+          .filter((k: any) => k && [k.t, k.x, k.y, k.size].every(Number.isFinite))
+          .slice(0, 400)
+          .map((k: any) => ({ t: num(k.t, 0, 36000, 0), x: frac(k.x, 0.5), y: frac(k.y, 0.5), size: num(k.size, 0.02, 1, 0.15) }))
+          .sort((a: OverlayKey, b: OverlayKey) => a.t - b.t)
+      : undefined;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : newId(),
+      image: o.image,
+      clipUid: o.clipUid.slice(0, 40),
+      from,
+      to,
+      anchor: o.anchor === 'face' ? 'face' : 'fixed',
+      x: frac(o.x, 0.5),
+      y: frac(o.y, 0.4),
+      size: num(o.size, 0.02, 1, 0.15),
+      shape: o.shape === 'square' ? 'square' : 'circle',
+      track: track && track.length ? track : undefined,
+    });
+  }
+  return out;
+}
+
+export function sanitizeSubtitles(raw: unknown): ClipSubtitle[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s: any) => s && typeof s.text === 'string' && s.text.trim() && typeof s.clipUid === 'string')
+    .slice(0, 200)
+    .map((s: any) => {
+      const from = num(s.from, 0, 36000, 0);
+      return { clipUid: s.clipUid.slice(0, 40), from, to: num(s.to, from + 0.1, 36000, from + 2), text: String(s.text).replace(/\s+/g, ' ').trim().slice(0, 140) };
+    });
 }
 
 export class ProjectStore {

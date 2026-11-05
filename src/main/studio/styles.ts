@@ -3,6 +3,32 @@
 
 import type { BeatPulse, Mix, StyleRecipe } from '../../shared/studio';
 
+// The default. Modelled on Ferris's reference edits: no title cards or captions, straight into
+// gameplay with the music, every cut and kill on a beat, each clip ending right after its last kill.
+const montage: StyleRecipe = {
+  id: 'montage',
+  name: 'Kill montage',
+  description: 'Like the reference edits: opens straight on gameplay with the music, kill feed boxed in the top right, every cut and kill on a beat, each clip cut right after its last kill, slow-mo and trails only on the big play, no text.',
+  beatSync: true,
+  speedRange: [0.8, 1.35],
+  cruiseSpeed: 1,
+  leadIn: [2, 3.4],
+  tail: [0.25, 0.75],
+  slowmo: { on: true, speed: 0.45, before: 0.2, after: 0.3, smooth: 'blend', gameVolume: 0.45, scope: 'hero' },
+  zoom: { on: true, amount: 1.07, attack: 0.05, release: 0.35, onBeats: 'none', beatAmount: 1.02 },
+  shake: { on: true, amount: 0.005, duration: 0.22, frequency: 14, onBeats: 'none', beatAmount: 0.002 },
+  flash: { on: true, strength: 0.5, duration: 0.15, onKills: false, onDrop: true, onCuts: true },
+  rgbSplit: { on: false, amount: 4, duration: 0.1 },
+  motionBlur: { on: false, minSpeed: 1.5 },
+  grade: { contrast: 1.08, saturation: 1.12, brightness: 0, gamma: 1, vignette: 0.1, sharpen: 0.3 },
+  echo: { on: true, strength: 0.6, onSlowmo: true },
+  transition: 'flash',
+  fadeOut: 0.6,
+  captions: { position: 'bottom', size: 0.07, uppercase: false, beatsPerLine: 4 },
+  impactSound: 0,
+  mix: { game: 0.55, mic: 1, music: 1, duck: true },
+};
+
 const story: StyleRecipe = {
   id: 'story',
   name: 'Story edit',
@@ -123,7 +149,7 @@ const raw: StyleRecipe = {
   mix: { game: 1, mic: 1, music: 0.35, duck: true },
 };
 
-export const STYLES: StyleRecipe[] = [story, velocity, beatCuts, cinematic, raw];
+export const STYLES: StyleRecipe[] = [montage, story, velocity, beatCuts, cinematic, raw];
 
 export function getStyle(id: string): StyleRecipe {
   return clone(STYLES.find((s) => s.id === id) ?? velocity);

@@ -44,7 +44,7 @@ export const api = {
   },
   ai: {
     reviewReel: (project, file, request) => call('studio:ai:reviewReel', project, file, request),
-    reviseReel: (project, request) => call('studio:ai:reviseReel', project, request),
+    reviseReel: (project, request, assets) => call('studio:ai:reviseReel', project, request, assets),
     status: () => call('studio:ai:status'),
     tweakStyle: (project, request) => call('studio:ai:tweakStyle', project, request),
     captions: (project, request, lines) => call('studio:ai:captions', project, request, lines),
@@ -53,8 +53,8 @@ export const api = {
   },
   ideas: {
     quick: (format) => call('studio:ideas:quick', format),
-    ai: (format, request, count) => call('studio:ideas:ai', format, request, count),
-    apply: (idea) => call('studio:ideas:apply', idea),
+    ai: (format, request, count, assets) => call('studio:ideas:ai', format, request, count, assets),
+    apply: (idea, request) => call('studio:ideas:apply', idea, request),
   },
   free: {
     search: (kind, q) => call('studio:free:search', kind, q),
@@ -68,6 +68,7 @@ export const api = {
     disconnect: (platform, forget) => call('studio:publish:disconnect', platform, forget),
     upload: (req) => call('studio:publish:upload', req),
   },
+  assets: { pick: (kind) => call('studio:assets:pick', kind), import: (files) => call('studio:assets:import', files) },
   pickImage: () => call('studio:pickImage'),
   show: (file) => call('studio:show', file),
   open: (file) => call('studio:open', file),

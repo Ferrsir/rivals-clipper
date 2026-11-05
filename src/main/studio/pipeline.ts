@@ -1,4 +1,3 @@
-import { createFeedMask, type FeedMask } from './feed-mask';
 import { trackClip } from './tracking';
 import type { AiClient } from '../ai-auth';
 // Runs a whole export: plan per frame rate, stage A per clip (cached), stage B per output size,
@@ -56,7 +55,30 @@ export function planFor(project: ReelProject, analysis: MusicAnalysis | null, fp
     targetSeconds: project.targetSeconds,
   });
   timeline.warnings.push(...(project.sourceWarnings ?? []));
+  timeline.captions.push(...subtitleTimes(project, timeline));
+  timeline.captions.sort((a, b) => a.start - b.start);
   return timeline;
+}
+
+/** Map subtitles from clip seconds to reel seconds through the retimed segments. Parts cut from the edit are dropped. */
+export function subtitleTimes(project: ReelProject, tl: Timeline): Array<{ text: string; start: number; end: number }> {
+  const out: Array<{ text: string; start: number; end: number }> = [];
+  const toOut = (uid: string, t: number): number | undefined => {
+    const seg = tl.segments.find((s) => s.clipUid === uid && t >= s.src[0] - 1e-4 && t <= s.src[1] + 1e-4);
+    return seg ? seg.out[0] + (t - seg.src[0]) / Math.max(1e-3, seg.speed) : undefined;
+  };
+  for (const sub of project.subtitles ?? []) {
+    const segs = tl.segments.filter((s) => s.clipUid === sub.clipUid);
+    if (!segs.length) continue;
+    const from = Math.max(sub.from, segs[0].src[0]);
+    const to = Math.min(sub.to, segs[segs.length - 1].src[1]);
+    if (to - from < 0.1) continue;
+    const start = toOut(sub.clipUid, from);
+    const end = toOut(sub.clipUid, to);
+    if (start === undefined || end === undefined || end - start < 0.1) continue;
+    out.push({ text: sub.text, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 });
+  }
+  return out;
 }
 
 export function safeName(s: string): string {
@@ -173,7 +195,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
   fs.mkdirSync(workDir, { recursive: true });
   fs.mkdirSync(o.reelsDir, { recursive: true });
   let font: string | undefined;
-  if (o.fontFile && (project.captions.some((c) => c.text.trim()) || project.intro?.text || project.outro?.text)) {
+  if (o.fontFile && (project.captions.some((c) => c.text.trim()) || project.subtitles?.length || project.intro?.text || project.outro?.text)) {
     font = path.join(workDir, 'caption-font' + path.extname(o.fontFile));
     if (!fs.existsSync(font)) fs.copyFileSync(o.fontFile, font);
   }
@@ -188,18 +210,15 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
 
   const files: string[] = [];
   const audioCounts = new Map<string, number>();
-  const feedMasks = new Map<string, FeedMask | undefined>();
   for (const [index, clip] of project.clips.entries()) {
-    if (clip.followCharacter !== false && formats.some(format=>format.height>=format.width)) {
+    // Marvel Rivals' third-person camera keeps your hero in the middle of the screen, so a centred crop
+    // follows them. Frame-by-frame tracking is opt-in: it guesses wrong around big effects.
+    if (clip.followCharacter === true && formats.some(format=>format.height>=format.width)) {
       o.onProgress({stage:'clips',pct:0,message:`Framing player ${index+1}/${project.clips.length}${o.ai ? ' with your AI provider' : ''}…`});
       clip.cropTrack = await trackClip(o.ffmpeg, clip, o.signal, o.ai);
     }
   }
   for (const clip of project.clips) {
-    if (clip.preserveKillFeed !== false && formats.some(format=>format.height>=format.width)) {
-      o.onProgress({stage:'clips',pct:0,message:'Isolating player kill-feed banners…'});
-      feedMasks.set(clip.videoFile, await createFeedMask(o.ffmpeg,clip,workDir,o.signal));
-    }
     if (!audioCounts.has(clip.videoFile)) audioCounts.set(clip.videoFile, await audioStreamCount(o.ffmpeg, clip.videoFile, o.signal));
   }
   const base = req.preview ? '' : uniqueExportBase(o.reelsDir, project.name);
@@ -214,7 +233,6 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     const fps = outputFps(project, f, req.preview);
     const tl = planFor(project, o.analysis, fps, f.maxSeconds);
     if (!tl.segments.length) throw new Error('Nothing to render: the clips have no usable footage.');
-    if (!req.preview && project.targetSeconds && tl.duration > project.targetSeconds + 1 / fps) throw new Error(`The edit is ${tl.duration.toFixed(1)} s, over your ${project.targetSeconds} s budget. Preview and revise the selected clips or duration; kills were preserved.`);
     const clips = orderClips(project.clips, project.order);
     const inputs: string[] = [];
 
@@ -240,7 +258,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
-      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedMask:size.height>=size.width ? feedMasks.get(c.videoFile) : undefined, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
+      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, overlays: project.overlays, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
     });
 
     const clipShare = 0.6;

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('clipper', {
   status: () => ipcRenderer.invoke('status'),
@@ -38,5 +38,13 @@ contextBridge.exposeInMainWorld('studioBridge', {
   invoke: (ch: string, ...args: unknown[]) => (allowed(ch) ? ipcRenderer.invoke(ch, ...args) : Promise.reject(new Error(`Blocked channel ${ch}`))),
   on: (ch: string, cb: (...args: unknown[]) => void) => {
     if (allowed(ch)) ipcRenderer.on(ch, (_e, ...args) => cb(...args));
+  },
+  /** Path of a file dropped onto the page (Electron no longer puts it on File). */
+  pathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return '';
+    }
   },
 });

@@ -1,10 +1,10 @@
-import { sanitizeProject } from './projects';
+import { externalClip, reelClipFromSidecar, sanitizeProject } from './projects';
 // Studio features that use your own Claude or ChatGPT sign-in (through the shell's AiClient).
 // Everything sent is text: clip facts from the sidecars, style settings, your request. No video.
 // Every reply is validated, so a bad answer can't break a project.
 
 import type { AiClient } from '../ai-auth';
-import type { AiMusicIdea, ExportFormat, ReelProject, StyleRecipe } from '../../shared/studio';
+import type { AiMusicIdea, ExportFormat, ReelClip, ReelProject, StyleRecipe } from '../../shared/studio';
 import type { ClipSidecar } from '../../shared/types';
 import { sanitizeStyle } from './styles';
 
@@ -114,29 +114,70 @@ export async function pickClips(ai: AiClient | undefined, clips: ClipSidecar[], 
 }
 
 
-export async function reviseReel(ai: AiClient | undefined, project: ReelProject, request: string): Promise<{project: ReelProject; summary: string}> {
+export async function reviseReel(ai: AiClient | undefined, project: ReelProject, request: string, library: ClipSidecar[] = []): Promise<{project: ReelProject; summary: string}> {
   if (!request.trim() || request.length > 20000) throw new Error('Describe the changes in up to 20,000 characters.');
+  const inProject = new Set(project.clips.map(c => c.videoFile));
+  const candidates = library
+    .filter(c => !inProject.has(c.videoFile) && c.events.some(e => e.type === 'kill'))
+    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score)
+    .slice(0, 60)
+    .map(c => ({ clipId: c.id, hero: c.hero, kills: c.events.filter(e => e.type === 'kill').length, tags: c.tags.filter(t => !t.includes(':')).slice(0, 5), score: c.score, seconds: Math.round(c.durationMs / 100) / 10 }));
+  const assets = (project.assets ?? []).map(a => ({ id: `asset:${a.id}`, kind: a.kind, name: a.name, seconds: a.durationSec }));
+  const current = { ...project, clips: project.clips.map(c => ({ uid: c.uid, clipId: c.clipId, hero: c.hero, kills: c.kills, hits: c.hits, in: c.in, out: c.out, durationSec: c.durationSec, external: c.external, cropX: c.cropX, cropY: c.cropY, cropZoom: c.cropZoom, preserveKillFeed: c.preserveKillFeed })) };
   const reply = await askJson(ai, [
-    'Revise this existing gameplay edit. Keep its imported music source. Only use clips already in the project. Preserve all marked kills in every retained clip; remove a whole clip instead if the duration budget cannot accommodate its complete streak.',
-    'Return JSON {clips:[{uid,in,out,cropX,cropY,cropZoom,preserveKillFeed,followCharacter}],targetSeconds:number,musicStart:number|"auto",style:<complete style>,mix:<complete mix>,summary:string}. Keep unchanged values. You may change the imported song start and duration budget when requested. Do not add captions, intro cards or text. Include every retained clip, in desired order. Kill feed must remain visible in vertical outputs.',
-    JSON.stringify(project), request,
-  ].join('\n\n'), 180000);
+    'Revise this existing Marvel Rivals gameplay edit so it does what the creator asks. Really make the change: if they ask for a longer reel or more clips, ADD clips from the library list; if shorter, remove the weakest. Keep its imported music. Preserve all marked kills (hits) in every retained clip; remove a whole clip instead if it cannot fit.',
+    'Every clip should end right after its last kill and cut to the next one on the beat. Keep the character centred (cropX 0.5) unless asked otherwise. Keep the kill feed box (preserveKillFeed true) on game clips.',
+    'Return JSON {clips:[{uid,in,out,cropX,cropY,cropZoom,preserveKillFeed} for kept clips | {clipId} to add a library clip | {clipId:"asset:..."} to add one of their videos], targetSeconds:number, musicStart:number|"auto", style:<complete style>, mix:<complete mix>, overlays:[{assetId,onClip (a uid, library clipId or asset id),from,to (seconds inside that clip),anchor:"face"|"fixed",x,y,size,shape:"circle"|"square"}], subtitles:[{onClip,from,to,text}], summary:string}. List every clip in the order it should play. Keep unchanged values.',
+    'Do not add captions, intro cards, subtitles or text unless the request asks for them. Subtitles use only words the creator gave you.',
+    `Current edit: ${JSON.stringify(current)}`,
+    `Library clips you can add: ${JSON.stringify(candidates)}`,
+    assets.length ? `Their own media: ${JSON.stringify(assets)}` : '',
+    `Request: ${request}`,
+  ].filter(Boolean).join('\n\n'), 180000);
   if (!reply || typeof reply !== 'object') throw new Error('No usable revision was returned.');
   const byId = new Map(project.clips.map(clip => [clip.uid,clip]));
+  const libById = new Map(library.map(c => [c.id, c]));
+  const assetById = new Map((project.assets ?? []).map(a => [a.id, a]));
   const patches = Array.isArray(reply.clips) ? reply.clips : project.clips;
   const seen = new Set<string>();
-  const clips = patches.map((patch: any) => {
+  const uidFor = new Map<string, string>(project.clips.map(c => [c.uid, c.uid]));
+  for (const c of project.clips) uidFor.set(c.clipId, c.uid);
+  const clips: ReelClip[] = [];
+  for (const patch of patches) {
+    if (patch && typeof patch.clipId === 'string' && !byId.has(patch.uid)) {
+      // A clip being added.
+      let added: ReelClip | undefined;
+      if (patch.clipId.startsWith('asset:')) {
+        const a = assetById.get(patch.clipId.slice(6));
+        if (a?.kind === 'video') added = externalClip(a);
+      } else {
+        const src = libById.get(patch.clipId);
+        if (src && !project.clips.some(c => c.videoFile === src.videoFile)) added = reelClipFromSidecar(src);
+      }
+      if (!added || seen.has(patch.clipId)) continue;
+      seen.add(patch.clipId);
+      uidFor.set(patch.clipId, added.uid);
+      clips.push(added);
+      continue;
+    }
     const original = byId.get(patch?.uid);
-    if (!original || seen.has(original.uid)) throw new Error('The revision selected an unavailable or duplicate clip.');
+    if (!original || seen.has(original.uid)) continue;
     seen.add(original.uid);
-    const revised = {...original, ...Object.fromEntries(['in','out','cropX','cropY','cropZoom','preserveKillFeed','followCharacter'].filter(key=>patch[key]!==undefined).map(key=>[key,patch[key]]))};
+    const revised = {...original, ...Object.fromEntries(['in','out','cropX','cropY','cropZoom','preserveKillFeed'].filter(key=>patch[key]!==undefined).map(key=>[key,patch[key]]))};
     if (!Number.isFinite(revised.in) || !Number.isFinite(revised.out) || revised.in < 0 || revised.out > original.durationSec || revised.in >= revised.out) throw new Error('The revision contains an invalid source trim.');
     const retainedHits = original.hits.filter(hit => hit > original.in + 0.05 && hit < original.out - 0.02);
     if (retainedHits.some(hit => hit <= revised.in + 0.05 || hit >= revised.out - 0.02)) throw new Error('The revision would cut a marked kill out of a retained streak. Revise the duration or remove the whole clip.');
-    return revised;
-  });
+    clips.push(revised);
+  }
   if (!clips.length) throw new Error('The revision removed every clip.');
   const musicStart = reply.musicStart;
   if (musicStart !== undefined && musicStart !== 'auto' && (!Number.isFinite(musicStart) || musicStart < 0)) throw new Error('The revision contains an invalid music start.');
-  return {project:sanitizeProject({...project,clips,order:Array.isArray(reply.clips)?'manual':project.order,targetSeconds:reply.targetSeconds ?? project.targetSeconds,music:project.music && musicStart !== undefined ? {...project.music,start:musicStart}:project.music,style:reply.style || project.style,mix:reply.mix || project.mix,intro:null,outro:null,captions:[]}),summary:typeof reply.summary==='string'?reply.summary.slice(0,500):'Updated the edit.'};
+  const wantsText = /\b(subtitle|caption|text|words|intro|hook|title)/i.test(request);
+  const overlays = Array.isArray(reply.overlays) ? reply.overlays.map((o: any) => {
+    const image = assetById.get(String(o?.assetId ?? '').replace(/^asset:/, ''));
+    const clipUid = uidFor.get(o?.onClip);
+    return image?.kind === 'image' && clipUid ? { ...o, image: image.file, clipUid, anchor: o.anchor === 'fixed' ? 'fixed' : 'face' } : null;
+  }).filter(Boolean) : project.overlays;
+  const subtitles = wantsText && Array.isArray(reply.subtitles) ? reply.subtitles.map((t: any) => ({ ...t, clipUid: uidFor.get(t?.onClip) })) : project.subtitles;
+  return {project:sanitizeProject({...project,clips,order:Array.isArray(reply.clips)?'manual':project.order,targetSeconds:reply.targetSeconds ?? project.targetSeconds,music:project.music && musicStart !== undefined ? {...project.music,start:musicStart}:project.music,style:reply.style || project.style,mix:reply.mix || project.mix,intro:wantsText?project.intro:null,outro:wantsText?project.outro:null,captions:wantsText?project.captions:[],overlays,subtitles}),summary:typeof reply.summary==='string'?reply.summary.slice(0,500):'Updated the edit.'};
 }

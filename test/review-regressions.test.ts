@@ -28,7 +28,7 @@ test('late OCR trade counts the death exactly once without duplicating the settl
 });
 
 test('accepted settings reserve post-roll inside the total clip cap', () => {
-  for (const postRollSeconds of [2, 5, 15]) {
+  for (const postRollSeconds of [3, 5, 15]) {
     const s = sanitizeSettings({ preRollSeconds: 40, maxClipSeconds: 15, postRollSeconds });
     assert.ok(s.preRollSeconds + s.postRollSeconds <= s.maxClipSeconds);
     const tracker = new StreakTracker({ preRollMs: s.preRollSeconds * 1000, postRollMs: s.postRollSeconds * 1000, maxClipMs: s.maxClipSeconds * 1000 });

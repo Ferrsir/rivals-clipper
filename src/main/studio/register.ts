@@ -18,7 +18,10 @@ import { Vault } from './publish/vault';
 import { FORMATS, FORMAT_LIST, getFormat } from './formats';
 import { MusicLibrary } from './music-library';
 import { findFont, planFor, renderProject } from './pipeline';
-import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeProject, reconcileProjectSources } from './projects';
+import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
+import { describeFit, fitToTarget, requestedSeconds } from './fit';
+import { locateFace } from './overlay';
+import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
 import { STYLES, clone, getStyle } from './styles';
@@ -281,7 +284,15 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   });
 
   // ---------- AI ----------
-  handle('studio:ai:reviseReel', (_e, proj: unknown, request: string) => reviseReel(ctx.ai, reconcileProjectSources(sanitizeProject(proj),listClips(p().clips,1000)), String(request ?? '')));
+  handle('studio:ai:reviseReel', async (_e, proj: unknown, request: string, assets?: unknown) => {
+    const text = String(request ?? '');
+    const current = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
+    const extra = sanitizeAssets(assets).filter(a => fs.existsSync(a.file) && !(current.assets ?? []).some(b => b.file === a.file));
+    current.assets = [...(current.assets ?? []), ...extra];
+    const revised = await reviseReel(ctx.ai, current, text, libraryClips());
+    const { project, notes } = await finishPlan(revised.project, text);
+    return { project, summary: [revised.summary, ...notes].join(' ') };
+  });
   handle('studio:ai:reviewReel', async (_e, proj: unknown, file: string, request: string) => {
     if (typeof file !== 'string' || !within(file) || !fs.existsSync(file) || !/\.mp4$/i.test(file)) throw new Error('Select an existing rendered reel inside your clips or export folder.');
     const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
@@ -306,12 +317,62 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   // ---------- ideas ----------
   const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
   handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
-  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number) =>
-    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:await ffmpeg() }),
+  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number, assets?: unknown) =>
+    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:await ffmpeg(), assets: sanitizeAssets(assets).filter(a => fs.existsSync(a.file)) }),
   );
-  handle('studio:ideas:apply', (_e, idea: ReelIdea) => {
-    return store().save(projectFromIdea(idea, libraryClips(), music().list()));
+  /**
+   * Everything after the AI's plan that makes it a finished edit: a song from your library when none was
+   * picked, the length you asked for (pulling in more kill clips or dropping weak ones), and faces located
+   * for picture overlays. Returns notes for the "current step" display.
+   */
+  const finishPlan = async (project: ReelProject, request: string, signal?: AbortSignal): Promise<{ project: ReelProject; notes: string[] }> => {
+    const notes: string[] = [];
+    const fmt = getFormat(project.format);
+    const target = requestedSeconds(request) ?? project.targetSeconds ?? 30;
+    project.targetSeconds = target;
+    if (!project.music) {
+      const best = suggestFromLibrary(music().list(), project.style, fmt, target)[0];
+      const track = best && music().get(best.trackId);
+      if (track && track.analysis) {
+        project.music = { trackId: track.id, file: track.file, title: track.title, start: 'auto' };
+        notes.push(`Picked "${track.title}" from your music (${Math.round(track.analysis.bpm)} BPM).`);
+      }
+    }
+    const fit = fitToTarget(project, libraryClips(), analysisFor(project));
+    project = fit.project;
+    const fitNote = describeFit(fit, target);
+    if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));
+    if (fit.seconds < target - 3) notes.push(`You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
+    const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
+    if (faces.length && ctx.ai) {
+      const ff = await ffmpeg();
+      for (const ov of faces) {
+        const clip = project.clips.find(c => c.uid === ov.clipUid);
+        if (!clip) continue;
+        try {
+          ov.track = await locateFace(ff, ctx.ai, clip, ov, request.slice(0, 400), signal);
+          notes.push('Found the face for your picture overlay.');
+        } catch (error) {
+          notes.push(`Couldn't find the face for your picture (${(error as Error).message}); it sits where the AI first placed it.`);
+        }
+      }
+    }
+    return { project, notes };
+  };
+  handle('studio:ideas:apply', async (_e, idea: ReelIdea, request?: string) => {
+    const built = projectFromIdea(idea, libraryClips(), music().list());
+    const { project, notes } = await finishPlan(built, String(request ?? ''));
+    return { ...store().save(project), buildNotes: notes };
   });
+  handle('studio:assets:pick', async (e, kind?: 'video' | 'image' | 'any') => {
+    const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+    const filters = kind === 'image' ? [{ name: 'Pictures', extensions: IMAGE_EXTS }] : kind === 'video' ? [{ name: 'Videos', extensions: VIDEO_EXTS }] : [{ name: 'Videos and pictures', extensions: [...VIDEO_EXTS, ...IMAGE_EXTS] }];
+    const r = await dialog.showOpenDialog(win!, { title: 'Add your clips or pictures', properties: ['openFile', 'multiSelections'], filters });
+    return r.canceled ? [] : importAssets(await ffmpeg(), r.filePaths);
+  });
+  handle('studio:assets:import', async (_e, files: unknown) =>
+    importAssets(await ffmpeg(), (Array.isArray(files) ? files : []).filter((f): f is string => typeof f === 'string' && path.isAbsolute(f) && fs.existsSync(f))),
+  );
 
   // ---------- royalty-free music and pictures ----------
   const imagesDir = () => path.join(studioDir(), 'images');
