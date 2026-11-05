@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { overlayFilters } from './overlay';
-import { FEED_SLOTS } from './feed-rows';
+import { FEED_SAMPLE, FEED_SLOTS } from './feed-rows';
 import type { FeedRow, ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
@@ -197,7 +197,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 13, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 14, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -236,15 +236,24 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
       lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
       let cur = 'fbase';
       lines.push(`[fbg]colorchannelmixer=aa=0[${cur}]`);
-      const slotH = box.height / FEED_SLOTS;
+      const pad = Math.max(2, Math.round(box.height / 60) * 2);
       rows.forEach((r, i) => {
-        const x = Math.max(0, Math.floor((r.x0 * box.width - 2) / 2) * 2);
-        const y = Math.round(r.slot * slotH);
-        const h = Math.min(box.height - y, Math.round((r.slot + 1) * slotH) - y);
-        // The row fills the top ~70% of its slot; black under it hides the scenery in the gap.
-        lines.push(`[fr${i}]crop=w=${box.width - x}:h=${h}:x=${x}:y=${y},drawbox=x=0:y=trunc(ih*0.72):w=iw:h=ih:color=black:t=fill[frc${i}]`);
+        // The plate itself (found on the footage), framed by a thin black border so its edges are clean.
+        const sample = 1 / FEED_SAMPLE.height;
+        const top = r.y0 ?? r.slot / FEED_SLOTS;
+        const bottom = r.y1 ?? (r.slot + 1) / FEED_SLOTS;
+        const y = Math.max(0, Math.floor(((top - sample * 0.5) * box.height) / 2) * 2);
+        const yEnd = Math.min(box.height, Math.ceil(((bottom + sample * 0.5) * box.height) / 2) * 2);
+        const x = Math.max(0, Math.floor((r.x0 * box.width) / 2) * 2);
+        const w = box.width - x;
+        const h = Math.max(2, yEnd - y);
+        const px = Math.max(0, x - pad);
+        const py = Math.max(0, y - pad / 2);
+        const pw = Math.min(box.width - px, w + (x - px));
+        const ph = Math.min(box.height - py, h + (y - py) + pad / 2);
+        lines.push(`[fr${i}]crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${pw}:h=${ph}:x=${x - px}:y=${y - py}:color=black[frc${i}]`);
         const next = `fo${i}`;
-        lines.push(`[${cur}][frc${i}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
+        lines.push(`[${cur}][frc${i}]overlay=x=${px}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
         cur = next;
       });
       lines.push(`[${cur}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${feedAlphaExpr(windows).replace(/^255\*/, '')}',setsar=1[feed]`);

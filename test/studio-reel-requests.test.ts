@@ -217,6 +217,7 @@ test('own kill-feed rows are told apart from teammates\' rows and scenery', asyn
   const s = slotStats(rgb, W, H);
   assert.ok(isOwnRow(s[0]), `own row ${JSON.stringify(s[0])}`);
   assert.ok(s[0].x0 > 0.36 && s[0].x0 < 0.4 && s[0].x1 > 0.97, 'plate edges');
+  assert.deepEqual([s[0].y0, s[0].y1], [0, 0.1], 'plate top and bottom');
   assert.ok(!isOwnRow(s[1]), 'teammate row');
   assert.ok(!isOwnRow(s[2]), 'scenery that does not reach the right edge');
 });
@@ -227,12 +228,13 @@ test('kills move to when your row appears; teammates\' kills are dropped', async
   // CorrinMa's Mister Fantastic takes the top at 6.5 s. Sidecar hits: 3.00, 4.30, 7.03.
   const samples = Array.from({ length: 44 }, (_, f) => {
     const t = f / 4;
-    const own: Array<number | null> = [null, null, null];
-    if (t >= 2 && t < 3.75) own[0] = 0.38;
-    if (t >= 3.75 && t < 6.25) own[1] = 0.38;
-    if (t >= 4 && t < 6.5) own[0] = 0.3;
-    if (t >= 6.5 && t < 8.25) own[1] = 0.3;
-    if (t >= 6.5 && t < 6.75) own[2] = 0.38;
+    const own: Array<{ x0: number; y0: number; y1: number } | null> = [null, null, null];
+    const at = (slot: number, x0: number) => ({ x0, y0: slot / 3 + 0.03, y1: slot / 3 + 0.25 });
+    if (t >= 2 && t < 3.75) own[0] = at(0, 0.38);
+    if (t >= 3.75 && t < 6.25) own[1] = at(1, 0.38);
+    if (t >= 4 && t < 6.5) own[0] = at(0, 0.3);
+    if (t >= 6.5 && t < 8.25) own[1] = at(1, 0.3);
+    if (t >= 6.5 && t < 6.75) own[2] = at(2, 0.38);
     return { t, own };
   });
   assert.deepEqual(rowOnsets(samples), [1.875, 3.875]);
@@ -241,7 +243,7 @@ test('kills move to when your row appears; teammates\' kills are dropped', async
   assert.equal(clip.kills, 2);
   const rows = ownRows(samples);
   assert.ok(rows.every((r) => r.to - r.from >= 0.5), 'single-sample flashes are not rows');
-  assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625));
+  assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625 && r.x0 === 0.38 && r.y0 === 0.03));
   assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, []), { hits: [3], kills: 1 }, 'scan failed: keep the clip as it was');
   const none = withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] })));
   assert.deepEqual([none.hits, none.kills], [[], 0], 'every row is a teammate\'s: no kills of yours');
@@ -255,7 +257,7 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     // 1000x500 source; the feed crop is x 755-982, y 12-67. A white "own" row in slot 0, an orange "other" row in slot 1.
     execFileSync(ff, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=0x3070c0:s=1000x500:r=30:d=2', '-vf', 'drawbox=x=800:y=14:w=180:h=12:c=white:t=fill,drawbox=x=800:y=33:w=180:h=12:c=orange:t=fill', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
     const clip = { uid: 'r', clipId: 'r', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
-      feedRows: [{ slot: 0, from: 0, to: 2, x0: 0.15 }] };
+      feedRows: [{ slot: 0, from: 0, to: 2, x0: 0.15, y0: 0.03, y1: 0.25 }] };
     const size = { width: 320, height: 320 };
     const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ff, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
@@ -268,6 +270,6 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     const other = at(900, 39);
     assert.ok(!(other[0] > 200 && other[2] < 90), `other player's row hidden: ${other}`);
     assert.ok(other[2] > 90, `no black slab where you have no row (the game shows through): ${other}`);
-    assert.ok(at(900, 28).every((v) => v < 40), `black under your row hides the gap: ${at(900, 28)}`);
+    assert.ok(!at(770, 20).every((v) => v < 40), `left of your row the game shows through: ${at(770, 20)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

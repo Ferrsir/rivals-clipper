@@ -216,6 +216,9 @@ export interface FeedRow {
   from: number;
   to: number;
   x0: number;
+  /** Plate top and bottom, 0..1 of the feed box height (older projects lack them: the slot is used). */
+  y0?: number;
+  y1?: number;
 }
 
 export interface ReelMusic {

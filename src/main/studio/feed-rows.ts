@@ -21,6 +21,17 @@ export interface SlotStats {
   /** Left and right edge of the plate, 0..1 of the box width (1/0 when there is none). */
   x0: number;
   x1: number;
+  /** Top and bottom of the plate, 0..1 of the box height (found around the slot, so a row that sits
+   * across a slot boundary is kept whole). */
+  y0: number;
+  y1: number;
+}
+
+/** Where one of your rows' plates sits in the box, all 0..1. */
+export interface RowEdge {
+  x0: number;
+  y0: number;
+  y1: number;
 }
 
 const isPlate = (r: number, g: number, b: number) => 0.299 * r + 0.587 * g + 0.114 * b > 190 && Math.max(r, g, b) - Math.min(r, g, b) < 45;
@@ -48,19 +59,40 @@ export function slotStats(rgb: Uint8Array, width: number, height: number, slots 
     let x0 = width;
     let x1 = -1;
     for (let i = 0; i < width; i++) if (cols[i] >= need) { x0 = Math.min(x0, i); x1 = i; }
-    out.push({ white: n / Math.max(1, (y1 - y0) * width), x0: x1 < 0 ? 1 : x0 / width, x1: x1 < 0 ? 0 : (x1 + 1) / width });
+    // Plate rows: lines where most of the plate's width is plate. Take the run through the fullest
+    // line of the slot, letting it grow a few lines past the slot so the row is never cut.
+    let top = y0;
+    let bottom = y1;
+    if (x1 >= 0) {
+      const lineFill = (j: number) => {
+        let k = 0;
+        for (let i = x0; i <= x1; i++) {
+          const o = (j * width + i) * 3;
+          if (isPlate(rgb[o], rgb[o + 1], rgb[o + 2])) k++;
+        }
+        return k / (x1 - x0 + 1);
+      };
+      let best = y0;
+      for (let j = y0; j < y1; j++) if (lineFill(j) > lineFill(best)) best = j;
+      const reach = Math.max(1, Math.round((y1 - y0) / 3));
+      top = best;
+      bottom = best + 1;
+      while (top - 1 >= Math.max(0, y0 - reach) && lineFill(top - 1) >= 0.4) top--;
+      while (bottom < Math.min(height, y1 + reach) && lineFill(bottom) >= 0.4) bottom++;
+    }
+    out.push({ white: n / Math.max(1, (y1 - y0) * width), x0: x1 < 0 ? 1 : x0 / width, x1: x1 < 0 ? 0 : (x1 + 1) / width, y0: top / height, y1: bottom / height });
   }
   return out;
 }
 
 export interface FeedSample {
   t: number;
-  /** Per slot: the plate's left edge (0..1) when it holds your row, else null. */
-  own: Array<number | null>;
+  /** Per slot: where the plate is when it holds your row, else null. */
+  own: Array<RowEdge | null>;
 }
 
 export function feedSamples(stats: SlotStats[][], fps = FEED_SAMPLE.fps): FeedSample[] {
-  return stats.map((slots, f) => ({ t: f / fps, own: slots.map((s) => (isOwnRow(s) ? s.x0 : null)) }));
+  return stats.map((slots, f) => ({ t: f / fps, own: slots.map((s) => (isOwnRow(s) ? { x0: s.x0, y0: s.y0, y1: s.y1 } : null)) }));
 }
 
 export function isOwnRow(s: SlotStats): boolean {
@@ -72,28 +104,31 @@ export function ownRows(samples: FeedSample[], fps = FEED_SAMPLE.fps): FeedRow[]
   const half = 0.5 / fps;
   const rows: FeedRow[] = [];
   const slots = samples[0]?.own.length ?? 0;
-  const edges = new Map<FeedRow, number[]>();
+  const edges = new Map<FeedRow, RowEdge[]>();
   for (let s = 0; s < slots; s++) {
     let cur: FeedRow | null = null;
     for (const smp of samples) {
-      const x = smp.own[s];
-      if (x != null) {
+      const e = smp.own[s];
+      if (e != null) {
         if (cur && smp.t - half <= cur.to + 1e-6) {
           cur.to = smp.t + half;
         } else {
-          cur = { slot: s, from: Math.max(0, smp.t - half), to: smp.t + half, x0: x };
+          cur = { slot: s, from: Math.max(0, smp.t - half), to: smp.t + half, x0: e.x0 };
           rows.push(cur);
           edges.set(cur, []);
         }
-        edges.get(cur)!.push(x);
+        edges.get(cur)!.push(e);
       } else cur = null;
     }
   }
-  // The plate's left edge is the median one, so scenery that joins the plate for a frame doesn't widen
-  // the cut-out; a little margin keeps the first letter. A single sample is a flash, not a row.
+  // The plate's edges are the median ones, so scenery that joins the plate for a frame doesn't widen
+  // the cut-out. A single sample is a flash, not a row.
+  const median = (v: number[]) => v.sort((a, b) => a - b)[Math.floor(v.length / 2)];
   for (const r of rows) {
-    const xs = edges.get(r)!.sort((a, b) => a - b);
-    r.x0 = Math.max(0, xs[Math.floor(xs.length / 2)] - 0.02);
+    const es = edges.get(r)!;
+    r.x0 = median(es.map((e) => e.x0));
+    r.y0 = median(es.map((e) => e.y0));
+    r.y1 = median(es.map((e) => e.y1));
   }
   return rows.filter((r) => r.to - r.from > 1.5 / fps).sort((a, b) => a.from - b.from || a.slot - b.slot);
 }
