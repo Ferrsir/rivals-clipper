@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { overlayFilters } from './overlay';
-import { FEED_SAMPLE, FEED_SLOTS } from './feed-rows';
+import { FEED_SLOTS } from './feed-rows';
 import type { FeedRow, ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
@@ -116,6 +116,13 @@ export function feedBox(size: Size): { width: number; height: number; x: number;
   return { width, height, x: size.width - width, y };
 }
 
+/**
+ * Where each row's plate sits inside the feed box, in units of the box height: measured on Ferris's
+ * footage, plates are 0.024 of the frame height tall (0.218 of the 0.11-high box), the first starts
+ * 0.008 below the box top and rows repeat every 0.0355 of the frame height.
+ */
+export const FEED_ROW = { first: 0.073, pitch: 0.323, height: 0.218, margin: 0.012 };
+
 /** How long a kill stays in the game's feed after it happens, seconds. */
 export const FEED_HOLD = 4.5;
 
@@ -197,7 +204,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 14, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 15, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -236,24 +243,20 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
       lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
       let cur = 'fbase';
       lines.push(`[fbg]colorchannelmixer=aa=0[${cur}]`);
-      const pad = Math.max(2, Math.round(box.height / 60) * 2);
       rows.forEach((r, i) => {
-        // The plate itself (found on the footage), framed by a thin black border so its edges are clean.
-        const sample = 1 / FEED_SAMPLE.height;
-        const top = r.y0 ?? r.slot / FEED_SLOTS;
-        const bottom = r.y1 ?? (r.slot + 1) / FEED_SLOTS;
-        const y = Math.max(0, Math.floor(((top - sample * 0.5) * box.height) / 2) * 2);
-        const yEnd = Math.min(box.height, Math.ceil(((bottom + sample * 0.5) * box.height) / 2) * 2);
-        const x = Math.max(0, Math.floor((r.x0 * box.width) / 2) * 2);
+        // Each plate's fixed place in its slot (measured), with a thin black frame so its edges are clean.
+        const top = FEED_ROW.first + r.slot * FEED_ROW.pitch - FEED_ROW.margin;
+        const y = Math.max(0, Math.floor((top * box.height) / 2) * 2);
+        const yEnd = Math.min(box.height, Math.ceil(((top + FEED_ROW.height + 2 * FEED_ROW.margin) * box.height) / 2) * 2);
+        const pad = Math.max(2, Math.round(box.height / 80) * 2);
+        const x = Math.max(pad, Math.floor((r.x0 * box.width) / 2) * 2);
         const w = box.width - x;
         const h = Math.max(2, yEnd - y);
-        const px = Math.max(0, x - pad);
         const py = Math.max(0, y - pad / 2);
-        const pw = Math.min(box.width - px, w + (x - px));
         const ph = Math.min(box.height - py, h + (y - py) + pad / 2);
-        lines.push(`[fr${i}]crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${pw}:h=${ph}:x=${x - px}:y=${y - py}:color=black[frc${i}]`);
+        lines.push(`[fr${i}]crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${w + pad}:h=${ph}:x=${pad}:y=${y - py}:color=black[frc${i}]`);
         const next = `fo${i}`;
-        lines.push(`[${cur}][frc${i}]overlay=x=${px}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
+        lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
         cur = next;
       });
       lines.push(`[${cur}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${feedAlphaExpr(windows).replace(/^255\*/, '')}',setsar=1[feed]`);

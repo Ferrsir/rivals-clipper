@@ -220,7 +220,7 @@ function sanitizeClip(c: any): ReelClip | null {
     preserveKillFeed: c.external === true ? c.preserveKillFeed === true : c.preserveKillFeed !== false,
     // The game camera keeps your hero centred, so a centred crop is the default. Tracking is opt-in.
     followCharacter: c.followCharacter === true,
-    feedRows: Array.isArray(c.feedRows) ? c.feedRows.filter((r: any) => r && [r.slot, r.from, r.to, r.x0].every((v) => typeof v === 'number' && Number.isFinite(v)) && r.slot >= 0 && r.slot < 6 && r.to > r.from).slice(0, 60).map((r: any) => ({ slot: Math.round(r.slot), from: r.from, to: r.to, x0: Math.min(1, Math.max(0, r.x0)), ...(Number.isFinite(r.y0) && Number.isFinite(r.y1) && r.y1 > r.y0 ? { y0: Math.max(0, r.y0), y1: Math.min(1, r.y1) } : {}) })) : undefined,
+    feedRows: Array.isArray(c.feedRows) ? c.feedRows.filter((r: any) => r && [r.slot, r.from, r.to, r.x0].every((v) => typeof v === 'number' && Number.isFinite(v)) && r.slot >= 0 && r.slot < 6 && r.to > r.from).slice(0, 60).map((r: any) => ({ slot: Math.round(r.slot), from: r.from, to: r.to, x0: Math.min(1, Math.max(0, r.x0)) })) : undefined,
     hasMic: !!c.hasMic,
     hits: Array.isArray(c.hits) ? c.hits.map(Number).filter((h: number) => Number.isFinite(h) && h >= 0 && h <= dur).sort((a: number, b: number) => a - b).slice(0, 40) : [],
     in: inn,
