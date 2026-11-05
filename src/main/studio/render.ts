@@ -12,6 +12,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { FeedMask } from './feed-mask';
 import type { OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
@@ -93,6 +94,7 @@ export function hashOf(v: unknown): string {
 }
 
 interface ClipJobOpts {
+  feedMask?: FeedMask;
   audioCount?: number;
   clip: ReelClip;
   segments: TimelineSegment[];
@@ -108,7 +110,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 8, source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 9, mask: o.feedMask?.file, source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -125,7 +127,12 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   if (size.height > size.width && clip.preserveKillFeed !== false) {
     const feedWidth = Math.round(size.width * 0.58 / 2) * 2;
     lines.push(`[0:v]setpts=PTS-STARTPTS,split=2[gameSrc][feedSrc]`);
-    lines.push(`[feedSrc]crop=w=trunc(iw*0.16/2)*2:h=trunc(ih*0.09/2)*2:x=iw-ow:y=trunc(ih*0.025/2)*2,scale=${feedWidth}:-2:flags=bicubic[feed]`);
+    const feedCrop='crop=w=trunc(iw*0.16/2)*2:h=trunc(ih*0.09/2)*2:x=iw-ow:y=trunc(ih*0.025/2)*2';
+    if(o.feedMask) {
+      lines.push(`[feedSrc]${feedCrop},scale=${o.feedMask.width}:${o.feedMask.height},format=rgb24[feedRgb]`);
+      lines.push('[1:v]setpts=PTS-STARTPTS,format=gray[feedAlpha]');
+      lines.push(`[feedRgb][feedAlpha]alphamerge,scale=${feedWidth}:-2:flags=bicubic[feed]`);
+    } else lines.push(`[feedSrc]${feedCrop},scale=${feedWidth}:-2:flags=bicubic[feed]`);
     lines.push(`[gameSrc]${gameplay}[gamePicture]`);
     lines.push(`[gamePicture][feed]overlay=x=W-w-${Math.round(size.width*0.04)}:y=${Math.round(size.height*0.07)},${split}`);
   } else lines.push(`[0:v]setpts=PTS-STARTPTS,${gameplay},${split}`);
@@ -177,6 +184,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   const total = segs.reduce((s, x) => s + Math.max(1, Math.round((x.out[1] - x.out[0]) * fps)) / fps, 0);
   const args = [
     '-ss', r6(s0), '-t', r6(s1 - s0 + 0.3), '-i', clip.videoFile,
+    ...(o.feedMask ? ['-ss',r6(s0),'-f','rawvideo','-pixel_format','gray','-video_size',`${o.feedMask.width}x${o.feedMask.height}`,'-framerate',String(o.feedMask.fps),'-i',o.feedMask.file] : []),
     '-map', '[v]', '-map', '[ga]', '-map', '[ma]',
     ...intermediateCodec(o.preview, fps),
     output,
