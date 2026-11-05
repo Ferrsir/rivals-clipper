@@ -119,7 +119,7 @@ const tagger = new AiTagger({
       return undefined;
     }
   },
-  save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
+  save: (videoFile, info) => updateSidecar(videoFile, { ai: info, ...(info.hero ? { hero: info.hero } : {}) }),
   canRun: () => !quitting && !inMatch && !pending,
   enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
   onTagged: (clip) => {
