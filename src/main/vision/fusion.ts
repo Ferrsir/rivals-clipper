@@ -241,7 +241,7 @@ export class ScreenFusion {
         const b = this.banners.find((x) => x.id === id);
         if (!b) return;
         b.ocrDone = true;
-        const m = r?.text.match(/(\d{1,2})\s*PLAYER/i);
+        const m = r?.text.match(/\b(\d{1,2})\s*PLAYER\s+K[O0]\s+STREAK\b/i);
         if (m) b.count = Number(m[1]);
         // Not a streak banner after all (another message in the same place).
         if (r && r.text.trim() && !/KO|STREAK|PLAYER/i.test(r.text)) b.done = true;
@@ -314,7 +314,10 @@ export class ScreenFusion {
     }
     for (const b of this.banners) {
       if (b.done) continue;
-      if (!b.ocrDone && now - b.t < this.o.decideAfterMs) continue;
+      if (!b.count) {
+        if (b.ocrDone || now - b.t > 4000) b.done = true;
+        continue;
+      }
       b.done = true;
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
       if (b.t - this.lastKillAt > 2500 && !this.kos.some((k) => !k.done && Math.abs(k.t - b.t) < 2500)) this.emitKill(b.t, undefined);

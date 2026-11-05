@@ -6,7 +6,7 @@ const aiReady = () => !!(ai && ai.provider !== 'none' && ai[ai.provider]?.logged
 
 const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'aiTagging', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
 // Kill detection panel (built-in mode).
-fields.push('engine', 'playerName', 'hudScale', 'readScreenText', 'detectionFps', 'captureMonitor', 'localEncoder');
+fields.push('engine', 'playerName', 'hudScale', 'hudAspect', 'readScreenText', 'detectionFps', 'localEncoder');
 
 function renderStatus(s) {
   const bits = [s.msg];
@@ -45,6 +45,32 @@ function renderDetection(s) {
   el.textContent = lines.join(' ');
 }
 
+// This player stays mounted when a background save or tag refreshes the Library.
+function watchClip(c) {
+  const dialog = $('clipPlayer'), video = $('clipVideo'), status = $('clipPlaybackStatus');
+  status.textContent = 'Loading clip…';
+  video.onloadedmetadata = () => { status.textContent = `Recorded duration: ${video.duration.toFixed(1)} seconds`; };
+  video.onerror = () => { status.textContent = 'Playback failed. Use Show file to open the original MP4.'; };
+  const normalized = c.videoFile.replace(/\\/g, '/');
+  video.src = 'file:///' + normalized.split('/').map((part, i) => i === 0 && /^[A-Z]:$/i.test(part) ? part : encodeURIComponent(part)).join('/');
+  $('clipMarkers').replaceChildren(...c.events.filter(e => e.type === 'kill').map((e, i) => {
+    const button = document.createElement('button');
+    const seconds = Math.max(0, (e.at - c.startTimeEpoch) / 1000);
+    button.textContent = `Kill ${i + 1} · ${seconds.toFixed(1)}s`;
+    button.onclick = () => { video.currentTime = Math.max(0, seconds - 0.5); void video.play().catch(() => {}); };
+    return button;
+  }));
+  dialog.showModal();
+  void video.play().catch(() => { if (!video.error) status.textContent = 'Press play to watch.'; });
+}
+$('closeClipPlayer').onclick = () => $('clipPlayer').close();
+$('clipPlayer').onclose = () => {
+  const video = $('clipVideo');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+};
+
 function clipRow(c) {
   const li = document.createElement('li');
   const kills = c.events.filter((e) => e.type === 'kill').length;
@@ -52,7 +78,7 @@ function clipRow(c) {
   const tags = c.tags.filter((t) => !t.includes(':')).join(' ');
   const hasMic = c.audioTracks.length > 1;
   li.innerHTML = `
-    <video src="file:///${c.videoFile.replace(/\\/g, '/')}" preload="metadata" controls></video>
+    <button class="watch">Watch · ${Math.floor(c.durationMs / 60000)}:${String(Math.floor(c.durationMs / 1000) % 60).padStart(2, '0')}</button>
     <div class="meta">
       <div class="title"><strong>${kills} kill${kills === 1 ? '' : 's'}</strong> · ${esc(c.hero ?? 'Unknown hero')} · ${esc(c.match.map ?? '')}</div>
       <div class="muted">${when} · ${(c.durationMs / 1000).toFixed(0)}s · score <b>${c.score}</b></div>
@@ -69,6 +95,7 @@ function clipRow(c) {
         ${aiReady() ? `<button class="aiTag">${c.ai && !c.ai.error ? 'Re-tag with AI' : 'Tag with AI'}</button>` : ''}
       </div>
     </div>`;
+  li.querySelector('.watch').addEventListener('click', () => watchClip(c));
   li.querySelectorAll('[data-star]').forEach((b) =>
     b.addEventListener('click', async () => replace(await clipper.rate(c.videoFile, Number(b.dataset.star)))),
   );

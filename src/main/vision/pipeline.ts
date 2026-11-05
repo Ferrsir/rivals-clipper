@@ -4,7 +4,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { ddagrabSource } from '../capture/encoder';
+import { gameWindowSource } from '../capture/encoder';
 import { HudAnalyzer, type Observation } from './detectors';
 import { ScreenFusion, type EventSink, type FusionCallbacks, type FusionOptions, type OcrResult } from './fusion';
 import type { Crop } from './image';
@@ -17,7 +17,7 @@ export function frameSourceArgs(layout: HudLayout, fps: number, input: FrameInpu
   const common = ['-hide_banner', '-nostdin', '-loglevel', 'error'];
   const out = ['-map', '[hud]', '-an', '-f', 'rawvideo', '-pix_fmt', 'bgra', 'pipe:1'];
   if (input.kind === 'screen') {
-    return [...common, '-f', 'lavfi', '-i', ddagrabSource(input.outputIdx, fps), '-filter_complex', hudFilterGraph(layout, { gpuFrames: true, fps }), ...out];
+    return [...common, '-f', 'lavfi', '-i', gameWindowSource(fps), '-filter_complex', hudFilterGraph(layout, { gpuFrames: true, fps }), ...out];
   }
   return [
     ...common,

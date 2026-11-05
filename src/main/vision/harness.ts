@@ -20,6 +20,7 @@ export interface Labels {
   layout?: 'screen' | 'tiktok-square';
   regions?: RegionSpec[];
   hudScale?: number;
+  hudAspect?: number;
 }
 
 export interface DetectedEvent {
@@ -127,7 +128,7 @@ export async function runHarness(o: HarnessOptions): Promise<HarnessReport> {
   const labels = o.labels ?? {};
   const size = await probeSize(o.ffmpeg, o.video);
   const regions = labels.regions ?? (labels.layout === 'tiktok-square' ? TIKTOK_SQUARE_REGIONS : DEFAULT_REGIONS);
-  const layout = layoutFor(size.width, size.height, labels.hudScale ?? 1, regions);
+  const layout = layoutFor(size.width, size.height, labels.hudScale ?? 1, regions, labels.hudAspect);
   const events: DetectedEvent[] = [];
   const base = 1_000_000_000_000; // fake epoch so times look like real ones
   let gameType: string | undefined;

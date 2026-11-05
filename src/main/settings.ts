@@ -50,6 +50,7 @@ export interface Settings {
   playerName: string;
   /** In-game HUD scale (1 = default). */
   hudScale: number;
+  hudAspect: number;
   /** Screen detection checks this many frames per second. */
   detectionFps: number;
   /** Read names, streak counts, map and match result from the screen (text recognition). */
@@ -59,9 +60,9 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   rootFolder: 'F:\\RivalsClips',
   bufferSeconds: 60,
-  preRollSeconds: 12,
-  postRollSeconds: 5,
-  maxClipSeconds: 90,
+  preRollSeconds: 5,
+  postRollSeconds: 2,
+  maxClipSeconds: 20,
   resolution: 'native',
   fps: 60,
   bitrateKbps: 0,
@@ -80,6 +81,7 @@ export const DEFAULT_SETTINGS: Settings = {
   localEncoder: 'auto',
   playerName: '',
   hudScale: 1,
+  hudAspect: 0,
   detectionFps: 10,
   readScreenText: true,
 };
@@ -199,6 +201,7 @@ export function localOptions(s: Partial<Settings>) {
     captureMonitor: Math.round(num(s.captureMonitor, 0, 7, 0)),
     localEncoder: encoders.includes(s.localEncoder as never) ? (s.localEncoder as Settings['localEncoder']) : 'auto',
     playerName: typeof s.playerName === 'string' ? s.playerName.trim().slice(0, 40) : '',
+    hudAspect: num(s.hudAspect, 0, 5, 0),
     hudScale: Math.round(num(s.hudScale, 0.5, 1.5, 1) * 100) / 100,
     detectionFps: Math.round(num(s.detectionFps, 4, 20, 10)),
     readScreenText: typeof s.readScreenText === 'boolean' ? s.readScreenText : true,

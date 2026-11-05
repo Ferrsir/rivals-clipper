@@ -54,3 +54,8 @@ label.check > input { display: inline-block; width: auto; margin: 0; }
 .ai-all { margin-left: auto; }
 #detectionStatus { margin: 8px 0 12px; line-height: 1.5; }
 p.small { margin: -4px 0 10px; }
+
+#clipPlayer { width: min(88vw, 1100px); background: #151922; color: white; border: 1px solid #495065; border-radius: 8px; }
+#clipPlayer::backdrop { background: rgba(0,0,0,.72); }
+#clipPlayer video { display: block; width: 100%; max-height: 68vh; object-fit: contain; }
+#clipMarkers { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }

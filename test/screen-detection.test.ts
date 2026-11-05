@@ -86,13 +86,12 @@ function paintText(f: Uint8Array, l: HudLayout, id: RegionId, x0: number, y0: nu
 const WHITE: Rgb = [245, 245, 245];
 const L = layoutFor(2560, 1440);
 
-test('a white name next to the crosshair is a KO-list line', () => {
+test('a name without a KO badge cannot start a clip', () => {
   const f = blankFrame(L);
   const u = region(L, 'ko').pxPerUnit;
   paintText(f, L, 'ko', Math.round(60 * u), Math.round(120 * u), 9, Math.round(22 * u), WHITE);
   const c = koCandidates(viewFor(f, L, 'ko'));
-  assert.equal(c.length, 1);
-  assert.equal(c[0].strong, true);
+  assert.ok(!c.some(line => line.strong));
 });
 
 test('a solid white block is not text', () => {
@@ -368,10 +367,11 @@ test('your name is learned from the word in all of your feed rows', () => {
   assert.ok(h.info.some(([k, v]) => k === 'player_name' && v === 'Leithl'));
 });
 
-test('a streak banner with no KO before it adds the missed kill', () => {
-  const h = harness({ name: 'Leithl', ocr: false });
+test('a streak banner with recognized text adds the missed kill', () => {
+  const h = harness({ name: 'Leithl' });
   inMatch(h);
   h.banner(4000, 9);
+  h.fusion.onOcr('banner', 9, {text: '5 PLAYER KO STREAK!', words: []}, 4100);
   h.fusion.tick(6000);
   assert.equal(h.kills().length, 1);
 });

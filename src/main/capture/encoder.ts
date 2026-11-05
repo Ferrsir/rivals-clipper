@@ -128,8 +128,8 @@ export function planRecording(settings: Settings, native: { width: number; heigh
   };
 }
 
-export function ddagrabSource(outputIdx: number, fps: number): string {
-  return `ddagrab=output_idx=${outputIdx}:framerate=${fps}:draw_mouse=0`;
+export function gameWindowSource(fps: number): string {
+  return `gfxcapture=window_exe='(?i)^Marvel-Win64-Shipping[.]exe$':capture_cursor=0:max_framerate=${fps}`;
 }
 
 /** Video encoder flags. Keyframe every second and no B-frames, so clips can start on any second. */
@@ -178,7 +178,7 @@ export function recordArgs(o: RecordOptions): string[] {
   const kbps = o.bitrateKbps;
   return [
     '-hide_banner', '-nostdin', '-loglevel', 'warning',
-    '-f', 'lavfi', '-i', ddagrabSource(o.outputIdx, o.fps),
+    '-f', 'lavfi', '-i', gameWindowSource(o.fps),
     ...(vf ? ['-vf', vf] : []),
     ...encoderArgs(o.encoder, o.fps, kbps),
     '-an',
@@ -242,7 +242,7 @@ export async function probeCapture(ffmpeg: string, outputIdx: number, prefer: En
     const vf = videoFilter({ outputIdx, fps: 30, bitrateKbps: 8000, encoder: enc });
     const args = [
       '-hide_banner', '-nostdin', '-loglevel', 'info',
-      '-f', 'lavfi', '-i', ddagrabSource(outputIdx, 30),
+      '-f', 'lavfi', '-i', gameWindowSource(30),
       ...(vf ? ['-vf', vf] : []),
       ...encoderArgs(enc, 30, 8000),
       '-frames:v', '12', '-f', 'null', '-',
@@ -259,7 +259,11 @@ export async function probeCapture(ffmpeg: string, outputIdx: number, prefer: En
     const error = lastError(r.err);
     result.tried.push({ encoder: label, ok: false, error });
     // Desktop Duplication itself failed: no encoder will help.
-    if (/ddagrab|duplicat|DXGI|output_idx/i.test(error) && !/nvenc|amf|qsv|x264|encoder/i.test(error)) {
+    if (/Failed to find capture source/i.test(r.err)) {
+      result.problem = 'Waiting for the Marvel Rivals game window';
+      break;
+    }
+    if (/gfxcapture|DXGI/i.test(error) && !/nvenc|amf|qsv|x264|encoder/i.test(error)) {
       result.problem = `Screen capture failed: ${error}`;
       break;
     }
@@ -277,6 +281,6 @@ export function describeProbe(p: ProbeResult): string {
 
 /** Size of the monitor Desktop Duplication sees (grabs one frame). */
 export async function probeScreenSize(ffmpeg: string, outputIdx: number): Promise<{ width: number; height: number } | undefined> {
-  const r = await run(ffmpeg, ['-hide_banner', '-nostdin', '-loglevel', 'info', '-f', 'lavfi', '-i', ddagrabSource(outputIdx, 5), '-frames:v', '1', '-f', 'null', '-'], 10000);
+  const r = await run(ffmpeg, ['-hide_banner', '-nostdin', '-loglevel', 'info', '-f', 'lavfi', '-i', gameWindowSource(5), '-frames:v', '1', '-f', 'null', '-'], 10000);
   return parseVideoSize(r.err);
 }

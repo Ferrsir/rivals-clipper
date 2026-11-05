@@ -1,3 +1,5 @@
+The Windows recorder and HUD detector use Windows Graphics Capture on the Marvel Rivals game window. Both wait for the game window when it is unavailable. No monitor recording fallback is used. If the game itself renders with side bars, set Game picture aspect ratio to the visible picture width divided by its height. The default of 0 uses the full window. Game-only sound and microphone settings are separate from window selection.
+
 # Local mode: kill detection and recording without Overwolf
 
 Rivals Clipper can run without Overwolf. In local mode it finds your kills by watching the screen, the same way

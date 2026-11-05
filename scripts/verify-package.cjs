@@ -26,10 +26,13 @@ async function main() {
 
   const unpacked = path.resolve(__dirname, '../release/win-unpacked');
   const resources = path.join(unpacked, 'resources');
-  for (const file of ['native/rc-audio.exe', 'app.asar.unpacked/node_modules/ffmpeg-static/ffmpeg.exe',
+  for (const file of ['native/rc-audio.exe', 'native/ffmpeg.exe',
     'app.asar.unpacked/node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz']) {
     assert.ok(fs.existsSync(path.join(resources, file)), `Missing packaged dependency: ${file}`);
   }
+  const help = spawnSync(path.join(resources, 'native/ffmpeg.exe'), ['-hide_banner', '-h', 'filter=gfxcapture'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /window_exe/);
   const files = require('@electron/asar').listPackage(path.join(resources, 'app.asar'));
   assert.ok(!files.some(file => /overwolf/i.test(file)), 'Standalone package must not contain Overwolf');
   const result = spawnSync(path.join(unpacked, 'Rivals Clipper.exe'), [__filename, '--ocr-worker', resources], {
