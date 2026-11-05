@@ -50,6 +50,15 @@ test('short duration fitting trims padding but retains every marked kill, and im
   assert.match(impossible.warnings.join(' '),/Needs review:.*requested 3 s/);
 });
 
+test('rapid distinct kills share timing context without losing their individual markers',()=>{
+  const project=projectFromIdea({...idea(),clipEdits:undefined},[clip('triple',[.366,.466,4.166])],[track]);
+  const timeline=plan({clips:project.clips,style:project.style,fps:60});
+  assert.equal(timeline.kills.length,3);
+  assert.ok(timeline.kills[1]>timeline.kills[0]);
+  assert.ok(timeline.kills[1]-timeline.kills[0]<.2);
+  assert.equal(timeline.clips[0].onBeat.length,3);
+});
+
 test('AI revisions honor explicit ordering, music start and target without changing source paths', async () => {
   const project=projectFromIdea({...idea(),clipIds:['triple','single'],clipEdits:undefined},[clip(),clip('single',[3])],[track]);
   project.order='build-up';

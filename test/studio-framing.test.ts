@@ -30,7 +30,7 @@ const ffmpeg = process.env.FFMPEG || 'ffmpeg';
 let available = true;
 try { execFileSync(ffmpeg, ['-version'], { stdio: 'ignore' }); } catch { available = false; }
 
-test('vertical clean layout removes the timer and keeps the feed on source time through retiming', { skip: !available }, () => {
+for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} removes the timer and keeps the feed on source time through retiming`, { skip: !available }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-feed-layout-'));
   try {
     const source = path.join(dir, 'source.mp4');
@@ -40,11 +40,11 @@ test('vertical clean layout removes the timer and keeps the feed on source time 
     const clip: ReelClip = { uid: 'layout', clipId: 'layout', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30,
       hasMic: false, hits: [1], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
     const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'layout', clipIndex: 0, kind: 'lead', src: [.4, 1.4], out: [0, .5], speed: 2 }],
-      size: { width: 320, height: 568 }, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+      size: { width: 320, height: outputHeight }, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
     const sample = (time: number, x: number, y: number) => {
       const rgb = execFileSync(ffmpeg, ['-v', 'error', '-ss', String(time), '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
-      const i = (Math.round(y * 568) * 320 + Math.round(x * 320)) * 3;
+      const i = (Math.round(y * outputHeight) * 320 + Math.round(x * 320)) * 3;
       return [...rgb.subarray(i, i + 3)];
     };
     const top = sample(.1, .5, .02);
