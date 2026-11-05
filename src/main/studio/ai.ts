@@ -1,4 +1,4 @@
-import { externalClip, reelClipFromSidecar, sanitizeProject } from './projects';
+import { externalClip, footageName, reelClipFromSidecar, sanitizeProject } from './projects';
 // Studio features that use your own Claude or ChatGPT sign-in (through the shell's AiClient).
 // Everything sent is text: clip facts from the sidecars, style settings, your request. No video.
 // Every reply is validated, so a bad answer can't break a project.
@@ -8,7 +8,7 @@ import type { AiMusicIdea, ExportFormat, ReelClip, ReelProject, StyleRecipe } fr
 import type { ClipSidecar } from '../../shared/types';
 import { sanitizeStyle } from './styles';
 
-const SYSTEM = 'You help edit short Marvel Rivals gameplay videos. Be concise. Follow the requested JSON shape exactly.';
+const SYSTEM = 'You help edit short gameplay and fan-edit videos (Marvel Rivals or any other game, anime, show or film). Be concise. Follow the requested JSON shape exactly.';
 
 function need(ai: AiClient | undefined): AiClient {
   if (!ai) throw new Error('Sign in to Claude or ChatGPT first (Settings, Account).');
@@ -37,14 +37,14 @@ export async function tweakStyle(ai: AiClient | undefined, style: StyleRecipe, r
 
 function clipFacts(p: ReelProject): string {
   return p.clips
-    .map((c, i) => `${i + 1}. ${c.hero ?? 'unknown hero'}, ${c.kills} kill${c.kills === 1 ? '' : 's'}${c.tags.length ? ` (${c.tags.slice(0, 6).join(', ')})` : ''}${c.map ? ` on ${c.map}` : ''}`)
+    .map((c, i) => c.external ? `${i + 1}. their own footage (${c.hits.length} action moments, ${(c.out - c.in).toFixed(1)} s)` : `${i + 1}. ${c.hero ?? 'unknown hero'}, ${c.kills} kill${c.kills === 1 ? '' : 's'}${c.tags.length ? ` (${c.tags.slice(0, 6).join(', ')})` : ''}${c.map ? ` on ${c.map}` : ''}`)
     .join('\n');
 }
 
 /** Story or lyric-style caption lines, like the reference edits. */
 export async function writeCaptions(ai: AiClient | undefined, p: ReelProject, request: string, lines: number): Promise<string[]> {
   const prompt = [
-    `Write ${lines} short on-screen caption lines for a ${p.style.name} Marvel Rivals edit. They appear one after another, each for a few beats, telling a tiny story or joke that builds to the best play. Each line at most 6 words. No hashtags, no emojis.`,
+    `Write ${lines} short on-screen caption lines for a ${p.style.name} ${footageName(p)} edit. They appear one after another, each for a few beats, telling a tiny story or joke that builds to the best play. Each line at most 6 words. No hashtags, no emojis.`,
     `Clips in order:\n${clipFacts(p) || '(no clips yet)'}`,
     p.music ? `Song: ${p.music.title}.` : '',
     request ? `The creator's idea: "${request.slice(0, 400)}"` : '',
@@ -65,7 +65,7 @@ export async function writeCaptions(ai: AiClient | undefined, p: ReelProject, re
 
 export async function postCaption(ai: AiClient | undefined, p: ReelProject, format: ExportFormat): Promise<string> {
   const prompt = [
-    `Write the post caption for this ${format.label} upload: one punchy line, then 5 to 8 relevant hashtags (include #marvelrivals).`,
+    `Write the post caption for this ${format.label} upload: one punchy line, then 5 to 8 relevant hashtags${footageName(p) === 'Marvel Rivals' ? ' (include #marvelrivals)' : ` for ${footageName(p)}`}.`,
     `Clips:\n${clipFacts(p)}`,
     'Reply as JSON: {"caption": "..."}',
   ].join('\n\n');
@@ -125,7 +125,9 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
   const assets = (project.assets ?? []).map(a => ({ id: `asset:${a.id}`, kind: a.kind, name: a.name, seconds: a.durationSec }));
   const current = { ...project, clips: project.clips.map(c => ({ uid: c.uid, clipId: c.clipId, hero: c.hero, kills: c.kills, hits: c.hits, in: c.in, out: c.out, durationSec: c.durationSec, external: c.external, cropX: c.cropX, cropY: c.cropY, cropZoom: c.cropZoom, preserveKillFeed: c.preserveKillFeed })) };
   const reply = await askJson(ai, [
-    'Revise this existing Marvel Rivals gameplay edit so it does what the creator asks. Really make the change: if they ask for a longer reel or more clips, ADD clips from the library list; if shorter, remove the weakest. Keep its imported music. Preserve all marked kills (hits) in every retained clip; remove a whole clip instead if it cannot fit.',
+    `Revise this existing ${footageName(project)} edit so it does what the creator asks.`,
+    'Your own footage (external) can be from any game, anime or film; its hits are detected action moments, not kills, and its in/out can be trimmed freely (add the same asset again to use another excerpt).',
+    ' Really make the change: if they ask for a longer reel or more clips, ADD clips from the library list; if shorter, remove the weakest. Keep its imported music. Preserve all marked kills (hits) in every retained clip; remove a whole clip instead if it cannot fit.',
     'Every clip should end right after its last kill and cut to the next one on the beat. Keep the character centred (cropX 0.5) unless asked otherwise. Keep the kill feed box (preserveKillFeed true) on game clips.',
     'Return JSON {clips:[{uid,in,out,cropX,cropY,cropZoom,preserveKillFeed} for kept clips | {clipId} to add a library clip | {clipId:"asset:..."} to add one of their videos], targetSeconds:number, musicStart:number|"auto", style:<complete style>, mix:<complete mix>, overlays:[{assetId,onClip (a uid, library clipId or asset id),from,to (seconds inside that clip),anchor:"face"|"fixed",x,y,size,shape:"circle"|"square"}], subtitles:[{onClip,from,to,text}], summary:string}. List every clip in the order it should play. Keep unchanged values.',
     'Do not add captions, intro cards, subtitles or text unless the request asks for them. Subtitles use only words the creator gave you.',
@@ -145,6 +147,18 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
   const clips: ReelClip[] = [];
   for (const patch of patches) {
     if (patch && typeof patch.clipId === 'string' && !byId.has(patch.uid)) {
+      // Another excerpt of one of your own videos, already in the edit.
+      if (patch.clipId.startsWith('asset:') && (seen.has(patch.clipId) || project.clips.some(c => c.clipId === patch.clipId))) {
+        const a = assetById.get(patch.clipId.slice(6));
+        if (a?.kind === 'video' && Number.isFinite(patch.in) && Number.isFinite(patch.out) && patch.out > patch.in + 0.2) {
+          const more = externalClip(a);
+          more.in = Math.max(0, patch.in);
+          more.out = Math.min(more.durationSec, patch.out);
+          more.hits = more.hits.filter((h) => h > more.in + 0.05 && h < more.out - 0.02);
+          if (more.out > more.in + 0.2) clips.push(more);
+        }
+        continue;
+      }
       // A clip being added.
       let added: ReelClip | undefined;
       if (patch.clipId.startsWith('asset:')) {
@@ -155,6 +169,11 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
         if (src && !project.clips.some(c => c.videoFile === src.videoFile)) added = reelClipFromSidecar(src);
       }
       if (!added || seen.has(patch.clipId)) continue;
+      if (added.external && Number.isFinite(patch.in) && Number.isFinite(patch.out) && patch.out > patch.in + 0.2) {
+        added.in = Math.max(0, patch.in);
+        added.out = Math.min(added.durationSec, patch.out);
+        added.hits = added.hits.filter((h) => h > added!.in + 0.05 && h < added!.out - 0.02);
+      }
       seen.add(patch.clipId);
       uidFor.set(patch.clipId, added.uid);
       clips.push(added);
@@ -165,6 +184,8 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
     seen.add(original.uid);
     const revised = {...original, ...Object.fromEntries(['in','out','cropX','cropY','cropZoom','preserveKillFeed'].filter(key=>patch[key]!==undefined).map(key=>[key,patch[key]]))};
     if (!Number.isFinite(revised.in) || !Number.isFinite(revised.out) || revised.in < 0 || revised.out > original.durationSec || revised.in >= revised.out) throw new Error('The revision contains an invalid source trim.');
+    // Detected action moments in your own footage are suggestions, so only kill markers are protected.
+    if (original.external) { revised.hits = original.hits.filter(h => h > revised.in + 0.05 && h < revised.out - 0.02); clips.push(revised); continue; }
     const retainedHits = original.hits.filter(hit => hit > original.in + 0.05 && hit < original.out - 0.02);
     if (retainedHits.some(hit => hit <= revised.in + 0.05 || hit >= revised.out - 0.02)) throw new Error('The revision would cut a marked kill out of a retained streak. Revise the duration or remove the whole clip.');
     clips.push(revised);

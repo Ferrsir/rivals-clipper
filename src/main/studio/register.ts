@@ -21,6 +21,8 @@ import { findFont, planFor, renderProject } from './pipeline';
 import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
 import { describeFit, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
+import { findSong, readIntent } from './intent';
+import { detectMoments, expandOwnFootage } from './moments';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
@@ -317,9 +319,13 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   // ---------- ideas ----------
   const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
   handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
-  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number, assets?: unknown) =>
-    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:await ffmpeg(), assets: sanitizeAssets(assets).filter(a => fs.existsSync(a.file)) }),
-  );
+  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number, assets?: unknown) => {
+    const ff = await ffmpeg();
+    const own = sanitizeAssets(assets).filter(a => fs.existsSync(a.file));
+    // Videos added before moment detection existed get their action moments now.
+    for (const a of own) if (a.kind === 'video' && a.moments === undefined && a.durationSec) a.moments = await detectMoments(ff, a.file, a.durationSec, a.hasAudio !== false);
+    return aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:ff, assets: own });
+  });
   /**
    * Everything after the AI's plan that makes it a finished edit: a song from your library when none was
    * picked, the length you asked for (pulling in more kill clips or dropping weak ones), and faces located
@@ -328,8 +334,27 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   const finishPlan = async (project: ReelProject, request: string, signal?: AbortSignal): Promise<{ project: ReelProject; notes: string[] }> => {
     const notes: string[] = [];
     const fmt = getFormat(project.format);
-    const target = requestedSeconds(request) ?? project.targetSeconds ?? 30;
+    const intent = readIntent(request);
+    const target = intent.seconds ?? project.targetSeconds ?? 30;
     project.targetSeconds = target;
+    // "to the song aizo": the song you named, from your music folder, wins over the AI's pick.
+    if (intent.song) {
+      const named = findSong(music().list(), intent.song);
+      if (named) {
+        const track = named.analysis ? named : await music().analyze(named.id).catch(() => named);
+        if (project.music?.trackId !== track.id) project.music = { trackId: track.id, file: track.file, title: track.title, start: 'auto' };
+        notes.push(`Using "${track.title}"${track.analysis ? ` (${Math.round(track.analysis.bpm)} BPM), cut on its beats with the biggest hit on the drop` : ''}.`);
+      } else {
+        notes.push(`"${intent.song}" isn't in your music yet. Add the song file under Music (or drop it in your music folder) and make the reel again to cut it to that song.`);
+      }
+    }
+    // Your own footage, from any game or show: long videos become excerpts around their best action.
+    const ownOnly = project.clips.length > 0 && project.clips.every(c => c.external);
+    if (ownOnly) {
+      const ex = expandOwnFootage(project, target);
+      project = ex.project;
+      if (ex.expanded) notes.push(`Cut your footage into ${project.clips.length} excerpts around its biggest moments.`);
+    }
     if (!project.music) {
       const best = suggestFromLibrary(music().list(), project.style, fmt, target)[0];
       const track = best && music().get(best.trackId);
@@ -338,25 +363,35 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
         notes.push(`Picked "${track.title}" from your music (${Math.round(track.analysis.bpm)} BPM).`);
       }
     }
-    const fit = fitToTarget(project, libraryClips(), analysisFor(project));
+    // Never pull Marvel Rivals library clips into an edit of your own footage.
+    const fit = fitToTarget(project, libraryClips(), analysisFor(project), ownOnly ? { maxAdd: 0 } : {});
     project = fit.project;
     const fitNote = describeFit(fit, target);
     if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));
-    if (fit.seconds < target - 3) notes.push(`You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
+    if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
     const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
     if (faces.length && ctx.ai) {
       const ff = await ffmpeg();
+      // One search per picture and moment, shared by every excerpt cut from the same video.
+      const found = new Map<string, Awaited<ReturnType<typeof locateFace>>>();
+      let ok = 0;
+      let failed = '';
       for (const ov of faces) {
         const clip = project.clips.find(c => c.uid === ov.clipUid);
         if (!clip) continue;
+        const key = [clip.videoFile, ov.image, ov.from, ov.to].join('|');
         try {
-          ov.track = await locateFace(ff, ctx.ai, clip, ov, request.slice(0, 400), signal);
-          notes.push('Found the face for your picture overlay.');
+          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, ov, request.slice(0, 400), signal));
+          ov.track = found.get(key);
+          ok++;
         } catch (error) {
-          notes.push(`Couldn't find the face for your picture (${(error as Error).message}); it sits where the AI first placed it.`);
+          failed = (error as Error).message;
         }
       }
+      if (ok) notes.push('Found the face for your picture overlay.');
+      if (failed) notes.push(`Couldn't find the face for your picture (${failed}); it sits where the AI first placed it.`);
     }
+    if (intent.faceOverlay && !(project.overlays ?? []).length) notes.push(!(project.assets ?? []).some(a => a.kind === 'image') ? 'Add the picture you want on their face (drop it in with your clip) and make the reel again.' : "The AI didn't place your picture; try naming who it goes on, e.g. \"put the Deadpool icon on Gojo's face\".");
     return { project, notes };
   };
   handle('studio:ideas:apply', async (_e, idea: ReelIdea, request?: string) => {

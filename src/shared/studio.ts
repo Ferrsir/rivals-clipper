@@ -219,6 +219,8 @@ export interface ReelMusic {
 export interface ReelProject {
   sourceWarnings?: string[];
   version: 1;
+  /** What the footage is from ("Marvel Rivals", "Jujutsu Kaisen"...). Empty means Marvel Rivals library clips. */
+  game?: string;
   id: string;
   name: string;
   createdAt: number;
@@ -262,6 +264,14 @@ export interface MediaAsset {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  /** Action moments found in a video (loud hits, impact frames), seconds. Used like kill markers. */
+  moments?: Moment[];
+}
+
+/** A moment of action in footage without kill markers. s is its strength (higher is bigger). */
+export interface Moment {
+  t: number;
+  s: number;
 }
 
 /** Positions are fractions of the clip's full source frame; times are seconds inside the clip. */
@@ -455,6 +465,8 @@ export interface ReelIdea {
   subtitles?: Array<{ onClip: string; from: number; to: number; text: string }>;
   /** Your own media the plan may use; clipIds can include "asset:<id>" for your videos. */
   assets?: MediaAsset[];
+  /** What the footage is from, e.g. "Jujutsu Kaisen". */
+  game?: string;
   /** Why this would do well. */
   why: string;
   source: 'ai' | 'quick';
