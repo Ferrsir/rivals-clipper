@@ -99,6 +99,8 @@ function sanitizeClip(c: any): ReelClip | null {
     width: num(c.width, 0, 10000, 0),
     height: num(c.height, 0, 10000, 0),
     fps: num(c.fps, 1, 480, 60),
+    preserveKillFeed: c.preserveKillFeed !== false,
+    followCharacter: c.followCharacter !== false,
     hasMic: !!c.hasMic,
     hits: Array.isArray(c.hits) ? c.hits.map(Number).filter((h: number) => Number.isFinite(h) && h >= 0 && h <= dur).sort((a: number, b: number) => a - b).slice(0, 40) : [],
     in: inn,

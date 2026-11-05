@@ -1,3 +1,5 @@
+import { matchPortrait } from './portrait';
+import { viewFor } from './image';
 // Runs the screen detector: HUD frames from ffmpeg (live screen or a recorded video) go through the
 // analyzer, text recognition and fusion, and out come GEP-style events. The live app and the test
 // harness both use this, so the harness measures exactly what runs while you play.
@@ -93,7 +95,8 @@ export class FrameSource extends EventEmitter {
   }
 }
 
-const OCR_MODE: Record<'feed' | 'ko' | 'banner' | 'map' | 'outcome', OcrMode> = {
+const OCR_MODE: Record<'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', OcrMode> = {
+  subtitle: 'big-text',
   feed: 'dark-text',
   ko: 'light-text',
   banner: 'light-text',
@@ -119,8 +122,12 @@ export class DetectionPipeline {
   readonly trace: Observation[] = [];
   keepTrace = false;
   private clock = () => Date.now();
+  private portraitVotes = 0;
+  private portraitHero?: string;
+  private portraitSink?: EventSink;
 
   constructor(sink: EventSink, private ocr: ScreenOcr | undefined, private o: PipelineOptions, cb: FusionCallbacks = {}) {
+    this.portraitSink = sink;
     this.analyzer = new HudAnalyzer(o.layout, { frameMs: o.frameMs, koColumnX: o.koColumnX });
     this.fusion = new ScreenFusion(sink, { ...o, ocr: !!ocr && o.ocr }, {
       ...cb,
@@ -131,6 +138,18 @@ export class DetectionPipeline {
 
   async processFrame(frame: Uint8Array, t: number): Promise<void> {
     if (this.o.awaitOcr) this.clock = () => t;
+    if (this.o.layout.regions.some(r => r.id === 'portrait')) {
+      const hero = matchPortrait(viewFor(frame, this.o.layout, 'portrait'));
+      this.portraitVotes = hero ? this.portraitVotes + 1 : 0;
+      if (!hero && this.portraitHero) {
+        this.portraitHero = undefined;
+        this.portraitSink?.infoUpdate('game_info', 'local_hero', undefined);
+      }
+      if (hero && this.portraitVotes >= 3 && hero !== this.portraitHero) {
+        this.portraitHero = hero;
+        this.portraitSink?.infoUpdate('game_info', 'local_hero', hero);
+      }
+    }
     const obs = this.analyzer.analyze(frame, t);
     for (const ob of obs) {
       if (ob.kind === 'feed-row' || ob.kind === 'ko-line' || ob.kind === 'banner') this.crops.set(`${kindOf(ob.kind)}:${ob.id}`, ob.crop);
@@ -155,7 +174,7 @@ export class DetectionPipeline {
     this.fusion.tick(t + 10_000);
   }
 
-  private runOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome', id: number): void {
+  private runOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number): void {
     const key = `${kind}:${id}`;
     const crop = this.crops.get(key);
     this.crops.delete(key);

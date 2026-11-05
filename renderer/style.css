@@ -59,3 +59,7 @@ p.small { margin: -4px 0 10px; }
 #clipPlayer::backdrop { background: rgba(0,0,0,.72); }
 #clipPlayer video { display: block; width: 100%; max-height: 68vh; object-fit: contain; }
 #clipMarkers { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+
+.clip-cover {display:block;width:100%;height:130px;object-fit:contain;background:#101318;}
+
+#clipPlayer video { aspect-ratio: auto; height: auto; }

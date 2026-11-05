@@ -1,3 +1,5 @@
+import { trackFrames } from '../src/main/studio/tracking';
+import { matchPortrait } from '../src/main/vision/portrait';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -79,4 +81,76 @@ test('OCR recognizes the known fixture, rather than merely incrementing a read c
   const result = await ocr.read({ w: 320, h: 70, data }, 'light-text');
   assert.ok(result);
   assert.match(result.text, /\bVICTORY\b/i);
+});
+
+test('strict live detection rejects unreadable KOs and merges rapid OCR variants of one victim', () => {
+  const events: string[] = [];
+  const fusion = new ScreenFusion({ gameEvent: key => { events.push(key); }, infoUpdate() {} }, { ocr: true, strictKills: true });
+  const crop = { w: 10, h: 10, data: new Uint8Array(100) }, box = { x0: 0, y0: 0, x1: 10, y1: 10 };
+  for (const [id, text] of [[1, 'ilk DEADPQOOL-Easy'], [2, 'DEADPOOL-Easy'], [3, '']] as const) {
+    const t = 1000 + id * 400;
+    fusion.onObservation({ kind: 'ko-line', id, t, box, crop, assist: false });
+    fusion.onOcr('ko', id, { text, words: text ? [{text, x0: 0, x1: 90, conf: 90}] : [] }, t + 100);
+  }
+  fusion.tick(8000);
+  assert.equal(events.filter(k => k === 'kill').length, 1);
+});
+
+test('player-linked subtitles identify the local hero and reject other speakers', () => {
+  const updates: Array<[string, unknown]> = [];
+  const f = new ScreenFusion({ gameEvent() {}, infoUpdate(_feature, key, value) { updates.push([key,value]); } }, {ocr:true,playerName:'Ferrsir'});
+  f.onOcr('subtitle', 1, {text:'ANGELA (OtherPlayer): Attack!',words:[]}, 1000);
+  f.onOcr('subtitle', 2, {text:'MAGIK (Ferrsir): Crimson Chain!',words:[]}, 2000);
+  assert.deepEqual(updates.filter(([key])=>key==='local_hero'),[['local_hero','MAGIK']]);
+});
+
+
+test('portrait matching rejects blank or unsupported image sizes', () => {
+  const blank = {id:'portrait' as const, w:34,h:36,u:0.25,mask:new Uint8Array(1224),luma:new Uint8Array(1224)};
+  assert.equal(matchPortrait(blank),undefined);
+  assert.equal(matchPortrait({...blank,w:32}),undefined);
+  const noise = Uint8Array.from({length:1224},(_,i)=>(i*73+31)%256);
+  assert.equal(matchPortrait({...blank,luma:noise}),undefined);
+});
+
+test('Make reel preserves a long prompt, blocks duplicate starts and renders the applied plan', async () => {
+  let release!: (v: unknown) => void;
+  let calls = 0, received = '', renders = 0;
+  const ctx = vm.createContext({S:{busy:{},ideaRequest:'Long prompt '.repeat(600),projects:[],project:{id:'old'}},
+    fmt:()=>({id:'tiktok'}),renderLeft(){},renderTop(){},toast(){},root:{},saveSoon:{flush(){}},
+    api:{ideas:{ai:(_f: string,p: string)=>{calls++;received=p;return new Promise(r=>release=r);},apply:async()=>({id:'new',name:'New',clips:[{}]})}},
+    openProject:async()=>{ctx.S.project={id:'new',music:{trackId:'m'}};},startRender:async()=>{renders++;},
+  });
+  const source=fs.readFileSync(path.join(__dirname,'../../renderer/studio/index.js'),'utf8');
+  vm.runInContext(source.slice(source.indexOf('async function makeReel()'),source.indexOf('function ideasPanel()')),ctx);
+  const first=ctx.makeReel();await ctx.makeReel();assert.equal(calls,1);
+  release([{title:'Plan',concept:'Use the triple',music:{}}]);await first;
+  assert.equal(received,ctx.S.ideaRequest);assert.equal(renders,1);assert.equal(ctx.S.busy['make-reel'],false);
+});
+
+test('reel revisions cannot substitute source files and preserve the chosen music', async () => {
+  const {reviseReel}=await import('../src/main/studio/ai');
+  const {createProject}=await import('../src/main/studio/projects');
+  const project=createProject();
+  project.clips=[{uid:'one',clipId:'c',videoFile:'original.mp4',durationSec:10,width:1920,height:1080,fps:30,hasMic:false,hits:[3],in:0,out:7,useMic:false,cropX:.5,cropY:.5,cropZoom:1,kills:1,score:10,tags:[]}];
+  project.music={trackId:'song',file:'song.mp3',title:'Song',start:'auto'};
+  const ai={ask:async()=>({json:{clips:[{uid:'one',in:1,out:6,videoFile:'other.mp4'}],summary:'Shortened.'}})} as any;
+  const result=await reviseReel(ai,project,'Shorten the clip');
+  assert.equal(result.project.clips[0].videoFile,'original.mp4');
+  assert.equal(result.project.clips[0].in,1);
+  assert.deepEqual(result.project.music,project.music);
+});
+
+
+test('character crop follows a moving reference patch and holds on blank frames', () => {
+  const frames: Uint8Array[]=[];
+  for (let step=0;step<4;step++) {
+    const frame=new Uint8Array(10000).fill(10);
+    for (let y=-10;y<=10;y++) for(let x=-7;x<=7;x++) frame[(72+y)*100+43+step*2+x]=40+((x+7)*37+(y+10)*59)%200;
+    frames.push(frame);
+  }
+  const points=trackFrames(frames,100,100,3);
+  assert.ok(points.at(-1)!.x>points[0].x);
+  const blank=trackFrames([new Uint8Array(10000),new Uint8Array(10000)],100,100,3);
+  assert.equal(blank[0].x,blank[1].x);
 });

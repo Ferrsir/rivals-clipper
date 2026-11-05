@@ -194,6 +194,9 @@ export interface ReelClip {
   useMic: boolean;
   /** Mute this clip's game audio. */
   muteGame?: boolean;
+  preserveKillFeed?: boolean;
+  followCharacter?: boolean;
+  cropTrack?: Array<{t:number;x:number}>;
   /** Horizontal centre of the vertical crop, 0 = left edge, 1 = right edge. */
   cropX: number;
   /** Vertical centre of the crop, used when cropZoom > 1. */

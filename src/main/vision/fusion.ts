@@ -40,6 +40,7 @@ export interface FusionOptions {
   playerName?: string;
   /** Whether text recognition is running (otherwise kills come only from the KO list and banners). */
   ocr: boolean;
+  strictKills?: boolean;
   pairWindowMs?: number;
   decideAfterMs?: number;
   practiceAfterMs?: number;
@@ -50,7 +51,7 @@ export interface FusionOptions {
 
 export interface FusionCallbacks {
   /** Text recognition wanted for an observation or a region crop. */
-  requestOcr?: (req: { id: number; kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' }) => void;
+  requestOcr?: (req: { id: number; kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle' }) => void;
   /** Ask the analyzer for a crop of a region with the next frame. */
   wantCrop?: (region: RegionId) => void;
   onHudVerified?: () => void;
@@ -148,6 +149,8 @@ export class ScreenFusion {
   private matchStartAt = -Infinity;
   private outcomeUntil = -Infinity;
   private nextOutcomeAt = 0;
+  private nextSubtitleAt = 0;
+  private subtitleHero?: string;
   private mapRequests: number[] = [];
   private mapKnown = false;
   private hudVerified: boolean;
@@ -162,6 +165,7 @@ export class ScreenFusion {
     this.hudVerified = !!opts.hudVerified;
     this.o = {
       ocr: opts.ocr,
+      strictKills: opts.strictKills ?? false,
       pairWindowMs: opts.pairWindowMs ?? 1500,
       decideAfterMs: opts.decideAfterMs ?? 700,
       practiceAfterMs: opts.practiceAfterMs ?? 90_000,
@@ -207,12 +211,12 @@ export class ScreenFusion {
         this.onHud(o.t, o.matchHud);
         break;
       case 'crop':
-        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
+        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome' || o.region === 'subtitle')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
         break;
     }
   }
 
-  onOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome', id: number, r: OcrResult | undefined, now: number): void {
+  onOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number, r: OcrResult | undefined, now: number): void {
     switch (kind) {
       case 'ko': {
         const k = this.kos.find((x) => x.id === id);
@@ -257,6 +261,18 @@ export class ScreenFusion {
         }
         break;
       }
+      case 'subtitle': {
+        if (!this.playerName || !r) break;
+        // Only a speaker explicitly associated with our exact player name can identify us.
+        const escaped = this.playerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = r.text.match(new RegExp('(?:^|\\n)\\s*([A-Z][A-Z &-]{2,35})\\s*\\(' + escaped + '\\)\\s*:', 'i'));
+        const hero = match?.[1].trim().toUpperCase();
+        if (hero && hero !== this.subtitleHero) {
+          this.subtitleHero = hero;
+          this.sink.infoUpdate('game_info', 'local_hero', hero);
+        }
+        break;
+      }
       case 'outcome': {
         const text = (r?.text ?? '').toUpperCase();
         const outcome = /VICTORY/.test(text) ? 'Victory' : /DEFEAT/.test(text) ? 'Defeat' : /DRAW/.test(text) ? 'Draw' : undefined;
@@ -273,6 +289,10 @@ export class ScreenFusion {
 
   /** Call often (every frame). Emits the events whose evidence is complete. */
   tick(now: number): void {
+    if (this.o.ocr && now >= this.nextSubtitleAt) {
+      this.nextSubtitleAt = now + 1000;
+      this.cb.wantCrop?.('subtitle');
+    }
     for (const k of this.kos) {
       if (k.done) continue;
       const ready = (k.ocrDone && (!k.feed || k.feed.ocrDone)) || now - k.t >= this.o.decideAfterMs;
@@ -349,6 +369,7 @@ export class ScreenFusion {
   }
 
   private emitKill(at: number, victim: string | undefined): void {
+    if (this.o.strictKills && (!victim || normalizeName(victim).length < 3)) return;
     if (victim && this.sameVictimAgain(victim, at)) return;
     this.checkPractice(at);
     this.lastKillAt = at;
@@ -364,7 +385,7 @@ export class ScreenFusion {
   /** True when this name was KO'd moments ago: the HUD showed the same KO twice (it moved, or flickered). */
   private sameVictimAgain(victim: string, at: number): boolean {
     this.recentVictims = this.recentVictims.filter((v) => at - v.at < SAME_VICTIM_MS);
-    if (normalizeName(victim).length >= 3 && this.recentVictims.some((v) => nameSimilarity(v.name, victim) >= 0.8)) return true;
+    if (normalizeName(victim).length >= 3 && this.recentVictims.some((v) => nameSimilarity(v.name, victim) >= 0.8 || (this.o.strictKills && Math.abs(at - v.at) < 1500 && nameSimilarity(v.name.split(/\s+/).at(-1)!, victim.split(/\s+/).at(-1)!) >= 0.65) || (this.o.strictKills && (normalizeName(v.name).includes(normalizeName(victim)) || normalizeName(victim).includes(normalizeName(v.name)))))) return true;
     this.recentVictims.push({ name: victim, at });
     return false;
   }

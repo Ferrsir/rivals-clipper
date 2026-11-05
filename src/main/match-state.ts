@@ -89,6 +89,7 @@ export function isPracticeMode(ctx: MatchContext): boolean {
 
 export class MatchState {
   localName?: string;
+  private detectedHero?: string;
   roster = new Map<number, RosterEntry>();
   context: MatchContext = {};
   heroRoles: Record<string, HeroRole>;
@@ -108,7 +109,7 @@ export class MatchState {
   }
 
   get myHero(): string | undefined {
-    return this.local?.character_name;
+    return this.local?.character_name ?? this.detectedHero;
   }
 
   teammatesAlive(): number | undefined {
@@ -147,6 +148,9 @@ export class MatchState {
       return false;
     }
     switch (key) {
+      case 'local_hero':
+        this.detectedHero = typeof value === 'string' ? value : undefined;
+        return false;
       case 'match_id':
         this.context.matchId = String(value);
         return false;

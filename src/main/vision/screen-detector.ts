@@ -132,6 +132,7 @@ export class ScreenDetector {
         ocr: ocrOn,
         playerName: opts.playerName || this.memory.learnedName,
         hudVerified: !!this.memory.hudVerified,
+        strictKills: true,
       },
       {
         onHudVerified: () => {

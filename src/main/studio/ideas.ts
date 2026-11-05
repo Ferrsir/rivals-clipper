@@ -11,11 +11,11 @@ import { hookText } from './projects';
 
 /** What the reference edits do, in words the AI can work from. */
 export const REFERENCE_STYLE = [
-  'Reference edits (TikTok creator @imfuzedb, Marvel Rivals): 25 to 55 seconds.',
-  'They open on a hook card for 3 to 8 seconds: a hero picture or meme in a strip across the middle of the screen over a blurred copy of it, with big bold capital text under it.',
-  'The hook is often a short back-and-forth, one line at a time ("WHO\'S STRONGER?" / "HIM?" / "OR YOU?", or "I CAN\'T BELIEVE IT" / "SUCH AN UNKILLABLE DUO!" / "MAYBE NOT..."), or a single "POV: YOU MAIN DEADPOOL".',
-  'Then gameplay cut on the beat in 3 to 7 second pieces, punched in on the hero, with white flashes on cuts, afterimage trails on the big moment and the best kill landing on the song\'s drop. Short story captions can run over it.',
-  'It ends with big text over the last seconds ("JOIN US DP MAINS!", "Please buff us", "Tysm for 2k") and a fade to black. The tone is funny, confident and a little self-aware.',
+  'Build a polished Marvel Rivals gameplay edit from the actual library clips and imported music. Respect the user requested duration and style.',
+  'Open directly on action unless the user explicitly requests an intro. Do not invent title cards, dialogue, captions, or an outro.',
+  'Cut and retime around verified kill markers and musical beats, with the strongest play on the drop. Keep related kills together and avoid repeated footage.',
+  'Keep the player visible and preserve a readable upper-right kill feed in vertical outputs. Prefer restrained effects and purposeful transitions.',
+  'Use actual clip durations. Never claim that unavailable external footage or layered artwork has been added.',
 ].join(' ');
 
 const SECONDS_PER_CLIP = 4.5;
@@ -237,12 +237,12 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
   return [
     `Come up with ${o.count} different ideas for ${o.format.label} reels (${o.format.idealSeconds[0]} to ${o.format.idealSeconds[1]} seconds) from my Marvel Rivals clips.`,
     REFERENCE_STYLE,
-    'Make each idea a different angle (a hero spotlight, a joke, a hot take, a challenge, a comeback story...). Write hooks and captions that sound like a real creator, not an ad. Keep each caption line to 6 words or fewer. No slurs, nothing mean about real people.',
+    'Make each idea a different angle (a hero spotlight, a joke, a hot take, a challenge, a comeback story...). Default to clean gameplay edits. Leave hook, endText, imageIdea and captions empty unless the user explicitly requests text or an intro. Keep each caption line to 6 words or fewer. No slurs, nothing mean about real people.',
     `Pick about ${n} clips per idea from the list, ordered so it builds: the best play last. Only use clip ids from the list.`,
     `Edit styles to choose from: ${STYLES.map((s) => `${s.id} (${s.description})`).join('; ')}.`,
     songs.length ? `My songs (use a trackId only if it really fits): ${JSON.stringify(songs)}` : 'I have no songs yet, so describe the music to search for.',
     'For music.search, give 2 to 4 words to search royalty-free music with (genre and mood, no artist names). For imageSearch, give 2 to 4 words to search free pictures for the hook card.',
-    o.request ? `My own idea or request: "${o.request.slice(0, 400)}"` : '',
+    o.request ? `My own idea or request: "${o.request}"` : '',
     `Clips: ${JSON.stringify(clipRows)}`,
     'Reply as JSON: {"ideas":[{"title":"","concept":"one sentence","hook":"hook card text: one line, or 2 to 4 very short lines separated by \\n that show one after another","endText":"big text over the last seconds (optional)","imageIdea":"what the hook picture shows","imageSearch":"","captions":["",""],"styleId":"","clipIds":[""],"music":{"trackId":"optional","mood":"","bpm":[120,140],"search":""},"postCaption":"post text with 4 to 6 hashtags","why":"why it would do well"}]}',
   ]
@@ -251,6 +251,7 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
 }
 
 export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number }): Promise<ReelIdea[]> {
+  if (o.request.length > 20000) throw new Error('Keep your reel prompt under 20,000 characters.');
   if (!ai) throw new Error('Sign in with Claude or ChatGPT under Settings to get AI ideas.');
   if (!o.clips.some((c) => kills(c) > 0)) throw new Error('Record a few clips with kills first.');
   const r = await ai.ask({ prompt: ideasPrompt(o), system: 'You help a Marvel Rivals creator plan short gameplay edits. Follow the requested JSON shape exactly.', expectJson: true, timeoutMs: 180_000 });

@@ -1,3 +1,4 @@
+import { trackClip } from './tracking';
 // Runs a whole export: plan per frame rate, stage A per clip (cached), stage B per output size,
 // then copies for platforms that share a size and optional no-music copies.
 
@@ -158,7 +159,8 @@ export function findFont(): string | undefined {
 
 export async function renderProject(o: PipelineOpts): Promise<string[]> {
   if (o.signal?.aborted) throw new Error('cancelled');
-  const { project, req } = o;
+  const req = o.req;
+  const project = structuredClone(o.project);
   if (!project.clips.length) throw new Error('Add at least one clip first.');
   const formats = (req.formats.length ? req.formats : [project.format]).map((id) => FORMATS[id as FormatId]).filter(Boolean);
   const workDir = path.join(o.studioDir, 'cache', safeName(project.id));
@@ -180,6 +182,9 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
 
   const files: string[] = [];
   const audioCounts = new Map<string, number>();
+  for (const clip of project.clips) {
+    if (clip.followCharacter !== false) clip.cropTrack = await trackClip(o.ffmpeg, clip, o.signal);
+  }
   for (const clip of project.clips) {
     if (!audioCounts.has(clip.videoFile)) audioCounts.set(clip.videoFile, await audioStreamCount(o.ffmpeg, clip.videoFile, o.signal));
   }

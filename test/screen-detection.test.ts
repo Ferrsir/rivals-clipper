@@ -44,9 +44,9 @@ test('HUD scale moves the regions with it', () => {
 
 test('ffmpeg graph crops every region and stacks them', () => {
   const g = hudFilterGraph(layoutFor(2560, 1440), { gpuFrames: true, fps: 10 });
-  assert.match(g, /^\[0:v\]hwdownload,format=bgra,split=6/);
+  assert.match(g, /^\[0:v\]hwdownload,format=bgra,split=8/);
   assert.equal((g.match(/crop=/g) ?? []).length, DEFAULT_REGIONS.length);
-  assert.match(g, /vstack=inputs=6\[hud\]$/);
+  assert.match(g, /vstack=inputs=8\[hud\]$/);
 });
 
 // ---------- synthetic HUD frames ----------

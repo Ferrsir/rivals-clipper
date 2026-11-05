@@ -78,7 +78,7 @@ function clipRow(c) {
   const tags = c.tags.filter((t) => !t.includes(':')).join(' ');
   const hasMic = c.audioTracks.length > 1;
   li.innerHTML = `
-    <button class="watch">Watch · ${Math.floor(c.durationMs / 60000)}:${String(Math.floor(c.durationMs / 1000) % 60).padStart(2, '0')}</button>
+    <button class="watch"><img class="clip-cover" loading="lazy" alt="Clip cover" src="file:///${c.videoFile.replace(/\\/g, '/').replace(/\.mp4$/i, '.cover.jpg')}">Watch · ${Math.floor(c.durationMs / 60000)}:${String(Math.floor(c.durationMs / 1000) % 60).padStart(2, '0')}</button>
     <div class="meta">
       <div class="title"><strong>${kills} kill${kills === 1 ? '' : 's'}</strong> · ${esc(c.hero ?? 'Unknown hero')} · ${esc(c.match.map ?? '')}</div>
       <div class="muted">${when} · ${(c.durationMs / 1000).toFixed(0)}s · score <b>${c.score}</b></div>

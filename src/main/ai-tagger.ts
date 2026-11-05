@@ -51,7 +51,8 @@ export function buildPrompt(clip: ClipSidecar): string {
     facts.join('\n'),
     `Describe the play. Pick up to ${MAX_TAGS} style tags, preferring these: ${STYLE_TAGS.join(', ')}. Only use a tag if the frames or facts support it.`,
     'Write a summary of at most 14 words, like a caption a viewer would read. Rate hype from 1 (routine) to 10 (incredible).',
-    'Reply as JSON: {"tags": ["..."], "summary": "...", "hype": 7}',
+    'Identify the PLAYER hero from their HUD portrait, held weapon, abilities and player character. Enemy and victim names do not identify the player. Set hero to null unless clearly identifiable. Set heroConfidence to high only when unambiguous.',
+    'Reply as JSON: {"tags": ["..."], "summary": "...", "hype": 7, "hero": null, "heroConfidence": "low"}',
   ].join('\n\n');
 }
 
@@ -63,14 +64,15 @@ const slug = (t: string) =>
     .slice(0, 24);
 
 /** Validate whatever the AI sent back. Never throws: bad fields are dropped or clamped. */
-export function parseReply(json: unknown): Pick<ClipAiInfo, 'tags' | 'summary' | 'hype'> {
+export function parseReply(json: unknown): Pick<ClipAiInfo, 'tags' | 'summary' | 'hype' | 'hero'> {
   const j = (json && typeof json === 'object' ? json : {}) as Record<string, unknown>;
   const rawTags = Array.isArray(j.tags) ? j.tags : [];
   const tags = [...new Set(rawTags.filter((t): t is string => typeof t === 'string').map(slug).filter(Boolean))].slice(0, MAX_TAGS);
   const summary = typeof j.summary === 'string' ? j.summary.replace(/\s+/g, ' ').trim().slice(0, 140) : '';
   const n = Number(j.hype);
   const hype = Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : 5;
-  return { tags, summary, hype };
+  const hero = typeof j.hero === 'string' && j.heroConfidence === 'high' ? j.hero.trim().slice(0, 60) : '';
+  return { tags, summary, hype, ...(hero && !/unknown|uncertain/i.test(hero) ? { hero } : {}) };
 }
 
 export function frameArgs(videoFile: string, atMs: number, outFile: string): string[] {

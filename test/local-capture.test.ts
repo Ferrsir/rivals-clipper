@@ -324,3 +324,12 @@ test('a newer start overtakes an older one', async () => {
   ff.answer(1);
   await assert.rejects(second, StartCancelled);
 });
+
+test('later clips exclude all GOPs that belong to the preceding saved clip', () => {
+  const b = new TsReplayBuffer({ maxMs: 60_000, frameTicks: 9000 });
+  const now = 1_000_000;
+  b.push(FIXTURE, now);
+  const first = b.endCapture(b.beginCapture(60_000, now), now - 1500)!;
+  const second = b.endCapture(b.beginCapture(60_000, now, first.endEpoch))!;
+  assert.ok(second.startEpoch >= first.endEpoch);
+});

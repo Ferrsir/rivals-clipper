@@ -321,10 +321,6 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       break;
     case 'assist':
       pending?.events.push({ type: 'assist', at: now, myHero: state.myHero });
-      if (settings.assistsExtendClip && pending) {
-        const action = streak.onKill(now);
-        if (action.type === 'extend') scheduleStop(action.stopAt);
-      }
       break;
     case 'death':
       pending?.events.push({ type: 'death', at: now, myHero: state.myHero });
@@ -354,6 +350,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
 function onInfoUpdate(feature: string, key: string, value: unknown) {
   log.write('info', { feature, key, value });
   const learned = state.onInfoUpdate(feature, key, value, Date.now());
+  if (key === 'local_hero' && pending && !pending.hero) pending.hero = state.myHero;
   if (learned) {
     try {
       fs.writeFileSync(paths(settings.rootFolder).heroRoles, JSON.stringify(state.heroRoles, null, 2));

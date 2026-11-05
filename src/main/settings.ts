@@ -60,8 +60,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   rootFolder: 'F:\\RivalsClips',
   bufferSeconds: 60,
-  preRollSeconds: 5,
-  postRollSeconds: 2,
+  preRollSeconds: 3,
+  postRollSeconds: 4,
   maxClipSeconds: 20,
   resolution: 'native',
   fps: 60,
@@ -120,9 +120,9 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     const v = k in r ? r[k] : (base as unknown as Record<string, unknown>)[k];
     passthrough[k] = v !== null && typeof v === typeof def && Array.isArray(v) === Array.isArray(def) ? v : def;
   }
-  const postRollSeconds = clampInt(r.postRollSeconds, 2, 15, base.postRollSeconds);
+  const postRollSeconds = clampInt(r.postRollSeconds, 2, 4, base.postRollSeconds);
   const maxClipSeconds = clampInt(r.maxClipSeconds, 15, 300, base.maxClipSeconds);
-  const preRollSeconds = Math.min(clampInt(r.preRollSeconds, 3, 40, base.preRollSeconds), Math.max(0, maxClipSeconds - postRollSeconds));
+  const preRollSeconds = Math.min(clampInt(r.preRollSeconds, 3, 4, base.preRollSeconds), Math.max(0, maxClipSeconds - postRollSeconds));
   const s: Settings = {
     ...(passthrough as unknown as Settings),
     rootFolder: str(r.rootFolder, base.rootFolder),

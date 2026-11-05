@@ -61,6 +61,8 @@ export interface ClipSidecar {
 }
 
 export interface ClipAiInfo {
+  /** Player hero visually identified from the player HUD, only when clear. */
+  hero?: string;
   /** Play-style tags such as "flank", "dive", "ult-combo", lowercase with dashes. */
   tags: string[];
   /** One short line describing the play. */
