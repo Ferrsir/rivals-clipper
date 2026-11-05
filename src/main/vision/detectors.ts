@@ -192,7 +192,10 @@ export interface KoOptions {
  * line that took its place.
  */
 export function koCandidates(v: View, opts: KoOptions = {}): Candidate[] {
-  const strong = koLines(v, WHITE, opts);
+  // White letters alone also occur on lobby buttons and scenery. A new KO
+  // needs a separate, roughly square badge before the name. Weak observations
+  // can maintain an existing track, but cannot start one.
+  const strong = koLines(v, WHITE, opts).filter(c => hasKoBadge(v, c.box));
   for (const c of strong) {
     c.strong = true;
     c.assist = isAssistIcon(iconShape(v, c.box, WHITE));
@@ -200,6 +203,32 @@ export function koCandidates(v: View, opts: KoOptions = {}): Candidate[] {
   const weak = koLines(v, PALE, opts).filter((c) => !strong.some((s) => overlapY(s.box, c.box)));
   for (const c of weak) c.strong = false;
   return [...strong, ...weak];
+}
+
+function hasKoBadge(v: View, b: Box): boolean {
+  const shape = iconShape(v, b, WHITE);
+  const width = Math.round(shape.width * v.u);
+  const height = b.y1 - b.y0;
+  if (shape.width < 12 || width < height * 0.55 || width > height * 1.5 || b.x1 - b.x0 < width + 6 * v.u) return false;
+  if (isAssistIcon(shape)) return true;
+  // The crossed blades change shape down the badge. Repeated
+  // vertical strokes from a row of ordinary letters do not.
+  const upper = b.y0 + Math.floor(height * 0.3), mid = b.y0 + Math.floor(height * 0.52);
+  let changed = 0;
+  for (let x = b.x0; x < b.x0 + width; x++) {
+    if ((v.mask[upper * v.w + x] & WHITE) !== (v.mask[mid * v.w + x] & WHITE)) changed++;
+  }
+  if (changed < Math.max(1, width * 0.08)) return false;
+  if (shape.topToBottom < 0.55 || shape.topToBottom > 1.9) return false;
+  // The KO emblem has ink at its centre, as well as a top and bottom.
+  let ink = 0, area = 0;
+  for (let y = b.y0 + Math.floor(height * 0.35); y < b.y0 + Math.ceil(height * 0.65); y++) {
+    for (let x = b.x0 + Math.floor(width * 0.35); x < b.x0 + Math.ceil(width * 0.65); x++) {
+      if (v.mask[y * v.w + x] & WHITE) ink++;
+      area++;
+    }
+  }
+  return ink >= area * 0.3;
 }
 
 export interface IconShape {

@@ -4,6 +4,7 @@
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 
 export interface FfmpegInfo {
   ok: boolean;
@@ -25,6 +26,10 @@ function run(bin: string, args: string[], timeoutMs = 15000): Promise<{ code: nu
 
 function bundled(): string | undefined {
   try {
+    if (process.platform === 'win32' && process.resourcesPath) {
+      const native = path.join(process.resourcesPath, 'native', 'ffmpeg.exe');
+      if (fs.existsSync(native)) return native;
+    }
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     let p = require('ffmpeg-static') as string | null;
     if (!p) return undefined;
@@ -51,7 +56,8 @@ export async function findFfmpeg(recorderFfmpeg?: string, force = false): Promis
     if (v.code !== 0) continue;
     const filters = await run(bin, ['-hide_banner', '-filters']);
     const encoders = await run(bin, ['-hide_banner', '-encoders']);
-    const missing = REQUIRED_FILTERS.filter((f) => !new RegExp(`\\s${f}\\s`).test(filters.out));
+    const required = process.platform === 'win32' ? [...REQUIRED_FILTERS, 'gfxcapture'] : REQUIRED_FILTERS;
+    const missing = required.filter((f) => !new RegExp(`\\s${f}\\s`).test(filters.out));
     if (!/\slibx264\s/.test(encoders.out)) missing.push('libx264');
     if (missing.length) {
       lastProblem = `ffmpeg at ${bin} is missing ${missing.join(', ')}.`;

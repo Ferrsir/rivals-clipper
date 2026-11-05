@@ -15,7 +15,8 @@
     "test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "dist": "npm run build && electron-builder --publish=never",
     "harness": "npm run build && node dist/tools/harness.js",
-    "build:native": "powershell -ExecutionPolicy Bypass -File scripts/build-native.ps1"
+    "build:native": "powershell -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "predist": "pwsh -NoProfile -File scripts/prepare-window-capture.ps1"
   },
   "build": {
     "appId": "com.ferris.rivalsclipper",
@@ -28,7 +29,8 @@
       "!dist/tools/**",
       "renderer/**/*",
       "package.json",
-      "!node_modules/@tesseract.js-data/eng/4.0.0/**"
+      "!node_modules/@tesseract.js-data/eng/4.0.0/**",
+      "!node_modules/ffmpeg-static/ffmpeg.exe"
     ],
     "win": {
       "target": "nsis",
@@ -50,7 +52,9 @@
         "from": "native/bin",
         "to": "native",
         "filter": [
-          "rc-audio.exe"
+          "rc-audio.exe",
+          "ffmpeg.exe",
+          "ffmpeg-LICENSE.txt"
         ]
       }
     ]

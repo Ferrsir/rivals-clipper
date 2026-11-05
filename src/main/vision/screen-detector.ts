@@ -99,12 +99,12 @@ export class ScreenDetector {
       return;
     }
     this.memory = this.loadMemory();
-    const screenKey = `${size.width}x${size.height}@${opts.hudScale}`;
+    const screenKey = `${size.width}x${size.height}@${opts.hudScale}/${opts.hudAspect}`;
     if (this.memory.screen && this.memory.screen !== screenKey) this.memory.hudVerified = false;
     this.memory.screen = screenKey;
     this.saveMemory();
 
-    this.layout = layoutFor(size.width, size.height, opts.hudScale, DEFAULT_REGIONS);
+    this.layout = layoutFor(size.width, size.height, opts.hudScale, DEFAULT_REGIONS, opts.hudAspect);
     if (opts.readScreenText) {
       this.ocr ??= new ScreenOcr();
       const ok = await this.ocr.init();

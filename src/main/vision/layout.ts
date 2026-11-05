@@ -66,14 +66,16 @@ export interface HudLayout {
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
-export function layoutFor(screenW: number, screenH: number, hudScale = 1, specs: RegionSpec[] = DEFAULT_REGIONS): HudLayout {
+export function layoutFor(screenW: number, screenH: number, hudScale = 1, specs: RegionSpec[] = DEFAULT_REGIONS, gameAspect = 0): HudLayout {
   const unit = screenH / 1440; // screen px per HUD unit at scale 1
+  const playWidth = gameAspect > 0 ? Math.min(screenW, screenH * gameAspect) : screenW;
+  const inset = (screenW - playWidth) / 2;
   const regions: RegionGeom[] = [];
   let y = 0;
   let maxW = 0;
   for (const s of specs) {
     const u = unit * hudScale;
-    const anchorX = s.anchor === 'left' ? 0 : s.anchor === 'center' ? screenW / 2 : screenW;
+    const anchorX = s.anchor === 'left' ? inset : s.anchor === 'center' ? screenW / 2 : screenW - inset;
     let x0 = anchorX + s.x * u;
     let y0 = s.y * u;
     let w = s.w * u;

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { AudioChunkParser, PcmRing, encodeChunk, wavHeader } from '../src/main/capture/audio-buffer';
 import { TS_PACKET, TsReplayBuffer } from '../src/main/capture/ts-buffer';
-import { ddagrabSource, encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, planRecording, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
+import { gameWindowSource, encoderCandidates, muxArgs, parseAdapterLine, parseVideoSize, planRecording, recordArgs, videoFilter, type GpuAdapter } from '../src/main/capture/encoder';
 import { parseTasklist, GameWatcher } from '../src/main/capture/game-watcher';
 import { chooseEngine, lateBy } from '../src/main/engine';
 import { DEFAULT_SETTINGS, localOptions } from '../src/main/settings';
@@ -185,13 +185,9 @@ test('recording preserves aspect ratio and the chosen bitrate', () => {
   assert.equal(format.bitrateKbps, 12345);
 });
 
-test('screen capture options exist in the Windows ffmpeg build', { skip: process.platform !== 'win32' }, () => {
-  const bundled = require('ffmpeg-static') as string;
-  const bin = fs.existsSync(bundled) ? bundled : process.env.FFMPEG || 'ffmpeg';
-  const help = execFileSync(bin, ['-hide_banner', '-h', 'filter=ddagrab'], { encoding: 'utf8', windowsHide: true });
-  for (const option of ddagrabSource(0, 60).slice('ddagrab='.length).split(':')) {
-    assert.match(help, new RegExp(`\\b${option.split('=')[0]}\\s+<`));
-  }
+test('the live source only matches the game executable, including when its window is absent', () => {
+  assert.equal(gameWindowSource(60), "gfxcapture=window_exe='(?i)^Marvel-Win64-Shipping[.]exe$':capture_cursor=0:max_framerate=60");
+  assert.ok(recordArgs({ outputIdx: 4, fps: 60, bitrateKbps: 8000, encoder: { id: 'x264', gpuFrames: false } }).includes(gameWindowSource(60)));
 });
 
 const NVIDIA: GpuAdapter = { index: 0, vendorId: '10de', deviceId: '2c02', name: 'NVIDIA GeForce RTX 5080', vendor: 'nvidia' };
@@ -274,7 +270,7 @@ test('late screen events stretch the pre-roll by how late they are', () => {
 
 test('local settings are cleaned up', () => {
   const o = localOptions({ hudScale: 'abc' as unknown as number, captureMonitor: -3, detectionFps: 99, localEncoder: 'foo' as never, engine: 'local', playerName: '  Leithl  ' });
-  assert.deepEqual(o, { engine: 'local', captureMonitor: 0, localEncoder: 'auto', playerName: 'Leithl', hudScale: 1, detectionFps: 20, readScreenText: true });
+  assert.deepEqual(o, { engine: 'local', captureMonitor: 0, localEncoder: 'auto', playerName: 'Leithl', hudScale: 1, hudAspect: 0, detectionFps: 20, readScreenText: true });
 });
 
 // ---------- recorder start and stop ----------
