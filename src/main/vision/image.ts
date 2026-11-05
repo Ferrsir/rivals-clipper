@@ -48,7 +48,7 @@ export function makeView(frame: Uint8Array, layout: HudLayout, g: RegionGeom): V
       if (b >= 160 && b - r >= 60 && b >= gr) m |= BLUE;
       if (r >= 170 && r - b >= 70 && r - gr >= 30) m |= RED;
       mask[row + x] = m;
-      luma[row + x] = l;
+      luma[row + x] = g.id === 'subtitle' && b > 120 && gr > 70 && b - r > 35 ? 255 : l;
     }
   }
   return { id: g.id, w, h, u: g.pxPerUnit, mask, luma };

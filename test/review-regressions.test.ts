@@ -93,3 +93,11 @@ test('strict live detection rejects unreadable KOs and merges rapid OCR variants
   fusion.tick(8000);
   assert.equal(events.filter(k => k === 'kill').length, 1);
 });
+
+test('player-linked subtitles identify the local hero and reject other speakers', () => {
+  const updates: Array<[string, unknown]> = [];
+  const f = new ScreenFusion({ gameEvent() {}, infoUpdate(_feature, key, value) { updates.push([key,value]); } }, {ocr:true,playerName:'Ferrsir'});
+  f.onOcr('subtitle', 1, {text:'ANGELA (OtherPlayer): Attack!',words:[]}, 1000);
+  f.onOcr('subtitle', 2, {text:'MAGIK (Ferrsir): Crimson Chain!',words:[]}, 2000);
+  assert.deepEqual(updates.filter(([key])=>key==='local_hero'),[['local_hero','MAGIK']]);
+});

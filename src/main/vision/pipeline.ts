@@ -93,7 +93,8 @@ export class FrameSource extends EventEmitter {
   }
 }
 
-const OCR_MODE: Record<'feed' | 'ko' | 'banner' | 'map' | 'outcome', OcrMode> = {
+const OCR_MODE: Record<'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', OcrMode> = {
+  subtitle: 'big-text',
   feed: 'dark-text',
   ko: 'light-text',
   banner: 'light-text',
@@ -155,7 +156,7 @@ export class DetectionPipeline {
     this.fusion.tick(t + 10_000);
   }
 
-  private runOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome', id: number): void {
+  private runOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number): void {
     const key = `${kind}:${id}`;
     const crop = this.crops.get(key);
     this.crops.delete(key);

@@ -9,7 +9,7 @@
 // They were measured from gameplay footage at default HUD settings and can be tuned per player with
 // a calibration file (see docs/local-mode.md).
 
-export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome';
+export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome' | 'subtitle';
 export type Anchor = 'left' | 'center' | 'right';
 
 export interface RegionSpec {
@@ -25,6 +25,7 @@ export interface RegionSpec {
 }
 
 export const DEFAULT_REGIONS: RegionSpec[] = [
+  { id: 'subtitle', anchor: 'center', x: -600, y: 1070, w: 1400, h: 90, scale: 1.5 },
   // Kill feed, top right. Rows where you are involved have a light background.
   { id: 'feed', anchor: 'right', x: -780, y: 30, w: 760, h: 420, scale: 0.75 },
   // Your KOs, listed to the right of the crosshair ("✦ PlayerName").

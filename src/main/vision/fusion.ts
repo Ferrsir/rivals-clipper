@@ -51,7 +51,7 @@ export interface FusionOptions {
 
 export interface FusionCallbacks {
   /** Text recognition wanted for an observation or a region crop. */
-  requestOcr?: (req: { id: number; kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' }) => void;
+  requestOcr?: (req: { id: number; kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle' }) => void;
   /** Ask the analyzer for a crop of a region with the next frame. */
   wantCrop?: (region: RegionId) => void;
   onHudVerified?: () => void;
@@ -149,6 +149,8 @@ export class ScreenFusion {
   private matchStartAt = -Infinity;
   private outcomeUntil = -Infinity;
   private nextOutcomeAt = 0;
+  private nextSubtitleAt = 0;
+  private subtitleHero?: string;
   private mapRequests: number[] = [];
   private mapKnown = false;
   private hudVerified: boolean;
@@ -209,12 +211,12 @@ export class ScreenFusion {
         this.onHud(o.t, o.matchHud);
         break;
       case 'crop':
-        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
+        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome' || o.region === 'subtitle')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
         break;
     }
   }
 
-  onOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome', id: number, r: OcrResult | undefined, now: number): void {
+  onOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number, r: OcrResult | undefined, now: number): void {
     switch (kind) {
       case 'ko': {
         const k = this.kos.find((x) => x.id === id);
@@ -259,6 +261,18 @@ export class ScreenFusion {
         }
         break;
       }
+      case 'subtitle': {
+        if (!this.playerName || !r) break;
+        // Only a speaker explicitly associated with our exact player name can identify us.
+        const escaped = this.playerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = r.text.match(new RegExp('(?:^|\\n)\\s*([A-Z][A-Z &-]{2,35})\\s*\\(' + escaped + '\\)\\s*:', 'i'));
+        const hero = match?.[1].trim().toUpperCase();
+        if (hero && hero !== this.subtitleHero) {
+          this.subtitleHero = hero;
+          this.sink.infoUpdate('game_info', 'local_hero', hero);
+        }
+        break;
+      }
       case 'outcome': {
         const text = (r?.text ?? '').toUpperCase();
         const outcome = /VICTORY/.test(text) ? 'Victory' : /DEFEAT/.test(text) ? 'Defeat' : /DRAW/.test(text) ? 'Draw' : undefined;
@@ -275,6 +289,10 @@ export class ScreenFusion {
 
   /** Call often (every frame). Emits the events whose evidence is complete. */
   tick(now: number): void {
+    if (this.o.ocr && now >= this.nextSubtitleAt) {
+      this.nextSubtitleAt = now + 1000;
+      this.cb.wantCrop?.('subtitle');
+    }
     for (const k of this.kos) {
       if (k.done) continue;
       const ready = (k.ocrDone && (!k.feed || k.feed.ocrDone)) || now - k.t >= this.o.decideAfterMs;

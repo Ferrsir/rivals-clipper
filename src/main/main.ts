@@ -119,7 +119,7 @@ const tagger = new AiTagger({
       return undefined;
     }
   },
-  save: (videoFile, info) => updateSidecar(videoFile, { ai: info, ...(info.hero ? { hero: info.hero } : {}) }),
+  save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
   canRun: () => !quitting && !inMatch && !pending,
   enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
   onTagged: (clip) => {
@@ -354,6 +354,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
 function onInfoUpdate(feature: string, key: string, value: unknown) {
   log.write('info', { feature, key, value });
   const learned = state.onInfoUpdate(feature, key, value, Date.now());
+  if (key === 'local_hero' && pending && !pending.hero) pending.hero = state.myHero;
   if (learned) {
     try {
       fs.writeFileSync(paths(settings.rootFolder).heroRoles, JSON.stringify(state.heroRoles, null, 2));
