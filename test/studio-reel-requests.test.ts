@@ -184,7 +184,7 @@ test('scoreboard frames are recognised from their dark, grey look', async () => 
   const c = { in: 0, out: 7, hits: [4] };
   assert.deepEqual(trimAround(c, [0.5, 1, 1.5]), { in: 1.8, out: 7, hits: [4] }, 'trimmed off before the kill');
   assert.equal(trimAround(c, [3.5]), null, 'too close to the kill: drop the clip');
-  assert.deepEqual(trimAround(c, [6]), { in: 0, out: 5.95, hits: [4] });
+  assert.deepEqual(trimAround(c, [6]), { in: 0, out: 5.7, hits: [4] }, 'cut a whole sample before the scoreboard');
 });
 
 test('game crops frame the hero left of the crosshair; a hand-moved crop wins', async () => {

@@ -98,7 +98,8 @@ export function trimAround<T extends { in: number; out: number; hits: number[] }
   let b = clip.out;
   for (const t of inside) {
     if (t < first - 0.6) a = Math.max(a, t + 0.3);
-    else if (t > last + 0.3) b = Math.min(b, t - 0.05);
+    // Samples are 0.25 s apart, so the scoreboard may open up to a sample before the first flagged one.
+    else if (t > last + 0.3) b = Math.min(b, t - 0.3);
     else return null;
   }
   // Keep at least 1.5 s of build-up, or the clip opens straight on the kill.

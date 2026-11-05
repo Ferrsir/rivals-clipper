@@ -347,7 +347,15 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const prepare = (c: ReelClip) => (c.external ? c : trimAround(c, bad.get(c.videoFile) ?? []));
     const before = project.clips.length;
     project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);
-    if (project.clips.length < before) notes.push(`Left out ${before - project.clips.length} clip${before - project.clips.length === 1 ? '' : 's'} with the scoreboard open.`);
+    const dropped = before - project.clips.length;
+    if (!project.clips.length) {
+      // Every pick had the scoreboard open: start from the best usable kill clip so fitting can fill the rest.
+      for (const source of pool) {
+        const c = fs.existsSync(source.videoFile) ? prepare(reelClipFromSidecar(source)) : null;
+        if (c) { project.clips = [c]; break; }
+      }
+    }
+    if (dropped) notes.push(`Left out ${dropped} clip${dropped === 1 ? '' : 's'} with the scoreboard open.`);
     const fit = fitToTarget(project, pool, analysisFor(project), { prepare });
     project = fit.project;
     const fitNote = describeFit(fit, target);
