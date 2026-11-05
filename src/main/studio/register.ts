@@ -9,7 +9,7 @@ import { Library, queryClips, type ClipQuery, type ClipSort } from '../library';
 import { Settings, paths } from '../settings';
 import type { ClipSidecar } from '../../shared/types';
 import type { FormatId, FreeMedia, PublishPlatform, PublishRequest, ReelClip, ReelIdea, ReelProject, RenderRequest, StudioInit } from '../../shared/studio';
-import { musicIdeas, pickClips, postCaption, tweakStyle, writeCaptions } from './ai';
+import { reviseReel, musicIdeas, pickClips, postCaption, tweakStyle, writeCaptions } from './ai';
 import { findFfmpeg } from './ffmpeg-bin';
 import { aiIdeas, quickIdeas } from './ideas';
 import * as openverse from './openverse';
@@ -279,6 +279,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   });
 
   // ---------- AI ----------
+  handle('studio:ai:reviseReel', (_e, proj: unknown, request: string) => reviseReel(ctx.ai, sanitizeProject(proj), String(request ?? '')));
   handle('studio:ai:status', async () => (ctx.ai ? ctx.ai.status() : { signedIn: false, provider: 'none' }));
   handle('studio:ai:tweakStyle', (_e, proj: unknown, request: string) => tweakStyle(ctx.ai, sanitizeProject(proj).style, String(request ?? '')));
   handle('studio:ai:captions', (_e, proj: unknown, request: string, lines: number) => writeCaptions(ctx.ai, sanitizeProject(proj), String(request ?? ''), Math.max(2, Math.min(20, Number(lines) || 6))));
@@ -299,7 +300,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
   handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
   handle('studio:ideas:ai', (_e, format: FormatId, request: string) =>
-    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? '').slice(0, 400), count: 5 }),
+    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count: 5 }),
   );
   handle('studio:ideas:apply', (_e, idea: ReelIdea) => {
     if (!idea || typeof idea !== 'object' || !Array.isArray(idea.clipIds)) throw new Error('Not an idea');
@@ -313,8 +314,9 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     proj.captions = (Array.isArray(idea.captions) ? idea.captions : []).filter((x) => typeof x === 'string' && x.trim()).slice(0, 14).map((text) => ({ text }));
     const hook = hookText(idea.hook);
     // About 1.6 s per hook line, so each one can be read.
-    proj.intro = hook ? { text: hook, seconds: Math.min(8, Math.max(3, Math.round(hook.split('\n').length * 1.6 * 2) / 2)), layout: 'band' } : null;
-    proj.outro = typeof idea.endText === 'string' && idea.endText.trim() ? { text: idea.endText.trim().slice(0, 100), seconds: 3 } : null;
+    proj.intro = null;
+    proj.outro = null;
+    proj.captions = [];
     if (typeof idea.postCaption === 'string') proj.caption = idea.postCaption.slice(0, 2200);
     const t = idea.music?.trackId ? music().get(idea.music.trackId) : undefined;
     if (t) proj.music = { trackId: t.id, file: t.file, title: t.title, start: 'auto' };

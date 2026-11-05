@@ -245,3 +245,12 @@ test('a cancelled render never starts a cached or new export', { skip }, async (
   }), /cancelled/);
   assert.equal(fs.existsSync(reelsDir), false);
 });
+
+test('music remains audible after a silent intro and silent gameplay', {skip,timeout:120_000}, async () => {
+  const p=project('raw',{music:true,intro:true});
+  const file=path.join(dir,'silent-with-intro.mp4');
+  ff(['-f','lavfi','-i','testsrc2=size=320x180:rate=30:duration=3','-an','-c:v','libx264',file]);
+  p.clips=[{...p.clips[0],videoFile:file,durationSec:3,in:0,out:3,hits:[1.5],hasMic:false,useMic:false}];
+  const {files}=await render(p,{preview:true});
+  assert.ok(meanVolume(files[0])>-40,'the preview lost its imported music');
+});

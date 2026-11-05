@@ -1,3 +1,4 @@
+import { sanitizeProject } from './projects';
 // Studio features that use your own Claude or ChatGPT sign-in (through the shell's AiClient).
 // Everything sent is text: clip facts from the sidecars, style settings, your request. No video.
 // Every reply is validated, so a bad answer can't break a project.
@@ -110,4 +111,26 @@ export async function pickClips(ai: AiClient | undefined, clips: ClipSidecar[], 
   const ids: unknown[] = Array.isArray(j?.ids) ? j.ids : Array.isArray(j) ? j : [];
   const known = new Set(clips.map((c) => c.id));
   return ids.filter((x): x is string => typeof x === 'string' && known.has(x)).slice(0, 30);
+}
+
+
+export async function reviseReel(ai: AiClient | undefined, project: ReelProject, request: string): Promise<{project: ReelProject; summary: string}> {
+  if (!request.trim() || request.length > 20000) throw new Error('Describe the changes in up to 20,000 characters.');
+  const reply = await askJson(ai, [
+    'Revise this existing gameplay edit. Keep its imported music. Only use clips already in the project.',
+    'Return JSON {clips:[{uid,in,out,cropX,cropY,cropZoom,preserveKillFeed}],style:<complete style>,mix:<complete mix>,summary:string}. Keep unchanged values. Do not add captions, intro cards or text. Include every retained clip, in desired order. Kill feed must remain visible in vertical outputs.',
+    JSON.stringify(project), request,
+  ].join('\n\n'), 180000);
+  if (!reply || typeof reply !== 'object') throw new Error('No usable revision was returned.');
+  const byId = new Map(project.clips.map(clip => [clip.uid,clip]));
+  const patches = Array.isArray(reply.clips) ? reply.clips : project.clips;
+  const seen = new Set<string>();
+  const clips = patches.map((patch: any) => {
+    const original = byId.get(patch?.uid);
+    if (!original || seen.has(original.uid)) throw new Error('The revision selected an unavailable or duplicate clip.');
+    seen.add(original.uid);
+    return {...original, ...Object.fromEntries(['in','out','cropX','cropY','cropZoom','preserveKillFeed','followCharacter'].filter(key=>patch[key]!==undefined).map(key=>[key,patch[key]]))};
+  });
+  if (!clips.length) throw new Error('The revision removed every clip.');
+  return {project:sanitizeProject({...project,clips,style:reply.style || project.style,mix:reply.mix || project.mix,intro:null,outro:null,captions:[]}),summary:typeof reply.summary==='string'?reply.summary.slice(0,500):'Updated the edit.'};
 }

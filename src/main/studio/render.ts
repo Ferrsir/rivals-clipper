@@ -68,7 +68,7 @@ export function atempoChain(speed: number): string {
 }
 
 /** Crop the source to the output's shape around the clip's crop centre. */
-export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom'>, out: Size): string {
+export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' | 'cropTrack'>, out: Size, offset = 0): string {
   const ar = out.width / out.height;
   const z = Math.max(1, clip.cropZoom || 1);
   const cx = Math.min(1, Math.max(0, clip.cropX ?? 0.5));
@@ -76,7 +76,16 @@ export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom'>,
   // Width limited by the source width for wide outputs on narrower sources.
   const w = `trunc(min(iw\\,ih*${r6(ar)})/${r6(z)}/2)*2`;
   const h = `trunc(min(ih\\,iw/${r6(ar)})/${r6(z)}/2)*2`;
-  return `crop=w=${w}:h=${h}:x=(iw-ow)*${r6(cx)}:y=(ih-oh)*${r6(cy)}`;
+  let center = r6(cx);
+  if (out.height > out.width && clip.cropTrack?.length) {
+    let tracked = r6(clip.cropTrack.at(-1)!.x);
+    for (let i=clip.cropTrack.length-2;i>=0;i--) {
+      const a=clip.cropTrack[i],b=clip.cropTrack[i+1];
+      tracked=`if(lt(t+${r6(offset)},${r6(b.t)}),${r6(a.x)}+(${r6(b.x-a.x)})*clip((t+${r6(offset)}-${r6(a.t)})/${r6(b.t-a.t)},0,1),${tracked})`;
+    }
+    center=`clip((iw*(${tracked})-ow/2)/(iw-ow),0,1)`;
+  }
+  return `crop=w=${w}:h=${h}:x='(iw-ow)*(${center})':y=(ih-oh)*${r6(cy)}`;
 }
 
 export function hashOf(v: unknown): string {
@@ -99,14 +108,22 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 4, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 6, track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
   const n = segs.length;
   const scaleFlags = o.preview ? 'fast_bilinear' : 'bicubic';
   const lines: string[] = [];
-  lines.push(`[0:v]setpts=PTS-STARTPTS,${cropFilter(clip, size)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1,format=yuv420p,split=${n}${segs.map((_, i) => `[vi${i}]`).join('')}`);
+  const split = `format=yuv420p,split=${n}${segs.map((_, i) => `[vi${i}]`).join('')}`;
+  const gameplay = `${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  if (size.height > size.width && clip.preserveKillFeed !== false) {
+    const feedWidth = Math.round(size.width * 0.48 / 2) * 2;
+    lines.push(`[0:v]setpts=PTS-STARTPTS,split=2[gameSrc][feedSrc]`);
+    lines.push(`[feedSrc]crop=w=trunc(iw*0.28/2)*2:h=trunc(ih*0.22/2)*2:x=iw-ow:y=0,scale=${feedWidth}:-2:flags=bicubic[feed]`);
+    lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+    lines.push(`[gamePicture][feed]overlay=x=W-w-${Math.round(size.width*0.04)}:y=${Math.round(size.height*0.13)},${split}`);
+  } else lines.push(`[0:v]setpts=PTS-STARTPTS,${gameplay},${split}`);
   const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>
     `[0:a:${idx}]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=${n}${segs.map((_, i) => `[${label}${i}]`).join('')}`;
@@ -499,8 +516,8 @@ export function buildAssembleJob(o: AssembleOpts): FfJob & { concatList: string 
   const finishAudio = (inputs: string[], label: string) => {
     // Some FFmpeg versions normalize digital silence to non-finite samples.
     // Replace only those samples, and explicitly retain the stereo layout for AAC.
-    if (inputs.length === 1) return `${inputs[0]}loudnorm=I=-14:TP=-1.5:LRA=11,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
-    return `${inputs.join('')}amix=inputs=${inputs.length}:normalize=0:duration=first,loudnorm=I=-14:TP=-1.5:LRA=11,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
+    if (inputs.length === 1) return `${inputs[0]}alimiter=limit=0.84:level=false,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
+    return `${inputs.join('')}amix=inputs=${inputs.length}:normalize=0:duration=first,alimiter=limit=0.84:level=false,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
   };
   if (o.noMusicAudio && o.music) {
     // Split every source used by both mixes.

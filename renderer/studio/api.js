@@ -43,6 +43,7 @@ export const api = {
     aiIdeas: (project) => call('studio:music:aiIdeas', project),
   },
   ai: {
+    reviseReel: (project, request) => call('studio:ai:reviseReel', project, request),
     status: () => call('studio:ai:status'),
     tweakStyle: (project, request) => call('studio:ai:tweakStyle', project, request),
     captions: (project, request, lines) => call('studio:ai:captions', project, request, lines),

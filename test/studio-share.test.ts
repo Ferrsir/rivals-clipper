@@ -233,3 +233,10 @@ test('accounts vault encrypts at rest and keeps keys when disconnecting', () => 
   assert.equal(v.get('youtube').tokens, undefined);
   assert.equal(v.get('youtube').clientSecret, 'zq-secret-9');
 });
+
+
+test('long reel prompts reach the AI with their final requirements intact', () => {
+  const request = 'Build my reel. '.repeat(700) + 'FINAL REQUIREMENT: keep the triple intact';
+  const prompt = ideasPrompt({clips:LIB,tracks:[TRACK],format:FORMATS.tiktok,request,count:1});
+  assert.ok(prompt.includes(request));
+});
