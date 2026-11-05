@@ -18,6 +18,7 @@ test('rendered review includes the last kill even when it falls after the last u
   const times=reviewTimes(10.07,[1.93,3.86,5.83,7.23,9.56]);
   assert.ok(times.some(time=>Math.abs(time-9.71)<.01));
   assert.ok(times.length<=12);assert.ok(times.every(time=>time>=0 && time<10.07));
+  assert.ok(reviewTimes(25,Array.from({length:20},(_,i)=>i+1)).some(time=>Math.abs(time-20.15)<.01));
 });
 
 test('render review sends actual extracted frames and cannot approve a silent music mix', {skip:!available}, async()=>{

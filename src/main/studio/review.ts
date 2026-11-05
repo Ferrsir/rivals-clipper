@@ -25,7 +25,8 @@ function run(ffmpeg: string, args: string[]): Promise<string> {
 
 export function reviewTimes(duration:number,kills:number[]):number[] {
   const end=Math.max(0,duration-.06);
-  const times=[...kills.map(time=>Math.min(end,Math.max(0,time+.15))),0,end];
+  const orderedKills=kills.length ? [kills[kills.length-1],...kills.slice(0,-1)] : [];
+  const times=[...orderedKills.map(time=>Math.min(end,Math.max(0,time+.15))),0,end];
   for(let i=0;i<8;i++) times.push(Math.min(end,duration*(i+.5)/8));
   const selected:number[]=[];
   for(const time of times) if(!selected.some(value=>Math.abs(value-time)<.08) && selected.length<12) selected.push(time);
@@ -57,6 +58,7 @@ export async function reviewRenderedReel(o: {
   if (o.project.music && (!mean || !Number.isFinite(measuredDb) || measuredDb! < -50)) issues.push('Rendered audio is silent or extremely quiet despite selected music.');
   if (Math.abs(duration - timeline.duration) > .25) issues.push(`Rendered duration ${duration.toFixed(2)}s differs from the planned ${timeline.duration.toFixed(2)}s.`);
   const limits = ['Sampled frames cannot certify every frame, kill detection, character tracking throughout, or audible beat synchronization. Human playback review is required.'];
+  if(timeline.kills.length>10) limits.push('This edit has more marked kills than the frame-review budget. The final kill is prioritized, but some intermediate kills may not be sampled.');
   const result = await o.ai.ask({
     system: 'You are a demanding gameplay edit reviewer. Inspect the supplied rendered frames. Never treat the proposed plan as proof of visual quality. Never claim you heard audio from images. Do not invent a reference comparison.',
     prompt: [
