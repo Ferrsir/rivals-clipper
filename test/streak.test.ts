@@ -31,3 +31,11 @@ test('after finish, the next kill starts a new clip', () => {
   s.finish();
   assert.equal(s.onKill(200_000).type, 'start');
 });
+
+test('a triple with 1.3 and 2.728 second gaps stays in one highlight', () => {
+  const tracker = new StreakTracker({preRollMs:3000,postRollMs:4000,maxClipMs:20000});
+  const first = tracker.onKill(100000);
+  assert.deepEqual(first,{type:'start',pastDurationMs:3000,stopAt:104000});
+  assert.deepEqual(tracker.onKill(101300),{type:'extend',stopAt:105300});
+  assert.deepEqual(tracker.onKill(104028),{type:'extend',stopAt:108028});
+});
