@@ -274,3 +274,4 @@
 }
 .st-stage-wrap {flex:0 0 auto;min-height:0;height:clamp(300px,48vh,620px);container-type:size;}
 .st-panel .st-reel-prompt {max-height:42vh;}
+.st .st-make-reel {width:100%;padding:11px 16px;position:sticky;top:0;z-index:2;margin:8px 0 10px;}

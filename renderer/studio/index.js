@@ -593,10 +593,10 @@ function ideasPanel() {
   });
   const head = [
     h('label', { class: 'st-label' }, 'Describe your reel'),
+    h('button', { class: 'st-btn primary st-make-reel', disabled: !ai || working || !S.library.length || (S.job && !['done','error','cancelled'].includes(S.job.stage)), onclick: makeReel }, working ? 'Making reel…' : 'Make reel'),
     req,
     h('p', { class: 'st-note' }, 'Uses your saved clips and imported music. Add external footage or artwork before including it in an edit.'),
     h('div', { class: 'st-row' },
-      h('button', { class: 'st-btn primary', disabled: !ai || working || !S.library.length || (S.job && !['done','error','cancelled'].includes(S.job.stage)), onclick: makeReel }, working ? 'Making reel…' : 'Make reel'),
       h('button', { class: 'st-btn small', disabled: working || !ai || S.busy['ideas-ai'], onclick: getAi }, 'Suggest ideas'),
       h('button', { class: 'st-btn small', disabled: working || S.busy['ideas-quick'], onclick: () => guarded('ideas-quick', async () => (S.ideas = await api.ideas.quick(f.id)), null) }, 'Quick ideas'),
     ),
