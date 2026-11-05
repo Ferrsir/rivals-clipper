@@ -58,7 +58,7 @@ const store = {
 // ---------- helpers ----------
 
 const fmt = () => S.init.formats.find((f) => f.id === S.project.format) ?? S.init.formats[0];
-const vertical = () => fmt().height > fmt().width;
+const vertical = () => fmt().height >= fmt().width;
 const trackOf = (id) => S.tracks.find((t) => t.id === id);
 const currentTrack = () => (S.project?.music ? trackOf(S.project.music.trackId) : undefined);
 const clipByUid = (uid) => S.project.clips.find((c) => c.uid === uid);
@@ -193,6 +193,9 @@ async function openProject(id) {
   S.preview = null;
   S.suggest = null;
   S.aiIdeas = null;
+  S.review = null;
+  S.reviewError = null;
+  S.revisionStatus = null;
   S.styleUndo = null;
   resetHistory();
   planSoon.flush();
@@ -1057,7 +1060,7 @@ function clipInspector() {
     const oy = (box.height - dh) / 2;
     const ar = f.width / f.height;
     const z = c.cropZoom || 1;
-    const clean = f.height > f.width && c.preserveKillFeed !== false;
+    const clean = f.height >= f.width && c.preserveKillFeed !== false;
     const top = clean ? .11 : 0;
     const availableH = clean ? .79 : 1;
     const cw = Math.min(1, (vh * availableH * ar) / vw) / z;

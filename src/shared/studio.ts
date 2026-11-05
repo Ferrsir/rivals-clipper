@@ -1,7 +1,7 @@
 // Types shared by the Studio's main-process code and its renderer (renderer/studio).
 // The renderer is plain JS, so these are the documented shapes of what crosses IPC.
 
-export type FormatId = 'tiktok' | 'reels' | 'shorts' | 'youtube' | 'youtube1440';
+export type FormatId = 'tiktok' | 'reels' | 'shorts' | 'youtube' | 'youtube1440' | 'square';
 
 export interface ExportFormat {
   id: FormatId;

@@ -80,3 +80,9 @@ The production sequence is brief, select, frame, render, review, revise, then us
 For source clips up to30seconds, the feed overlay now classifies every source frame at30fps and masks only detected light player-involvement banner rows. Scenery between rows is transparent. Names and portraits remain original source pixels; no kill rows are fabricated. Mask timestamps follow the same seek and retiming as gameplay. Longer legacy sources retain the conventional tight feed crop and require review. This identifies player-involvement rows, which can include deaths/trades; it does not independently reclassify clip kill metadata.
 
 Before AI clip selection, Studio now extracts three-frame source contact sheets for up to12 ranked candidates (restricted to a named hero when possible). The actual sheets and exact marker facts are sent together; the model is asked to reject menu/death-only and obstructed footage. Make reel requests one plan; Suggest ideas requests five. This is sampled visual selection, not full-video understanding.
+
+## Reference-square master
+
+The imported reference edits were square, not9:16. Reference square exports a1080x1080 master alongside the existing vertical presets, with the same player framing, clean HUD crop and isolated original feed. It keeps more surrounding action visible instead of forcing every reference into a narrow portrait crop. The toolbar wraps so Preview and Export stay accessible in narrower windows. Square masters are exported for manual platform preview; automatic upload routing remains attached to the named platform presets.
+
+Rapid eliminations can share a planning impact but must retain separate timeline markers. The planner now maps every source kill marker through the actual retimed segments, including markers less than150ms apart, instead of losing one when grouping timing anchors. Off-beat warnings remain honest rather than declaring every rapid kill aligned.

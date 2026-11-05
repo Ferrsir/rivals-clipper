@@ -7,7 +7,7 @@ export const PLATFORM_OF_FORMAT = { tiktok: 'tiktok', reels: 'instagram', shorts
 const LABEL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
 
 export function formatOfFile(file) {
-  const m = String(file).match(/_(tiktok|reels|shorts|youtube1440|youtube)(_nomusic)?\.mp4$/);
+  const m = String(file).match(/_(tiktok|reels|shorts|youtube1440|youtube|square)(_nomusic)?\.mp4$/);
   return m ? { format: m[1], noMusic: !!m[2] } : { format: null, noMusic: false };
 }
 

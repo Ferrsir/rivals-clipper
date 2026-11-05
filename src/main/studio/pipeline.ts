@@ -190,13 +190,13 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
   const audioCounts = new Map<string, number>();
   const feedMasks = new Map<string, FeedMask | undefined>();
   for (const [index, clip] of project.clips.entries()) {
-    if (clip.followCharacter !== false && formats.some(format=>format.height>format.width)) {
+    if (clip.followCharacter !== false && formats.some(format=>format.height>=format.width)) {
       o.onProgress({stage:'clips',pct:0,message:`Framing player ${index+1}/${project.clips.length}${o.ai ? ' with your AI provider' : ''}…`});
       clip.cropTrack = await trackClip(o.ffmpeg, clip, o.signal, o.ai);
     }
   }
   for (const clip of project.clips) {
-    if (clip.preserveKillFeed !== false && formats.some(format=>format.height>format.width)) {
+    if (clip.preserveKillFeed !== false && formats.some(format=>format.height>=format.width)) {
       o.onProgress({stage:'clips',pct:0,message:'Isolating player kill-feed banners…'});
       feedMasks.set(clip.videoFile, await createFeedMask(o.ffmpeg,clip,workDir,o.signal));
     }
@@ -240,7 +240,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
-      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedMask:size.height>size.width ? feedMasks.get(c.videoFile) : undefined, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
+      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedMask:size.height>=size.width ? feedMasks.get(c.videoFile) : undefined, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
     });
 
     const clipShare = 0.6;

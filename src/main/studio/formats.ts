@@ -3,6 +3,11 @@
 import type { ExportFormat, FormatId } from '../../shared/studio';
 
 export const FORMATS: Record<FormatId, ExportFormat> = {
+  square: {
+    id:'square',label:'Reference square',platform:'TikTok',width:1080,height:1080,fps:30,fpsOptions:[30,60],
+    idealSeconds:[10,30],maxSeconds:180,safe:{top:.05,bottom:.08,left:.04,right:.04},crf:17,maxrateKbps:12000,audioKbps:320,
+    music:{inAppLibrary:true,copyrightRisk:'medium',note:'Square master matching the imported reference framing. Check the destination preview before posting; use a vertical format when you want full-height 9:16.'},
+  },
   tiktok: {
     id: 'tiktok',
     label: 'TikTok',

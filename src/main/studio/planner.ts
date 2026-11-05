@@ -312,6 +312,19 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   }
   const tailSrc0 = hl + post[n - 1];
   pieces.push({ kind: 'tail', clip: idx, src0: tailSrc0, src1: tailSrc0 + (C - Kl - slowOutL) * vt, out0: Kl + slowOutL, out1: C });
+  // Close eliminations share a planning impact, but remain separate real kills. Map every
+  // supplied marker through the actual retimed pieces instead of dropping the second one.
+  const allHits=[...c.hits].filter(h=>Number.isFinite(h) && h>c.in+.05 && h<c.out-.02).sort((a,b)=>a-b);
+  if(allHits.length!==kills.length) {
+    const expanded=allHits.map(h=>{
+      const piece=pieces.find(p=>h>=p.src0-EPS && h<=p.src1+EPS);
+      return piece && piece.src1>piece.src0 ? piece.out0+(h-piece.src0)*(piece.out1-piece.out0)/(piece.src1-piece.src0) : kills[0];
+    });
+    return {pieces,end:C,kills:expanded,onBeat:expanded.map(k=>{
+      const anchor=kills.findIndex(value=>Math.abs(value-k)<EPS);
+      return anchor>=0 ? onBeat[anchor] : !!g && g.t.some(beat=>Math.abs(beat-k)<.05);
+    }),score};
+  }
   return { pieces, end: C, kills, onBeat, score };
 }
 

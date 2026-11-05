@@ -78,13 +78,13 @@ export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' |
   const w = `trunc(min(iw\\,ih*${r6(ar)})/${r6(z)}/2)*2`;
   const h = `trunc(min(ih\\,iw/${r6(ar)})/${r6(z)}/2)*2`;
   let center = r6(cx);
-  if (out.height > out.width && clip.cropTrack?.length) {
+  if (out.height >= out.width && clip.cropTrack?.length) {
     let tracked = r6(clip.cropTrack.at(-1)!.x);
     for (let i=clip.cropTrack.length-2;i>=0;i--) {
       const a=clip.cropTrack[i],b=clip.cropTrack[i+1];
       tracked=`if(lt(t+${r6(offset)},${r6(b.t)}),${r6(a.x)}+(${r6(b.x-a.x)})*clip((t+${r6(offset)}-${r6(a.t)})/${r6(b.t-a.t)},0,1),${tracked})`;
     }
-    center=`clip((iw*(${tracked})-ow/2)/(iw-ow),0,1)`;
+    center=`clip((iw*(${tracked})-ow/2)/max(1,iw-ow),0,1)`;
   }
   return `crop=w=${w}:h=${h}:x='(iw-ow)*(${center})':y=(ih-oh)*${r6(cy)}`;
 }
@@ -121,10 +121,10 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   // Remove the objective timer and bottom ability/health HUD from the gameplay crop. The
   // feed is extracted from the unmodified source below, then follows the same segment trims
   // and retiming as the gameplay, so its kills cannot drift away from the original action.
-  const cleanPortrait = size.height > size.width && clip.preserveKillFeed !== false;
+  const cleanPortrait = size.height >= size.width && clip.preserveKillFeed !== false;
   const inset = cleanPortrait ? 'crop=w=iw:h=trunc(ih*0.79/2)*2:x=0:y=trunc(ih*0.11/2)*2,' : '';
   const gameplay = `${inset}${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
-  if (size.height > size.width && clip.preserveKillFeed !== false) {
+  if (size.height >= size.width && clip.preserveKillFeed !== false) {
     const feedWidth = Math.round(size.width * 0.58 / 2) * 2;
     lines.push(`[0:v]setpts=PTS-STARTPTS,split=2[gameSrc][feedSrc]`);
     const feedCrop='crop=w=trunc(iw*0.16/2)*2:h=trunc(ih*0.09/2)*2:x=iw-ow:y=trunc(ih*0.025/2)*2';
