@@ -138,3 +138,21 @@ test('a revision can trim your own footage freely and add another excerpt of it'
   assert.doesNotMatch(prompt, /Marvel Rivals gameplay edit/);
   assert.deepEqual(r.project.clips.map((x) => [x.in, x.out]), [[11, 14], [40, 45]]);
 });
+
+test('a revision that moves an excerpt gets the moments of its new range, and pictures reach new excerpts', async () => {
+  const a = fight();
+  const p = createProject({ format: 'tiktok' });
+  p.assets = [a, icon()];
+  const c = externalClip(a);
+  c.in = 10;
+  c.out = 16;
+  c.hits = c.hits.filter((h) => h > 10 && h < 16);
+  p.clips = [c];
+  const ai = { status: async () => ({ signedIn: true, provider: 'claude' }), ask: async () => ({ text: '', json: { clips: [{ uid: c.uid, in: 0, out: 8 }, { clipId: 'asset:fight1', in: 40, out: 46 }], overlays: [{ assetId: 'asset:icon1', onClip: 'asset:fight1', from: 40, to: 46, anchor: 'face', x: 0.5, y: 0.3, size: 0.1 }], summary: 'Moved.' } }) } as any;
+  const r = await reviseReel(ai, p, 'start from the beginning and add the finisher', []);
+  const [moved, added] = r.project.clips;
+  assert.deepEqual(moved.hits, a.moments!.filter((m) => m.t > 0.05 && m.t < 7.98).map((m) => m.t), 'moments outside the old trim come back');
+  assert.ok(added.hits.length > 0);
+  assert.equal(r.project.overlays!.length, 2, 'the picture is on every excerpt of that video');
+  assert.ok(r.project.overlays!.some((o) => o.clipUid === added.uid));
+});

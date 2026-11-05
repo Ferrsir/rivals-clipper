@@ -145,6 +145,12 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
   const uidFor = new Map<string, string>(project.clips.map(c => [c.uid, c.uid]));
   for (const c of project.clips) uidFor.set(c.clipId, c.uid);
   const clips: ReelClip[] = [];
+  // Your footage's moments come from the whole source video, so a widened or moved excerpt gets every moment in its new range.
+  const momentsIn = (c: ReelClip): number[] => {
+    const a = c.clipId.startsWith('asset:') ? assetById.get(c.clipId.slice(6)) : undefined;
+    const all = a?.moments ? a.moments.map(m => m.t) : c.hits;
+    return all.filter(h => h > c.in + 0.05 && h < c.out - 0.02);
+  };
   for (const patch of patches) {
     if (patch && typeof patch.clipId === 'string' && !byId.has(patch.uid)) {
       // Another excerpt of one of your own videos, already in the edit.
@@ -154,7 +160,7 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
           const more = externalClip(a);
           more.in = Math.max(0, patch.in);
           more.out = Math.min(more.durationSec, patch.out);
-          more.hits = more.hits.filter((h) => h > more.in + 0.05 && h < more.out - 0.02);
+          more.hits = momentsIn(more);
           if (more.out > more.in + 0.2) clips.push(more);
         }
         continue;
@@ -172,7 +178,7 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
       if (added.external && Number.isFinite(patch.in) && Number.isFinite(patch.out) && patch.out > patch.in + 0.2) {
         added.in = Math.max(0, patch.in);
         added.out = Math.min(added.durationSec, patch.out);
-        added.hits = added.hits.filter((h) => h > added!.in + 0.05 && h < added!.out - 0.02);
+        added.hits = momentsIn(added);
       }
       seen.add(patch.clipId);
       uidFor.set(patch.clipId, added.uid);
@@ -185,7 +191,7 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
     const revised = {...original, ...Object.fromEntries(['in','out','cropX','cropY','cropZoom','preserveKillFeed'].filter(key=>patch[key]!==undefined).map(key=>[key,patch[key]]))};
     if (!Number.isFinite(revised.in) || !Number.isFinite(revised.out) || revised.in < 0 || revised.out > original.durationSec || revised.in >= revised.out) throw new Error('The revision contains an invalid source trim.');
     // Detected action moments in your own footage are suggestions, so only kill markers are protected.
-    if (original.external) { revised.hits = original.hits.filter(h => h > revised.in + 0.05 && h < revised.out - 0.02); clips.push(revised); continue; }
+    if (original.external) { revised.hits = momentsIn(revised); clips.push(revised); continue; }
     const retainedHits = original.hits.filter(hit => hit > original.in + 0.05 && hit < original.out - 0.02);
     if (retainedHits.some(hit => hit <= revised.in + 0.05 || hit >= revised.out - 0.02)) throw new Error('The revision would cut a marked kill out of a retained streak. Revise the duration or remove the whole clip.');
     clips.push(revised);
@@ -194,11 +200,20 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
   const musicStart = reply.musicStart;
   if (musicStart !== undefined && musicStart !== 'auto' && (!Number.isFinite(musicStart) || musicStart < 0)) throw new Error('The revision contains an invalid music start.');
   const wantsText = /\b(subtitle|caption|text|words|intro|hook|title)/i.test(request);
-  const overlays = Array.isArray(reply.overlays) ? reply.overlays.map((o: any) => {
+  // A uid means that clip; a source id ("asset:..." or a library clip id) means every excerpt cut from it.
+  // Times are source seconds, so each excerpt only shows the part inside its own trim.
+  const targets = (onClip: unknown): string[] => {
+    if (typeof onClip !== 'string') return [];
+    if (clips.some(c => c.uid === onClip)) return [onClip];
+    const fromSource = clips.filter(c => c.clipId === onClip).map(c => c.uid);
+    if (fromSource.length) return fromSource;
+    const old = uidFor.get(onClip);
+    return old && clips.some(c => c.uid === old) ? [old] : [];
+  };
+  const overlays = Array.isArray(reply.overlays) ? reply.overlays.flatMap((o: any) => {
     const image = assetById.get(String(o?.assetId ?? '').replace(/^asset:/, ''));
-    const clipUid = uidFor.get(o?.onClip);
-    return image?.kind === 'image' && clipUid ? { ...o, image: image.file, clipUid, anchor: o.anchor === 'fixed' ? 'fixed' : 'face' } : null;
-  }).filter(Boolean) : project.overlays;
-  const subtitles = wantsText && Array.isArray(reply.subtitles) ? reply.subtitles.map((t: any) => ({ ...t, clipUid: uidFor.get(t?.onClip) })) : project.subtitles;
+    return image?.kind === 'image' ? targets(o?.onClip).map((clipUid, i) => ({ ...o, id: i ? undefined : o.id, image: image.file, clipUid, anchor: o.anchor === 'fixed' ? 'fixed' : 'face' })) : [];
+  }) : project.overlays;
+  const subtitles = wantsText && Array.isArray(reply.subtitles) ? reply.subtitles.flatMap((t: any) => targets(t?.onClip).map(clipUid => ({ ...t, clipUid }))) : project.subtitles;
   return {project:sanitizeProject({...project,clips,order:Array.isArray(reply.clips)?'manual':project.order,targetSeconds:reply.targetSeconds ?? project.targetSeconds,music:project.music && musicStart !== undefined ? {...project.music,start:musicStart}:project.music,style:reply.style || project.style,mix:reply.mix || project.mix,intro:wantsText?project.intro:null,outro:wantsText?project.outro:null,captions:wantsText?project.captions:[],overlays,subtitles}),summary:typeof reply.summary==='string'?reply.summary.slice(0,500):'Updated the edit.'};
 }
