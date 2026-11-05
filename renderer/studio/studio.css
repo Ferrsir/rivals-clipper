@@ -263,3 +263,14 @@
 .st-revision { background:var(--st-bg2); border:1px solid var(--line); border-radius:10px; margin:8px; }
 .st-revision .st-label {font-weight:600;}
 .st-revision textarea {box-sizing:border-box;}
+
+.st-review {padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--st-bg2);}
+.st-review .st-row {justify-content:space-between;flex-wrap:wrap;}
+.st-review p,.st-review li {line-height:1.5;}
+.st-review ul {padding-left:20px;margin:6px 0;}
+.st-review details {color:var(--muted);font-size:12px;}
+@media (min-width:1001px) and (max-width:1350px) {
+ .st-main {grid-template-columns:280px minmax(280px,1fr) 270px;}
+}
+.st-stage-wrap {flex:0 0 auto;min-height:0;height:clamp(300px,48vh,620px);container-type:size;}
+.st-panel .st-reel-prompt {max-height:42vh;}

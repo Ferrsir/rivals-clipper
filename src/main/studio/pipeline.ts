@@ -1,4 +1,5 @@
 import { trackClip } from './tracking';
+import type { AiClient } from '../ai-auth';
 // Runs a whole export: plan per frame rate, stage A per clip (cached), stage B per output size,
 // then copies for platforms that share a size and optional no-music copies.
 
@@ -15,6 +16,7 @@ export interface PipelineOpts {
   ffmpeg: string;
   project: ReelProject;
   analysis: MusicAnalysis | null;
+  ai?: AiClient;
   req: RenderRequest;
   /** <root>\studio */
   studioDir: string;
@@ -40,7 +42,7 @@ export function outputSize(f: ExportFormat, preview: boolean): Size {
 
 export function planFor(project: ReelProject, analysis: MusicAnalysis | null, fps: number, maxSeconds?: number): Timeline {
   const clips = orderClips(project.clips, project.order);
-  return plan({
+  const timeline = plan({
     clips,
     style: project.style,
     fps,
@@ -50,7 +52,10 @@ export function planFor(project: ReelProject, analysis: MusicAnalysis | null, fp
     intro: project.intro,
     captions: project.captions,
     maxSeconds,
+    targetSeconds: project.targetSeconds,
   });
+  timeline.warnings.push(...(project.sourceWarnings ?? []));
+  return timeline;
 }
 
 export function safeName(s: string): string {
@@ -182,8 +187,11 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
 
   const files: string[] = [];
   const audioCounts = new Map<string, number>();
-  for (const clip of project.clips) {
-    if (clip.followCharacter !== false) clip.cropTrack = await trackClip(o.ffmpeg, clip, o.signal);
+  for (const [index, clip] of project.clips.entries()) {
+    if (clip.followCharacter !== false && formats.some(format=>format.height>format.width)) {
+      o.onProgress({stage:'clips',pct:0,message:`Framing player ${index+1}/${project.clips.length}${o.ai ? ' with your AI provider' : ''}…`});
+      clip.cropTrack = await trackClip(o.ffmpeg, clip, o.signal, o.ai);
+    }
   }
   for (const clip of project.clips) {
     if (!audioCounts.has(clip.videoFile)) audioCounts.set(clip.videoFile, await audioStreamCount(o.ffmpeg, clip.videoFile, o.signal));
@@ -200,6 +208,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     const fps = outputFps(project, f, req.preview);
     const tl = planFor(project, o.analysis, fps, f.maxSeconds);
     if (!tl.segments.length) throw new Error('Nothing to render: the clips have no usable footage.');
+    if (!req.preview && project.targetSeconds && tl.duration > project.targetSeconds + 1 / fps) throw new Error(`The edit is ${tl.duration.toFixed(1)} s, over your ${project.targetSeconds} s budget. Preview and revise the selected clips or duration; kills were preserved.`);
     const clips = orderClips(project.clips, project.order);
     const inputs: string[] = [];
 

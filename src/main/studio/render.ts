@@ -108,7 +108,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 6, track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 8, source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -116,13 +116,18 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   const scaleFlags = o.preview ? 'fast_bilinear' : 'bicubic';
   const lines: string[] = [];
   const split = `format=yuv420p,split=${n}${segs.map((_, i) => `[vi${i}]`).join('')}`;
-  const gameplay = `${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  // Remove the objective timer and bottom ability/health HUD from the gameplay crop. The
+  // feed is extracted from the unmodified source below, then follows the same segment trims
+  // and retiming as the gameplay, so its kills cannot drift away from the original action.
+  const cleanPortrait = size.height > size.width && clip.preserveKillFeed !== false;
+  const inset = cleanPortrait ? 'crop=w=iw:h=trunc(ih*0.79/2)*2:x=0:y=trunc(ih*0.11/2)*2,' : '';
+  const gameplay = `${inset}${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
   if (size.height > size.width && clip.preserveKillFeed !== false) {
-    const feedWidth = Math.round(size.width * 0.48 / 2) * 2;
+    const feedWidth = Math.round(size.width * 0.58 / 2) * 2;
     lines.push(`[0:v]setpts=PTS-STARTPTS,split=2[gameSrc][feedSrc]`);
-    lines.push(`[feedSrc]crop=w=trunc(iw*0.28/2)*2:h=trunc(ih*0.22/2)*2:x=iw-ow:y=0,scale=${feedWidth}:-2:flags=bicubic[feed]`);
+    lines.push(`[feedSrc]crop=w=trunc(iw*0.16/2)*2:h=trunc(ih*0.09/2)*2:x=iw-ow:y=trunc(ih*0.025/2)*2,scale=${feedWidth}:-2:flags=bicubic[feed]`);
     lines.push(`[gameSrc]${gameplay}[gamePicture]`);
-    lines.push(`[gamePicture][feed]overlay=x=W-w-${Math.round(size.width*0.04)}:y=${Math.round(size.height*0.13)},${split}`);
+    lines.push(`[gamePicture][feed]overlay=x=W-w-${Math.round(size.width*0.04)}:y=${Math.round(size.height*0.07)},${split}`);
   } else lines.push(`[0:v]setpts=PTS-STARTPTS,${gameplay},${split}`);
   const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>

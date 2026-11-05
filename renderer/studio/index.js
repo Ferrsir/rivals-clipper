@@ -14,7 +14,7 @@ const S = {
   library: [],
   tracks: [],
   sel: null,
-  leftTab: 'clips',
+  leftTab: 'ideas',
   rightTab: 'style',
   job: null,
   preview: null,
@@ -62,7 +62,7 @@ const vertical = () => fmt().height > fmt().width;
 const trackOf = (id) => S.tracks.find((t) => t.id === id);
 const currentTrack = () => (S.project?.music ? trackOf(S.project.music.trackId) : undefined);
 const clipByUid = (uid) => S.project.clips.find((c) => c.uid === uid);
-const planKey = () => JSON.stringify(S.project?.clips?.map(c => [c.uid,c.in,c.out,c.cropX,c.cropY,c.cropZoom,c.followCharacter,c.preserveKillFeed])) + JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + (S.project?.music?.file ?? '') + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null);
+const planKey = () => JSON.stringify(S.project?.clips) + JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + JSON.stringify(S.project?.music) + JSON.stringify([S.project?.fps,S.project?.format,S.project?.targetSeconds,S.project?.order,S.project?.heroUid]) + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null);
 const pct = (v) => `${Math.round(v * 100)}%`;
 const x100 = (v) => `${Math.round(v * 100)}`;
 
@@ -395,7 +395,7 @@ function renderLeft() {
   const tabs = h(
     'div',
     { class: 'st-tabs' },
-    [['ideas', 'Ideas'], ['clips', `Clips (${S.library.length})`], ['music', `Music (${S.tracks.length})`]].map(([id, label]) =>
+    [['ideas', 'Create reel'], ['clips', `Clips (${S.library.length})`], ['music', `Music (${S.tracks.length})`]].map(([id, label]) =>
       h('button', { class: S.leftTab === id ? 'on' : '', onclick: () => ((S.leftTab = id), renderLeft()) }, label),
     ),
   );
@@ -558,10 +558,11 @@ async function makeReel() {
       return;
     }
     if (/jujutsu|jjk|overlay.{0,30}(picture|image|magik)/i.test(prompt)) {
-      step('Timeline ready — requested effects need attention', 'External video intros, layered character images and a separate kill-feed overlay are still being built. Review the plan and available assets before using Preview.');
+      step('Timeline ready — requested assets need attention', 'External video intros and layered character artwork need an editing feature that is not available yet. Gameplay framing and the kill-feed overlay are available.');
       return;
     }
     step('Rendering your preview', 'Clips are being timed to the available music and rendered. Follow the render progress in the preview.');
+    S.autoReview = true;
     await startRender({preview: true});
     if (S.job?.stage === 'error') throw new Error(S.job.error || S.job.message);
   } catch (error) {
@@ -607,7 +608,7 @@ function ideasPanel() {
   ];
   const list = h('div', { class: 'st-ideas' });
   if (!S.library.length) list.append(h('p', { class: 'st-empty' }, 'Record some clips first. Ideas are built from your own plays.'));
-  else if (!S.ideas) list.append(h('p', { class: 'st-empty' }, ai ? 'Press Get AI ideas, or Quick ideas for instant ones.' : 'Press Quick ideas. Sign in with Claude or ChatGPT (Settings) for more creative AI ideas.'));
+  else if (!S.ideas) list.append(h('p', { class: 'st-empty' }, ai ? 'Describe the edit and press Make reel. Suggest ideas gives you options first.' : 'Sign in with Claude or ChatGPT in Settings to create from a prompt. Quick ideas works locally.'));
   else if (!S.ideas.length) list.append(h('p', { class: 'st-empty' }, 'No ideas from these clips yet. Clips with kills work best.'));
   for (const idea of S.ideas ?? []) list.append(ideaCard(idea));
   return h('div', { class: 'st-panel' }, head, list);
@@ -916,7 +917,7 @@ function renderCenter() {
   const err = job?.stage === 'error' ? h('div', { class: 'st-error' }, h('b', {}, 'Render failed. '), job.error || '') : null;
   const wrap = h('div', { class: 'st-stage-wrap' }, stage);
   wrap.style.setProperty('--ar', String(ar));
-  clear(E.center, wrap, info, warn, err, done, revisionPanel(), uploadsBox());
+  clear(E.center, wrap, info, warn, err, done, reviewPanel(), revisionPanel(), uploadsBox());
 }
 
 function exportDone(job) {
@@ -1056,16 +1057,19 @@ function clipInspector() {
     const oy = (box.height - dh) / 2;
     const ar = f.width / f.height;
     const z = c.cropZoom || 1;
-    const cw = Math.min(1, (vh * ar) / vw) / z;
-    const ch = Math.min(1, vw / ar / vh) / z;
+    const clean = f.height > f.width && c.preserveKillFeed !== false;
+    const top = clean ? .11 : 0;
+    const availableH = clean ? .79 : 1;
+    const cw = Math.min(1, (vh * availableH * ar) / vw) / z;
+    const ch = Math.min(availableH, vw / ar / vh) / z;
     Object.assign(crop.style, {
       left: `${ox + (1 - cw) * c.cropX * dw}px`,
-      top: `${oy + (1 - ch) * c.cropY * dh}px`,
+      top: `${oy + (top + (availableH - ch) * c.cropY) * dh}px`,
       width: `${cw * dw}px`,
       height: `${ch * dh}px`,
       display: cw >= 0.999 && ch >= 0.999 ? 'none' : 'block',
     });
-    crop._geom = { ox, oy, dw, dh, cw, ch };
+    crop._geom = { ox, oy, dw, dh, cw, ch, availableH };
   };
   v.addEventListener('loadedmetadata', () => {
     placeCrop();
@@ -1083,7 +1087,7 @@ function clipInspector() {
     const cy0 = c.cropY;
     const move = (ev) => {
       const dx = (ev.clientX - startX) / (g.dw * (1 - g.cw) || 1);
-      const dy = (ev.clientY - startY) / (g.dh * (1 - g.ch) || 1);
+      const dy = (ev.clientY - startY) / (g.dh * (g.availableH - g.ch) || 1);
       c.cropX = Math.min(1, Math.max(0, cx0 + dx));
       c.cropY = Math.min(1, Math.max(0, cy0 + dy));
       placeCrop();
@@ -1165,7 +1169,7 @@ function clipInspector() {
       h('button', { class: 'st-btn small ghost', title: 'Nothing after this point is used', onclick: () => (setNum('out', Math.max(v.currentTime, c.in + 0.5)), drawBar()) }, 'End here'),
     ),
     killList,
-    vertical() || c.cropZoom > 1 ? h('p', { class: 'st-note' }, 'Automatic tracking follows the centre character area. Turn it off to use the crop box.') : null,
+    vertical() || c.cropZoom > 1 ? h('p', { class: 'st-note' }, 'Follow character asks your selected AI to locate the player in sampled frames. Occluded moments hold the last position. Moving this crop box overrides automatic framing.') : null,
     slider({ label: 'Punch in', min: 1, max: 2, step: 0.05, value: c.cropZoom, format: (z) => `${z.toFixed(2)}×`, onInput: (z) => {
       setNum('cropZoom', z); // through change(), so Undo gets the zoom from before
       placeCrop();
@@ -1532,7 +1536,10 @@ function onProgress(p) {
     const here = S.job.projectId === S.project.id;
     if (!S.job.preview && S.job.autoUpload?.length && p.files?.length) autoUploadAfterExport(S.job, p.files);
     if (S.job.preview) {
-      if (here && p.files?.[0]) S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
+      if (here && p.files?.[0]) {
+        S.preview = { file: p.files[0], key: S.job.key, autoplay: true };
+        if (S.autoReview) { S.autoReview = false; void runReelReview(); }
+      }
     } else if (here) {
       const proj = S.project;
       api.projects
@@ -1552,16 +1559,41 @@ function onProgress(p) {
   renderCenter();
 }
 
+async function runReelReview() {
+  if (S.busy.review || !S.preview || S.preview.key !== planKey()) return;
+  const preview = {...S.preview}, project = structuredClone(S.project);
+  S.busy.review = true; S.reviewError = null; renderCenter();
+  try {
+    const result = await api.ai.reviewReel(project, preview.file, S.ideaRequest || 'Clean gameplay, centered player, readable kill feed, musical cuts.');
+    if (S.project.id === project.id && S.preview?.file === preview.file && planKey() === preview.key) S.review = {...result, key:preview.key};
+  } catch(error) { S.reviewError = error.message; }
+  finally { S.busy.review = false; renderCenter(); }
+}
+
+function reviewPanel() {
+  const fresh = S.review && S.review.key === planKey();
+  const review = fresh ? S.review : null;
+  return h('section', {class:'st-review'},
+    h('div',{class:'st-row'},h('strong',{},'Review the rendered edit'),
+      h('button',{class:'st-btn small',disabled:!S.init.ai.signedIn || S.busy.review || !S.preview || S.preview.key !== planKey(),onclick:runReelReview},S.busy.review?'Reviewing rendered frames…':'Run AI review')),
+    h('p',{class:'st-note'},'Checks exported frames and audio level. Sampled-frame review cannot verify every movement or how the music sounds.'),
+    review ? h('p',{class:review.verdict==='needs-changes'?'st-warn':'st-note'},`${review.provider} · ${review.frames} frames · ${review.verdict==='needs-changes'?'Needs changes':'Ready for your playback review'}`) : null,
+    review ? h('p',{},review.summary) : null,
+    review?.issues?.length ? h('ul',{},review.issues.map(issue=>h('li',{},issue))) : null,
+    review?.limits?.length ? h('details',{},h('summary',{},'Review limits'),h('ul',{},review.limits.map(limit=>h('li',{},limit)))) : null,
+    S.reviewError ? h('p',{class:'st-error',role:'status'},S.reviewError) : null);
+}
+
 function revisionPanel() {
   const text = h('textarea', {class:'st-revision-prompt', rows:3, maxlength:20000, placeholder:'What should change? For example: start on the first hit, lower game audio, use the triple last…',value:S.revisionRequest || '',oninput:e=>S.revisionRequest=e.target.value});
   return h('div',{class:'st-revision'}, h('label',{class:'st-label'},'Request changes'),text,
     h('button',{class:'st-btn primary',disabled:!S.init.ai.signedIn || S.busy.revise || (S.job && !['done','error','cancelled'].includes(S.job.stage)),onclick:async()=>{
       if (!S.revisionRequest?.trim() || S.busy.revise) return;
       S.busy.revise=true; S.revisionStatus='Applying your changes…'; renderCenter();
-      const id=S.project.id;
+      const id=S.project.id, originalKey=planKey();
       try {
         const result=await api.ai.reviseReel(structuredClone(S.project),S.revisionRequest);
-        if (S.project.id!==id) throw new Error('The reel changed. Return to the original reel to apply the revision.');
+        if (S.project.id!==id || planKey()!==originalKey) throw new Error('The reel changed while the AI was working. Your edits were kept; request the revision again.');
         change(project=>Object.assign(project,result.project));
         S.revisionStatus=result.summary+' Rendering a new preview…';
         await startRender({preview:true});

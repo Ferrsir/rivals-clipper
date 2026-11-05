@@ -211,8 +211,13 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
       styleId: styles.has(r?.styleId) ? r.styleId : 'story',
       format: format.id as FormatId,
       clipIds: [...new Set<string>(clipIds)].slice(0, 20),
+      clipEdits: (Array.isArray(r?.clipEdits) ? r.clipEdits : []).filter((edit: any) =>
+        edit && known.has(edit.clipId) && Number.isFinite(edit.in) && Number.isFinite(edit.out) && edit.in >= 0 && edit.out > edit.in,
+      ).slice(0, 20).map((edit: any) => ({ clipId: edit.clipId, in: edit.in, out: edit.out })),
+      targetSeconds: Number.isFinite(r?.targetSeconds) && r.targetSeconds >= 1 && r.targetSeconds <= format.maxSeconds ? r.targetSeconds : undefined,
       music: {
         trackId: typeof r?.music?.trackId === 'string' && trackIds.has(r.music.trackId) ? r.music.trackId : undefined,
+        start: Number.isFinite(r?.music?.start) && r.music.start >= 0 ? r.music.start : 'auto',
         mood: str(r?.music?.mood, 80),
         bpm,
         search: str(r?.music?.search, 60) || str(r?.music?.mood, 60) || 'gaming montage',
@@ -228,7 +233,7 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
 export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number }): string {
   const clipRows = byScore(o.clips)
     .slice(0, 80)
-    .map((c) => ({ id: c.id, hero: c.hero, kills: kills(c), tags: plainTags(c).slice(0, 6), score: c.score, rating: c.rating, map: c.match?.map, seconds: Math.round(c.durationMs / 1000) }));
+    .map((c) => ({ id: c.id, hero: c.hero, kills: kills(c), killSeconds: c.events.filter(e => e.type === 'kill').map(e => Math.round(e.at - c.startTimeEpoch) / 1000), tags: plainTags(c).slice(0, 6), score: c.score, rating: c.rating, map: c.match?.map, seconds: c.durationMs / 1000 }));
   const songs = o.tracks
     .filter((t) => t.analysis)
     .slice(0, 40)
@@ -238,10 +243,11 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     `Come up with ${o.count} different ideas for ${o.format.label} reels (${o.format.idealSeconds[0]} to ${o.format.idealSeconds[1]} seconds) from my Marvel Rivals clips.`,
     REFERENCE_STYLE,
     'Make each idea a different angle (a hero spotlight, a joke, a hot take, a challenge, a comeback story...). Default to clean gameplay edits. Leave hook, endText, imageIdea and captions empty unless the user explicitly requests text or an intro. Keep each caption line to 6 words or fewer. No slurs, nothing mean about real people.',
-    `Pick about ${n} clips per idea from the list, ordered so it builds: the best play last. Only use clip ids from the list.`,
+    `Pick only enough clips to fit the requested duration. When no duration is requested, about ${n} clips is a starting point. Order them so it builds: the best play last. Only use clip ids from the list.`,
+    'Return targetSeconds as the requested maximum reel duration (use the upper end for a range). Return clipEdits [{clipId,in,out}] in source seconds for selected clips. Preserve every listed killSeconds within each chosen clip; never crop a multi-kill into an unsupported single kill or invent markers. Choose fewer clips if the full streaks cannot fit. Select music.start in song seconds only if explicitly requested, otherwise use auto.',
     `Edit styles to choose from: ${STYLES.map((s) => `${s.id} (${s.description})`).join('; ')}.`,
     songs.length ? `My songs (use a trackId only if it really fits): ${JSON.stringify(songs)}` : 'I have no songs yet, so describe the music to search for.',
-    'For music.search, give 2 to 4 words to search royalty-free music with (genre and mood, no artist names). For imageSearch, give 2 to 4 words to search free pictures for the hook card.',
+    'For music.search, give 2 to 4 words to search royalty-free music with (genre and mood, no artist names). In addition to the JSON fields below, include targetSeconds, clipEdits:[{clipId,in,out}], and music.start (a number or auto). Do not add an imageSearch unless a picture is requested.',
     o.request ? `My own idea or request: "${o.request}"` : '',
     `Clips: ${JSON.stringify(clipRows)}`,
     'Reply as JSON: {"ideas":[{"title":"","concept":"one sentence","hook":"hook card text: one line, or 2 to 4 very short lines separated by \\n that show one after another","endText":"big text over the last seconds (optional)","imageIdea":"what the hook picture shows","imageSearch":"","captions":["",""],"styleId":"","clipIds":[""],"music":{"trackId":"optional","mood":"","bpm":[120,140],"search":""},"postCaption":"post text with 4 to 6 hashtags","why":"why it would do well"}]}',

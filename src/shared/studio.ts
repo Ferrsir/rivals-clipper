@@ -171,6 +171,7 @@ export interface Mix {
 // ---------- projects ----------
 
 export interface ReelClip {
+  sourceFingerprint?: string;
   /** Unique within the project (the same clip can appear twice). */
   uid: string;
   clipId: string;
@@ -214,6 +215,7 @@ export interface ReelMusic {
 }
 
 export interface ReelProject {
+  sourceWarnings?: string[];
   version: 1;
   id: string;
   name: string;
@@ -222,6 +224,8 @@ export interface ReelProject {
   format: FormatId;
   fps: number;
   style: StyleRecipe;
+  /** Requested upper duration budget. A render must not silently discard kills to fit it. */
+  targetSeconds?: number;
   clips: ReelClip[];
   music: ReelMusic | null;
   mix: Mix;
@@ -378,9 +382,13 @@ export interface ReelIdea {
   format: FormatId;
   /** Library clip ids in reel order. */
   clipIds: string[];
+  /** Source trims keyed by library clip id. All marked kills in a selected streak must remain. */
+  clipEdits?: Array<{ clipId: string; in: number; out: number }>;
+  targetSeconds?: number;
   music: {
     /** A song already in your library, if one fits. */
     trackId?: string;
+    start?: number | 'auto';
     mood: string;
     bpm?: [number, number];
     /** Words to search royalty-free music with. */

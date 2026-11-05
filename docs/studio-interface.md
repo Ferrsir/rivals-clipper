@@ -66,3 +66,13 @@ From `paths(root)` in `src/main/settings.ts` (created at startup):
 | `studio` | `<root>\studio` (projects) |
 | `music` | `<root>\music` (uploads) |
 | `reels` | `<root>\exports\reels` (renders) |
+
+## Prompt-driven gameplay editing
+
+Create reel accepts up to20,000characters and calls the selected signed-in provider. Quick ideas is explicitly local. Plans carry source clip IDs, source trims, exact kill-marker times, a maximum duration budget and an imported song start. The model cannot substitute arbitrary source paths. A trim that removes a marked streak kill is rejected; impossible duration budgets remain previewable with a warning and block final export.
+
+Vertical exports remove the top objective and bottom ability HUD, recenter gameplay and separately crop the original upper-right feed. Both picture and feed use the same source segment timing. Moving the inspector crop box takes precedence over automatic framing. Follow character with AI sends up to16 ordered source frames per clip for player torso positions, interpolates accepted locations, and holds the prior location on uncertain samples. It cannot guarantee every intermediate frame or remove subtitles baked into source video. Provider limits surface as errors, not fabricated edits.
+
+After Make reel renders, a review sends up to8 actual output frames to the selected provider and measures duration/audio level. Reviews persist under studio/reviews and clearly separate issues from limitations. Optional local style-feed.jpg and style-gameplay.jpg under studio/references are appended as actual visual references. Reviews never certify audio timing by looking at images, claim50 independent reviewers, or automatically publish. Request changes preserves trusted sources and checks that the user has not changed the project while the AI works.
+
+The production sequence is brief, select, frame, render, review, revise, then user playback/export. It is inspired by Reel Studio's orchestration pattern, implemented with this app's local renderer. External anime video intros and timed artwork layers are still unsupported; a text card is not a substitute. No restricted upstream doctrine or private gameplay is redistributed in this repository.
