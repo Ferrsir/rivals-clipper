@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../../shared/types';
-import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject } from '../../shared/studio';
+import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject, VoiceRole, VoiceSettings } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
 
@@ -311,7 +311,17 @@ export function sanitizeProject(p: any): ReelProject {
     assets: sanitizeAssets(p.assets),
     overlays: sanitizeOverlays(p.overlays),
     subtitles: sanitizeSubtitles(p.subtitles),
+    voices: sanitizeVoices(p.voices),
   };
+}
+
+export function sanitizeVoices(v: any): VoiceSettings | null {
+  if (!v || typeof v !== 'object') return null;
+  const cast: VoiceRole[] = (Array.isArray(v.cast) ? v.cast : [])
+    .filter((r: any) => r && typeof r.speaker === 'string' && r.speaker.trim() && typeof r.voice === 'string' && /^(piper|sapi):[\w .()-]{1,80}$/.test(r.voice))
+    .slice(0, 12)
+    .map((r: any) => ({ speaker: r.speaker.trim().slice(0, 40), voice: r.voice, pitch: Number.isFinite(r.pitch) ? num(r.pitch, -8, 8, 0) : undefined }));
+  return { on: v.on === true, cast, duck: num(v.duck, 0, 1, 0.25), volume: num(v.volume, 0, 2, 1.1) };
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
@@ -383,7 +393,8 @@ export function sanitizeSubtitles(raw: unknown): ClipSubtitle[] {
     .slice(0, 200)
     .map((s: any) => {
       const from = num(s.from, 0, 36000, 0);
-      return { clipUid: s.clipUid.slice(0, 40), from, to: num(s.to, from + 0.1, 36000, from + 2), text: String(s.text).replace(/\s+/g, ' ').trim().slice(0, 140) };
+      const speaker = typeof s.speaker === 'string' && s.speaker.trim() ? s.speaker.replace(/\s+/g, ' ').trim().slice(0, 40) : undefined;
+      return { clipUid: s.clipUid.slice(0, 40), from, to: num(s.to, from + 0.1, 36000, from + 2), text: String(s.text).replace(/\s+/g, ' ').trim().slice(0, 140), ...(speaker ? { speaker } : {}) };
     });
 }
 

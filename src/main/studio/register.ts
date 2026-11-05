@@ -23,6 +23,9 @@ import { describeFit, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
 import { findSong, readIntent } from './intent';
 import { detectMoments, expandOwnFootage } from './moments';
+import { SpeechTools } from './tools';
+import { assignSpeakers, linesToSubtitles, transcribe } from './speech';
+import { aiCast, autoCast, localSynth } from './voices';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
@@ -213,6 +216,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
           encoder: enc,
           onProgress: (pr) => send(pr),
           signal: ac.signal,
+          synth: project.voices?.on ? localSynth({ ffmpeg: ff.path!, tools: speechTools(), progress: (m, pct) => send({ stage: 'assemble', pct: pct ?? 0.99, message: m }) }) : undefined,
         });
         if (!request.preview) {
           if (project.music) music().markUsed(project.music.trackId);
@@ -331,6 +335,48 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
    * picked, the length you asked for (pulling in more kill clips or dropping weak ones), and faces located
    * for picture overlays. Returns notes for the "current step" display.
    */
+  const speechTools = () => new SpeechTools(path.join(studioDir(), 'tools'));
+  /**
+   * "make them have subtitles": what's said in the clips, as English lines, with who says each one
+   * (from the AI). "ai voices for them talking": a voice per character reads those lines.
+   */
+  const addSpeech = async (project: ReelProject, request: string, wantSubs: boolean, wantVoices: boolean, notes: string[], signal?: AbortSignal) => {
+    const ff = await ffmpeg();
+    const keepLanguage = /\b(original|japanese|native) (language|audio|subtitles?|subs)\b|\bdon'?t translate\b/i.test(request);
+    if (wantSubs || wantVoices) {
+      // Only transcribe when the plan has no lines of its own (your words win).
+      const sources = [...new Set(project.clips.map(c => c.videoFile))].filter(file => !(project.subtitles ?? []).some(t => project.clips.find(c => c.uid === t.clipUid)?.videoFile === file));
+      let whisper: { bin: string; model: string } | undefined;
+      for (const file of sources) {
+        const used = project.clips.filter(c => c.videoFile === file);
+        const from = Math.max(0, Math.min(...used.map(c => c.in)) - 0.5);
+        const to = Math.max(...used.map(c => c.out)) + 0.5;
+        try {
+          whisper ??= await speechTools().whisper(undefined, 'small', signal);
+          const heard = await transcribe({ ffmpeg: ff, whisper, clip: used[0], from, to, keepLanguage, signal });
+          let lines = heard.lines;
+          if (lines.length && ctx.ai) lines = await assignSpeakers({ ai: ctx.ai, ffmpeg: ff, clip: used[0], lines, request, signal }).catch(() => lines);
+          if (!lines.length) continue;
+          project.subtitles = [...(project.subtitles ?? []), ...linesToSubtitles(lines, project.clips, file)];
+          notes.push(`Subtitled ${lines.length} spoken line${lines.length === 1 ? '' : 's'}${heard.language && heard.language !== 'en' && !keepLanguage ? ` (translated from ${heard.language})` : ''}.`);
+        } catch (error) {
+          notes.push(`Couldn't make subtitles (${(error as Error).message}).`);
+          break;
+        }
+      }
+      if (!(project.subtitles ?? []).length) notes.push('No speech was found for subtitles. Write the lines in your prompt (e.g. Gojo: "Throughout heaven and earth...") and they will be used.');
+    }
+    if (wantVoices) {
+      // Lines you wrote without a speaker are read by one voice.
+      project.subtitles = (project.subtitles ?? []).map(t => (t.speaker ? t : { ...t, speaker: 'Narrator' }));
+      const speakers = [...new Set(project.subtitles.map(t => t.speaker!))];
+      if (speakers.length) {
+        const cast = ctx.ai ? await aiCast(ctx.ai, speakers, request) : autoCast(speakers, project.voices?.cast);
+        project.voices = { on: true, cast, duck: project.voices?.duck ?? 0.25, volume: project.voices?.volume ?? 1.1 };
+        notes.push(`AI voices: ${cast.map(r => `${r.speaker} (${r.voice.replace(/^piper:[a-z]{2}_[A-Z]{2}-/, '').replace(/-\w+$/, '')})`).join(', ')}. They're made on your PC with Piper; the first render downloads each voice once.`);
+      }
+    }
+  };
   const finishPlan = async (project: ReelProject, request: string, signal?: AbortSignal): Promise<{ project: ReelProject; notes: string[] }> => {
     const notes: string[] = [];
     const fmt = getFormat(project.format);
@@ -395,6 +441,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       if (ok) notes.push('Found the face for your picture overlay.');
       if (failed) notes.push(`Couldn't find the face for your picture (${failed}); it sits where the AI first placed it.`);
     }
+    if (intent.subtitles || intent.voices) await addSpeech(project, request, intent.subtitles, intent.voices, notes, signal);
     if (intent.faceOverlay && !(project.overlays ?? []).length) notes.push(!(project.assets ?? []).some(a => a.kind === 'image') ? 'Add the picture you want on their face (drop it in with your clip) and make the reel again.' : "The AI didn't place your picture; try naming who it goes on, e.g. \"put the Deadpool icon on Gojo's face\".");
     return { project, notes };
   };

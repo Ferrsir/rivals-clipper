@@ -250,6 +250,8 @@ export interface ReelProject {
   overlays?: ImageOverlay[];
   /** Subtitles tied to moments inside a clip, so they stay on the right words when the clip is retimed. */
   subtitles?: ClipSubtitle[];
+  /** AI voices for the subtitle lines. */
+  voices?: VoiceSettings | null;
   /** Your own videos and pictures that this project can use. */
   assets?: MediaAsset[];
 }
@@ -307,6 +309,27 @@ export interface ClipSubtitle {
   from: number;
   to: number;
   text: string;
+  /** Who says it ("Gojo"). Lines with a speaker can be voiced. */
+  speaker?: string;
+}
+
+/** A voice for one character. */
+export interface VoiceRole {
+  speaker: string;
+  /** Voice id from the voice list, e.g. "piper:en_US-ryan-high" or "sapi:Microsoft David Desktop". */
+  voice: string;
+  /** Semitones up (+) or down (-). */
+  pitch?: number;
+}
+
+/** AI voices reading the subtitle lines, over the original sound. */
+export interface VoiceSettings {
+  on: boolean;
+  cast: VoiceRole[];
+  /** Original sound level while a voice speaks, 0..1. */
+  duck: number;
+  /** Voice level, 0..2. */
+  volume: number;
 }
 
 export interface OutroText {
