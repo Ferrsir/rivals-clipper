@@ -63,10 +63,14 @@ export function groupLines(words: Word[], o: { gap?: number; maxWords?: number }
 export function captionChunks(text: string, start: number, end: number, maxWords = 3): Array<{ text: string; start: number; end: number }> {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length <= maxWords + 1) return [{ text, start, end }];
+  // Even chunks: 10 words -> 3, 3, 2, 2 rather than 3, 3, 3, 1.
   const n = Math.ceil(words.length / maxWords);
-  const size = Math.ceil(words.length / n);
   const chunks: string[] = [];
-  for (let i = 0; i < words.length; i += size) chunks.push(words.slice(i, i + size).join(' '));
+  for (let i = 0, at = 0; i < n; i++) {
+    const take = Math.round((words.length - at) / (n - i));
+    chunks.push(words.slice(at, at + take).join(' '));
+    at += take;
+  }
   const total = chunks.reduce((s, c) => s + c.length + 1, 0);
   const out: Array<{ text: string; start: number; end: number }> = [];
   let t = start;
