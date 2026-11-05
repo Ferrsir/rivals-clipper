@@ -11,7 +11,11 @@ async function main() {
     const ocr = new ScreenOcr();
     try {
       assert.equal(await ocr.init(), true, ocr.failed);
-      await ocr.read({ w: 100, h: 30, data: new Uint8Array(3000).fill(255) }, 'light-text');
+      const data = fs.readFileSync(path.join(__dirname, '../test/fixtures/ocr-victory.gray'));
+      assert.equal(data.length, 320 * 70);
+      const result = await ocr.read({ w: 320, h: 70, data }, 'light-text');
+      assert.ok(result, 'Packaged OCR recognition failed');
+      assert.match(result.text, /\bVICTORY\b/i, 'Packaged OCR did not recognize the known fixture');
       assert.equal(ocr.reads, 1);
       console.log('PACKAGED_OCR_OK');
     } finally {

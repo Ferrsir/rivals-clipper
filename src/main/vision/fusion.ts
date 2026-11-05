@@ -228,6 +228,13 @@ export class ScreenFusion {
         f.ocrDone = true;
         f.ocr = r;
         if (r) this.learnName(r);
+        // A KO may have settled before its paired row was read. Preserve the
+        // already-counted kill, but still account for a trade revealed by OCR.
+        if (f.done && f.ko?.done && !f.ko.assist && r && this.sidesOf(r)?.mine === 'victim') {
+          f.ko.feed = undefined;
+          f.ko = undefined;
+          this.emitDeath(f.t, this.sidesOf(r)?.attacker);
+        }
         break;
       }
       case 'banner': {

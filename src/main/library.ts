@@ -117,10 +117,27 @@ interface Entry {
 function readSidecar(file: string): ClipSidecar | undefined {
   try {
     const c = JSON.parse(fs.readFileSync(file, 'utf8')) as ClipSidecar;
-    return c.version === 1 && c.videoFile ? c : undefined;
+    return validSidecar(c) ? c : undefined;
   } catch {
     return undefined; // broken or half-written sidecar
   }
+}
+
+/** Files may be hand-edited or partially recovered. Never index an unsafe shape. */
+function validSidecar(c: any): c is ClipSidecar {
+  const obj = (v: any) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const num = (v: any) => typeof v === 'number' && Number.isFinite(v);
+  const text = (v: any) => v === undefined || typeof v === 'string';
+  if (!obj(c) || c.version !== 1 || typeof c.videoFile !== 'string' || !c.videoFile || typeof c.id !== 'string') return false;
+  if (![c.createdAt, c.startTimeEpoch, c.durationMs, c.score].every(num) || !['auto', 'manual'].includes(c.trigger)) return false;
+  if (!obj(c.match) || ![c.hero, c.endedMatch, c.match.map, c.match.gameMode, c.match.gameType, c.match.matchId, c.match.outcome].every(text)) return false;
+  if (!Array.isArray(c.events) || !c.events.every((e: any) => obj(e) && ['kill', 'assist', 'death'].includes(e.type) && num(e.at) && [e.victim, e.victimHero, e.myHero].every(text))) return false;
+  if (!Array.isArray(c.tags) || !c.tags.every((v: any) => typeof v === 'string')) return false;
+  if (!obj(c.video) || ![c.video.width, c.video.height, c.video.fps].every(num)) return false;
+  if (!Array.isArray(c.audioTracks) || !c.audioTracks.every((a: any) => obj(a) && Number.isInteger(a.index) && a.index >= 0 && ['game', 'mic'].includes(a.label))) return false;
+  if (c.rating !== undefined && !num(c.rating)) return false;
+  if (c.ai !== undefined && (!obj(c.ai) || !text(c.ai.summary) || !Array.isArray(c.ai.tags) || !c.ai.tags.every((v: any) => typeof v === 'string'))) return false;
+  return true;
 }
 
 export class Library {
