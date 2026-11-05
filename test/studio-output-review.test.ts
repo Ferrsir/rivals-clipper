@@ -9,6 +9,8 @@ import { createProject, reconcileProjectSources, reelClipFromSidecar, sanitizePr
 import type { ClipSidecar } from '../src/shared/types';
 import {aiIdeas} from '../src/main/studio/ideas';
 import {FORMATS} from '../src/main/studio/formats';
+import {buildAssembleJob} from '../src/main/studio/render';
+import {planFor} from '../src/main/studio/pipeline';
 
 const ffmpeg=process.env.FFMPEG || 'ffmpeg';
 let available=true;
@@ -19,6 +21,16 @@ test('rendered review includes the last kill even when it falls after the last u
   assert.ok(times.some(time=>Math.abs(time-9.71)<.01));
   assert.ok(times.length<=12);assert.ok(times.every(time=>time>=0 && time<10.07));
   assert.ok(reviewTimes(25,Array.from({length:20},(_,i)=>i+1)).some(time=>Math.abs(time-20.15)<.01));
+});
+
+test('the final fade cannot obscure a kill with less than half a second of payoff footage',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'reel-payoff-test-'));
+  try {
+    const project=createProject({styleId:'beat-cuts'}),timeline=planFor(project,null,30);
+    timeline.duration=10;timeline.kills=[9.7];
+    const job=buildAssembleJob({inputs:[],timeline,style:project.style,mix:project.mix,format:FORMATS.reels,size:{width:320,height:568},fps:30,music:null,anyMic:false,preview:true,encoder:{name:'libx264'},output:path.join(dir,'out.mp4'),workDir:dir});
+    assert.doesNotMatch(job.filter.split('[vout]')[0],/fade=t=out/);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 test('render review sends actual extracted frames and cannot approve a silent music mix', {skip:!available}, async()=>{

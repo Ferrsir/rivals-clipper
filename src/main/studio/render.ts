@@ -502,7 +502,9 @@ export function buildAssembleJob(o: AssembleOpts): FfJob & { concatList: string 
 
   const lines: string[] = [];
   const vchain = [...effectsChain(o), ...textFilters(o)];
-  const fo = Math.min(o.style.fadeOut, dur / 3);
+  // Never fade over the final elimination before the viewer has had time to see it.
+  const lastKill=tl.kills.at(-1);
+  const fo = Math.min(o.style.fadeOut, dur / 3, lastKill===undefined ? dur : Math.max(0,dur-lastKill-.5));
   if (fo > 0.01) vchain.push(`fade=t=out:st=${r3(dur - fo)}:d=${r3(fo)}`);
   vchain.push('format=yuv420p');
   lines.push(`[0:v]${vchain.join(',')}[vout]`);
