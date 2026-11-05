@@ -40,6 +40,7 @@ export interface FusionOptions {
   playerName?: string;
   /** Whether text recognition is running (otherwise kills come only from the KO list and banners). */
   ocr: boolean;
+  strictKills?: boolean;
   pairWindowMs?: number;
   decideAfterMs?: number;
   practiceAfterMs?: number;
@@ -162,6 +163,7 @@ export class ScreenFusion {
     this.hudVerified = !!opts.hudVerified;
     this.o = {
       ocr: opts.ocr,
+      strictKills: opts.strictKills ?? false,
       pairWindowMs: opts.pairWindowMs ?? 1500,
       decideAfterMs: opts.decideAfterMs ?? 700,
       practiceAfterMs: opts.practiceAfterMs ?? 90_000,
@@ -349,6 +351,7 @@ export class ScreenFusion {
   }
 
   private emitKill(at: number, victim: string | undefined): void {
+    if (this.o.strictKills && (!victim || normalizeName(victim).length < 3)) return;
     if (victim && this.sameVictimAgain(victim, at)) return;
     this.checkPractice(at);
     this.lastKillAt = at;
@@ -364,7 +367,7 @@ export class ScreenFusion {
   /** True when this name was KO'd moments ago: the HUD showed the same KO twice (it moved, or flickered). */
   private sameVictimAgain(victim: string, at: number): boolean {
     this.recentVictims = this.recentVictims.filter((v) => at - v.at < SAME_VICTIM_MS);
-    if (normalizeName(victim).length >= 3 && this.recentVictims.some((v) => nameSimilarity(v.name, victim) >= 0.8)) return true;
+    if (normalizeName(victim).length >= 3 && this.recentVictims.some((v) => nameSimilarity(v.name, victim) >= 0.8 || (this.o.strictKills && Math.abs(at - v.at) < 1500 && nameSimilarity(v.name.split(/\s+/).at(-1)!, victim.split(/\s+/).at(-1)!) >= 0.65) || (this.o.strictKills && (normalizeName(v.name).includes(normalizeName(victim)) || normalizeName(victim).includes(normalizeName(v.name)))))) return true;
     this.recentVictims.push({ name: victim, at });
     return false;
   }

@@ -156,6 +156,7 @@ export async function runHarness(o: HarnessOptions): Promise<HarnessReport> {
     awaitOcr: true,
     playerName: o.playerName ?? labels.playerName,
     hudVerified: true,
+    strictKills: true,
   });
   const src = new FrameSource(o.ffmpeg, frameSourceArgs(layout, fps, { kind: 'file', path: o.video, startSec: o.startSec, durationSec: o.durationSec }), layout);
   let frames = 0;

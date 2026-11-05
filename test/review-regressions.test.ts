@@ -80,3 +80,16 @@ test('OCR recognizes the known fixture, rather than merely incrementing a read c
   assert.ok(result);
   assert.match(result.text, /\bVICTORY\b/i);
 });
+
+test('strict live detection rejects unreadable KOs and merges rapid OCR variants of one victim', () => {
+  const events: string[] = [];
+  const fusion = new ScreenFusion({ gameEvent: key => { events.push(key); }, infoUpdate() {} }, { ocr: true, strictKills: true });
+  const crop = { w: 10, h: 10, data: new Uint8Array(100) }, box = { x0: 0, y0: 0, x1: 10, y1: 10 };
+  for (const [id, text] of [[1, 'ilk DEADPQOOL-Easy'], [2, 'DEADPOOL-Easy'], [3, '']] as const) {
+    const t = 1000 + id * 400;
+    fusion.onObservation({ kind: 'ko-line', id, t, box, crop, assist: false });
+    fusion.onOcr('ko', id, { text, words: text ? [{text, x0: 0, x1: 90, conf: 90}] : [] }, t + 100);
+  }
+  fusion.tick(8000);
+  assert.equal(events.filter(k => k === 'kill').length, 1);
+});
