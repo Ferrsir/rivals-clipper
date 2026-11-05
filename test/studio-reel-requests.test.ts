@@ -176,6 +176,7 @@ test('scoreboard frames are recognised from their dark, grey look', async () => 
   const { frameStats, isScoreboard, trimAround } = await import('../src/main/studio/clip-filter');
   const fill = (r: number, g: number, b: number) => { const a = new Uint8Array(10 * 4 * 3); for (let i = 0; i < a.length; i += 3) { a[i] = r; a[i + 1] = g; a[i + 2] = b; } return a; };
   assert.ok(isScoreboard(frameStats(fill(40, 42, 46), 10, 4)));
+  assert.ok(isScoreboard(frameStats(fill(22, 34, 48), 10, 4)), 'tinted panel still counts');
   assert.ok(!isScoreboard(frameStats(fill(90, 110, 70), 10, 4)));
   const c = { in: 0, out: 7, hits: [4] };
   assert.deepEqual(trimAround(c, [0.5, 1, 1.5]), { in: 1.8, out: 7, hits: [4] }, 'trimmed off before the kill');

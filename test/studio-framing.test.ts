@@ -35,7 +35,7 @@ for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} r
   try {
     const source = path.join(dir, 'source.mp4');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:s=1000x500:r=30:d=2', '-vf',
-      "drawbox=x=0:y=0:w=iw:h=50:c=red:t=fill,drawbox=x=0:y=450:w=iw:h=50:c=yellow:t=fill,drawbox=x=900:y=15:w=80:h=30:c=green:t=fill,drawbox=x=900:y=15:w=80:h=30:c=white:t=fill:enable='gte(t,1)'",
+      "drawbox=x=0:y=0:w=iw:h=50:c=red:t=fill,drawbox=x=0:y=450:w=iw:h=50:c=yellow:t=fill,drawbox=x=900:y=15:w=80:h=30:c=lime:t=fill,drawbox=x=900:y=15:w=80:h=30:c=white:t=fill:enable='gte(t,1)'",
       '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
     const clip: ReelClip = { uid: 'layout', clipId: 'layout', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30,
       hasMic: false, hits: [1], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };

@@ -39,7 +39,8 @@ export function frameStats(rgb: Uint8Array, width: number, height: number): Fram
   return { y: y / n, sat: sat / n, leftY: left / leftN };
 }
 
-export const isScoreboard = (s: FrameStats) => s.y < 60 && s.sat < 11 && s.leftY < 50;
+// Measured on real scoreboard frames (48x20): mean luma 31-40, left strip 17-29; gameplay 84-100.
+export const isScoreboard = (s: FrameStats) => s.y < 60 && s.leftY < 50;
 
 const W = 48;
 const H = 20;

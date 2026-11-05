@@ -120,7 +120,7 @@ export function feedBox(size: Size): { width: number; height: number; x: number;
  * Centre game crops this far left of the screen centre, in units of source height, so both the hero
  * and what they aim at stay in frame.
  */
-export const HERO_OFFSET = 0.15;
+export const HERO_OFFSET = { square: 0.15, portrait: 0.2 };
 
 /** Top and bottom HUD bands removed from game footage: the clock/objective block and the HP bar. */
 export const HUD_INSET = { top: 0.14, bottom: 0.89 };
@@ -159,7 +159,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   // and retiming as the gameplay, so its kills cannot drift away from the original action.
   const cleanPortrait = size.height >= size.width && clip.preserveKillFeed !== false;
   const inset = cleanPortrait ? `crop=w=iw:h=trunc(ih*${r6(HUD_INSET.bottom - HUD_INSET.top)}/2)*2:x=0:y=trunc(ih*${r6(HUD_INSET.top)}/2)*2,` : '';
-  const gameplay = `${inset}${cropFilter(clip, size, s0, cleanPortrait ? HERO_OFFSET / (HUD_INSET.bottom - HUD_INSET.top) : 0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  const gameplay = `${inset}${cropFilter(clip, size, s0, cleanPortrait ? (size.height > size.width * 1.2 ? HERO_OFFSET.portrait : HERO_OFFSET.square) / (HUD_INSET.bottom - HUD_INSET.top) : 0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
   // Your pictures go onto the full source frame first, so their positions are the AI's face locations.
   const ov = overlayFilters({ overlays: o.overlays ?? [], clip, firstInput: 1, offset: s0, span: s1 - s0 + 0.3, fps, inLabel: 'srcRaw', outLabel: 'src' });
   if (ov.lines.length) {
@@ -172,7 +172,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     // pinned to the top-right corner for the entire clip, like the reference edits.
     const box = feedBox(size);
     lines.push(`${src}split=2[gameSrc][feedSrc]`);
-    lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,eq=brightness=-0.05:contrast=1.08:saturation=1.05,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
+    lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.5/0.05 0.72/0.55 1/1',drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
     lines.push(`[gameSrc]${gameplay}[gamePicture]`);
     lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y},${split}`);
   } else lines.push(`${src}${gameplay},${split}`);

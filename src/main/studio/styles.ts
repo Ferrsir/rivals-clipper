@@ -14,7 +14,7 @@ const montage: StyleRecipe = {
   cruiseSpeed: 1,
   leadIn: [2, 3.4],
   tail: [0.25, 0.75],
-  slowmo: { on: true, speed: 0.45, before: 0.2, after: 0.3, smooth: 'blend', gameVolume: 0.45, scope: 'hero' },
+  slowmo: { on: true, speed: 0.45, before: 0.2, after: 0.3, smooth: 'none', gameVolume: 0.45, scope: 'hero' },
   zoom: { on: true, amount: 1.04, attack: 0.05, release: 0.3, onBeats: 'none', beatAmount: 1.02 },
   shake: { on: false, amount: 0.004, duration: 0.22, frequency: 14, onBeats: 'none', beatAmount: 0.002 },
   flash: { on: true, strength: 0.35, duration: 0.12, onKills: false, onDrop: true, onCuts: true },

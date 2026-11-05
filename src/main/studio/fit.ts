@@ -65,7 +65,7 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
   const removed: string[] = [];
   if (!target || !p.clips.length) return { project: p, added, removed, seconds };
   const under = Math.max(1.5, target * 0.07);
-  const over = 1;
+  const over = Math.max(0.5, target * 0.03);
 
   if (seconds < target - under) {
     const used = new Set(p.clips.map((c) => c.videoFile));
