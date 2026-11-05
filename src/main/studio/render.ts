@@ -197,7 +197,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 12, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 13, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -230,22 +230,24 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     const border = `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))}`;
     const fade = `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`;
     if (rows?.length) {
-      // Only your rows, cut out at their plate edges, on solid black: no scenery, no other players' rows.
+      // Only your rows, cut out at their plate edges, each on its own black backing: no scenery, no
+      // other players' rows, no empty plate. The rest of the box is transparent.
       lines.push(`${src}split=2[gameSrc][feedSrc]`);
-      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
       let cur = 'fbase';
-      lines.push(`[fbg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[${cur}]`);
+      lines.push(`[fbg]colorchannelmixer=aa=0[${cur}]`);
       const slotH = box.height / FEED_SLOTS;
       rows.forEach((r, i) => {
         const x = Math.max(0, Math.floor((r.x0 * box.width - 2) / 2) * 2);
         const y = Math.round(r.slot * slotH);
         const h = Math.min(box.height - y, Math.round((r.slot + 1) * slotH) - y);
-        lines.push(`[fr${i}]crop=w=${box.width - x}:h=${h}:x=${x}:y=${y}[frc${i}]`);
+        // The row fills the top ~70% of its slot; black under it hides the scenery in the gap.
+        lines.push(`[fr${i}]crop=w=${box.width - x}:h=${h}:x=${x}:y=${y},drawbox=x=0:y=trunc(ih*0.72):w=iw:h=ih:color=black:t=fill[frc${i}]`);
         const next = `fo${i}`;
-        lines.push(`[${cur}][frc${i}]overlay=x=${x}:y=${y}:enable='between(t,${r6(r.from)},${r6(r.to)})'[${next}]`);
+        lines.push(`[${cur}][frc${i}]overlay=x=${x}:y=${y}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
         cur = next;
       });
-      lines.push(`[${cur}]${border},${fade}`);
+      lines.push(`[${cur}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${feedAlphaExpr(windows).replace(/^255\*/, '')}',setsar=1[feed]`);
       lines.push(`[gameSrc]${gameplay}[gamePicture]`);
       lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
     } else if (!rows && windows.length) {

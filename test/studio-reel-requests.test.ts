@@ -242,7 +242,9 @@ test('kills move to when your row appears; teammates\' kills are dropped', async
   const rows = ownRows(samples);
   assert.ok(rows.every((r) => r.to - r.from >= 0.5), 'single-sample flashes are not rows');
   assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625));
-  assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] }))), { hits: [3], kills: 1 }, 'unreadable feed: keep the clip as it was');
+  assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, []), { hits: [3], kills: 1 }, 'scan failed: keep the clip as it was');
+  const none = withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] })));
+  assert.deepEqual([none.hits, none.kills], [[], 0], 'every row is a teammate\'s: no kills of yours');
 });
 
 test('the feed box shows only your rows, on black', { skip: !available }, () => {
@@ -263,7 +265,9 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     const cropX0 = 1000 - 500 * 0.49;
     const at = (x: number, y: number) => px((x - cropX0) / (500 * 0.454), (y - 12.5) / 55);
     assert.ok(at(900, 20).every((v) => v > 200), `own row shown: ${at(900, 20)}`);
-    assert.ok(at(900, 39).every((v) => v < 40), `other player's row hidden: ${at(900, 39)}`);
-    assert.ok(at(770, 20).every((v) => v < 40), `scenery left of the row is black: ${at(770, 20)}`);
+    const other = at(900, 39);
+    assert.ok(!(other[0] > 200 && other[2] < 90), `other player's row hidden: ${other}`);
+    assert.ok(other[2] > 90, `no black slab where you have no row (the game shows through): ${other}`);
+    assert.ok(at(900, 28).every((v) => v < 40), `black under your row hides the gap: ${at(900, 28)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

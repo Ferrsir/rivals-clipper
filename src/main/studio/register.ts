@@ -346,10 +346,17 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const scans = new Map<string, ClipScan>();
     for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal));
     // Kill times from when your row appears in the feed (dropping teammates' kills), then trim off the scoreboard.
+    // If no scanned clip shows a single row of yours, the feed is somewhere this build doesn't look
+    // (another HUD scale or layout): keep the clipper's kills rather than throw everything away.
+    const feedReadable = [...scans.values()].some(s => s.feed.some(f => f.own.some(x => x != null)));
     const prepare = (c: ReelClip) => {
       if (c.external) return c;
       const scan = scans.get(c.videoFile);
-      return trimAround(scan ? withFeedRows(c, scan.feed) : c, scan?.scoreboard ?? []);
+      const own = scan && feedReadable ? withFeedRows(c, scan.feed) : c;
+      // Not your kill, or it opens straight on the kill with no build-up: leave it out.
+      const first = own.hits.find(h => h > own.in);
+      if (first === undefined || first - own.in < 1) return null;
+      return trimAround(own, scan?.scoreboard ?? []);
     };
     const before = project.clips.length;
     project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);

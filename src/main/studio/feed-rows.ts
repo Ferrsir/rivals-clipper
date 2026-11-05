@@ -115,11 +115,13 @@ export function rowOnsets(samples: FeedSample[], fps = FEED_SAMPLE.fps): number[
 
 /**
  * Put each kill on the moment its row appears, and drop kills with no row of yours (a teammate's).
- * Leaves the clip as it is when the feed can't be read (no rows of yours at all).
+ * Leaves the clip as it is when the feed couldn't be scanned.
  */
 export function withFeedRows<T extends Pick<ReelClip, 'hits' | 'kills'> & { feedRows?: FeedRow[] }>(clip: T, samples: FeedSample[]): T {
+  // No samples means the scan failed: keep the clip as the clipper logged it. A readable feed with no
+  // rows of yours means none of these kills are yours (every row is a teammate's or an enemy's).
+  if (!samples.length) return clip;
   const rows = ownRows(samples);
-  if (!rows.length) return clip;
   const onsets = rowOnsets(samples);
   const used = new Set<number>();
   const hits: number[] = [];
@@ -130,6 +132,5 @@ export function withFeedRows<T extends Pick<ReelClip, 'hits' | 'kills'> & { feed
     used.add(i);
     hits.push(onsets[i]);
   }
-  if (!hits.length) return { ...clip, feedRows: rows };
   return { ...clip, hits, kills: hits.length, feedRows: rows };
 }
