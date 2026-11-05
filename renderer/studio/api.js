@@ -53,7 +53,7 @@ export const api = {
   },
   ideas: {
     quick: (format) => call('studio:ideas:quick', format),
-    ai: (format, request) => call('studio:ideas:ai', format, request),
+    ai: (format, request, count) => call('studio:ideas:ai', format, request, count),
     apply: (idea) => call('studio:ideas:apply', idea),
   },
   free: {

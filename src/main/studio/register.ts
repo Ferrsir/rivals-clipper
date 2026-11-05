@@ -306,8 +306,8 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   // ---------- ideas ----------
   const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
   handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
-  handle('studio:ideas:ai', (_e, format: FormatId, request: string) =>
-    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count: 5 }),
+  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number) =>
+    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:await ffmpeg() }),
   );
   handle('studio:ideas:apply', (_e, idea: ReelIdea) => {
     return store().save(projectFromIdea(idea, libraryClips(), music().list()));

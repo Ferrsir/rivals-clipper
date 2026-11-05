@@ -3,6 +3,10 @@
 // Quick ideas come from the clips' tags and need no AI; AI ideas ask Claude/ChatGPT for more creative ones.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
 import type { AiClient } from '../ai-auth';
 import type { ClipSidecar } from '../../shared/types';
 import type { ExportFormat, FormatId, MusicTrack, ReelIdea } from '../../shared/studio';
@@ -256,12 +260,29 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     .join('\n\n');
 }
 
-export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number }): Promise<ReelIdea[]> {
+export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; ffmpeg?:string }): Promise<ReelIdea[]> {
   if (o.request.length > 20000) throw new Error('Keep your reel prompt under 20,000 characters.');
   if (!ai) throw new Error('Sign in with Claude or ChatGPT under Settings to get AI ideas.');
   if (!o.clips.some((c) => kills(c) > 0)) throw new Error('Record a few clips with kills first.');
-  const r = await ai.ask({ prompt: ideasPrompt(o), system: 'You help a Marvel Rivals creator plan short gameplay edits. Follow the requested JSON shape exactly.', expectJson: true, timeoutMs: 180_000 });
-  const ideas = sanitizeIdeas(r.json, o.clips, o.tracks, o.format);
-  if (!ideas.length) throw new Error('The AI did not come back with usable ideas. Try again.');
-  return ideas;
+  const dir=o.ffmpeg ? fs.mkdtempSync(path.join(os.tmpdir(),'rivals-clip-cards-')) : undefined;
+  try {
+    let clips=o.clips;
+    const images:string[]=[];
+    if(o.ffmpeg && dir) {
+      const requestedHeroes=[...new Set(clips.map(c=>c.hero).filter((hero):hero is string=>!!hero))].filter(hero=>o.request.toLowerCase().includes(hero.toLowerCase()));
+      clips=byScore(requestedHeroes.length ? clips.filter(c=>requestedHeroes.includes(c.hero || '')) : clips).slice(0,12);
+      for(const [index,clip] of clips.entries()) {
+        const image=path.join(dir,`clip-${index}.jpg`);
+        await new Promise<void>((resolve,reject)=>execFile(o.ffmpeg!,['-v','error','-i',clip.videoFile,'-vf',`fps=3/${Math.max(.1,clip.durationMs/1000)},scale=960:-2,tile=1x3:padding=4:color=black`,'-frames:v','1','-y',image],{windowsHide:true,timeout:30000},error=>error?reject(error):resolve()));
+        images.push(image);
+      }
+    }
+    const evidence=images.length ? `Attached images are source contact sheets, in this exact clip-ID order: ${JSON.stringify(clips.map(c=>c.id))}. Each sheet has three chronological uniformly sampled frames. Inspect player visibility, action, clutter and occlusion when selecting. Reject menu/death-only or badly obscured footage. These samples cannot establish every kill; use the trusted markers and preserve complete streaks. Do not pretend unobserved footage was reviewed.` : 'No source frames are attached. Selection is based on metadata only.';
+    const r = await ai.ask({ prompt: ideasPrompt({...o,clips})+'\n\n'+evidence, imagePaths:images, system: 'You help a Marvel Rivals creator plan short gameplay edits. Inspect supplied media evidence when available. Follow the requested JSON shape exactly.', expectJson: true, timeoutMs: 180_000 });
+    const ideas = sanitizeIdeas(r.json, clips, o.tracks, o.format);
+    if (!ideas.length) throw new Error('The AI did not come back with usable ideas. Try again.');
+    return ideas;
+  } finally {
+    if(dir && path.dirname(path.resolve(dir))===path.resolve(os.tmpdir())) fs.rmSync(dir,{recursive:true,force:true});
+  }
 }
