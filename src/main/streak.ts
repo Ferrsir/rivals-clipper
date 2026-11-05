@@ -30,13 +30,17 @@ export class StreakTracker {
     return this.stopAt;
   }
 
+  begin(now: number, pastMs: number, stopAt: number): void {
+    this.active = true;
+    this.clipStart = now - Math.min(pastMs, Math.max(0, this.cfg.maxClipMs - this.cfg.postRollMs));
+    this.stopAt = Math.min(stopAt, this.clipStart + this.cfg.maxClipMs);
+  }
+
   /** Call on every kill (or assist, if you want those to keep a clip alive). */
   onKill(now: number): StreakAction {
     if (!this.active) {
-      this.active = true;
-      this.clipStart = now - this.cfg.preRollMs;
-      this.stopAt = Math.min(now + this.cfg.postRollMs, this.clipStart + this.cfg.maxClipMs);
-      return { type: 'start', pastDurationMs: this.cfg.preRollMs, stopAt: this.stopAt };
+      this.begin(now, this.cfg.preRollMs, now + this.cfg.postRollMs);
+      return { type: 'start', pastDurationMs: now - this.clipStart, stopAt: this.stopAt };
     }
     const next = Math.min(now + this.cfg.postRollMs, this.clipStart + this.cfg.maxClipMs);
     if (next > this.stopAt) {
