@@ -21,6 +21,7 @@ import { findFont, planFor, renderProject } from './pipeline';
 import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
 import { describeFit, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
+import { scoreboardTimes, trimAround } from './clip-filter';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
@@ -338,7 +339,16 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
         notes.push(`Picked "${track.title}" from your music (${Math.round(track.analysis.bpm)} BPM).`);
       }
     }
-    const fit = fitToTarget(project, libraryClips(), analysisFor(project));
+    // Never use footage with the Tab scoreboard up: trim around it, or drop the clip.
+    const ff0 = await ffmpeg();
+    const pool = libraryClips().filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => b.score - a.score).slice(0, 60);
+    const bad = new Map<string, number[]>();
+    for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) bad.set(file, await scoreboardTimes(ff0, file, signal));
+    const prepare = (c: ReelClip) => (c.external ? c : trimAround(c, bad.get(c.videoFile) ?? []));
+    const before = project.clips.length;
+    project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);
+    if (project.clips.length < before) notes.push(`Left out ${before - project.clips.length} clip${before - project.clips.length === 1 ? '' : 's'} with the scoreboard open.`);
+    const fit = fitToTarget(project, pool, analysisFor(project), { prepare });
     project = fit.project;
     const fitNote = describeFit(fit, target);
     if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));

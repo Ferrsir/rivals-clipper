@@ -69,7 +69,7 @@ export function atempoChain(speed: number): string {
 }
 
 /** Crop the source to the output's shape around the clip's crop centre. */
-export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' | 'cropTrack'>, out: Size, offset = 0): string {
+export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' | 'cropTrack'>, out: Size, offset = 0, heroOffset = 0): string {
   const ar = out.width / out.height;
   const z = Math.max(1, clip.cropZoom || 1);
   const cx = Math.min(1, Math.max(0, clip.cropX ?? 0.5));
@@ -85,29 +85,45 @@ export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' |
       tracked=`if(lt(t+${r6(offset)},${r6(b.t)}),${r6(a.x)}+(${r6(b.x-a.x)})*clip((t+${r6(offset)}-${r6(a.t)})/${r6(b.t-a.t)},0,1),${tracked})`;
     }
     center=`clip((iw*(${tracked})-ow/2)/max(1,iw-ow),0,1)`;
+  } else if (heroOffset > 0 && Math.abs(cx - 0.5) < 1e-3) {
+    // Not moved by hand: frame the hero, who stands left of the crosshair.
+    center = `clip((iw/2-ih*${r6(heroOffset)}-ow/2)/max(1,iw-ow),0,1)`;
   }
   return `crop=w=${w}:h=${h}:x='(iw-ow)*(${center})':y=(ih-oh)*${r6(cy)}`;
 }
 
-/** Where Marvel Rivals draws its kill feed, as fractions of the 16:9 game frame (all rows, right-aligned). */
-export const FEED_REGION = { x0: 0.7, x1: 0.995, y0: 0.02, y1: 0.205 };
+/**
+ * Where Marvel Rivals draws its kill feed. The HUD is anchored to the right edge and scales with the
+ * frame height, so the region is in units of the source HEIGHT measured from the right edge. Measured
+ * on Ferris's 2580x1080 recordings: rows span x 0.80-0.99 and y 0.025-0.135 of the frame (3 row slots).
+ */
+export const FEED_REGION = { right: 0.036, width: 0.454, y0: 0.025, y1: 0.135 };
 
 export function feedCropFilter(): string {
   const r = FEED_REGION;
-  return `crop=w=trunc(iw*${r6(r.x1 - r.x0)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc(iw*${r6(r.x0)}/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
+  return `crop=w=trunc(ih*${r6(r.width)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc((iw-ih*${r6(r.right + r.width)})/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
 }
 
-/** Size and place of the kill-feed box: flush with the top-right corner, enlarged for vertical outputs. */
+/** Size and place of the kill-feed box: flush with the top-right corner, big enough to read on a phone. */
 export function feedBox(size: Size): { width: number; height: number; x: number; y: number } {
   const r = FEED_REGION;
   const portrait = size.height > size.width * 1.2;
-  const width = Math.round((size.width * (portrait ? 0.62 : 0.46)) / 2) * 2;
-  // The source region's own aspect (16:9 game frame), so rows are never squashed.
-  const height = Math.round(((width * (r.y1 - r.y0) * 9) / ((r.x1 - r.x0) * 16)) / 2) * 2;
+  const width = Math.round((size.width * (portrait ? 0.8 : 0.6)) / 2) * 2;
+  const height = Math.round((width * (r.y1 - r.y0)) / r.width / 2) * 2;
   // Vertical apps put their own buttons along the very top; keep the box just under them.
   const y = portrait ? Math.round(size.height * 0.07) : 0;
   return { width, height, x: size.width - width, y };
 }
+
+/**
+ * Rivals draws your hero left of and below the crosshair (about 0.2 of the frame height left of centre).
+ * Centre game crops this far left of the screen centre, in units of source height, so both the hero
+ * and what they aim at stay in frame.
+ */
+export const HERO_OFFSET = 0.15;
+
+/** Top and bottom HUD bands removed from game footage: the clock/objective block and the HP bar. */
+export const HUD_INSET = { top: 0.14, bottom: 0.89 };
 
 export function hashOf(v: unknown): string {
   return crypto.createHash('sha1').update(JSON.stringify(v)).digest('hex').slice(0, 16);
@@ -142,8 +158,8 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   // feed is extracted from the unmodified source below, then follows the same segment trims
   // and retiming as the gameplay, so its kills cannot drift away from the original action.
   const cleanPortrait = size.height >= size.width && clip.preserveKillFeed !== false;
-  const inset = cleanPortrait ? 'crop=w=iw:h=trunc(ih*0.79/2)*2:x=0:y=trunc(ih*0.11/2)*2,' : '';
-  const gameplay = `${inset}${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  const inset = cleanPortrait ? `crop=w=iw:h=trunc(ih*${r6(HUD_INSET.bottom - HUD_INSET.top)}/2)*2:x=0:y=trunc(ih*${r6(HUD_INSET.top)}/2)*2,` : '';
+  const gameplay = `${inset}${cropFilter(clip, size, s0, cleanPortrait ? HERO_OFFSET / (HUD_INSET.bottom - HUD_INSET.top) : 0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
   // Your pictures go onto the full source frame first, so their positions are the AI's face locations.
   const ov = overlayFilters({ overlays: o.overlays ?? [], clip, firstInput: 1, offset: s0, span: s1 - s0 + 0.3, fps, inLabel: 'srcRaw', outLabel: 'src' });
   if (ov.lines.length) {

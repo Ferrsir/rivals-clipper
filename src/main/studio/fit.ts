@@ -57,7 +57,7 @@ export interface FitResult {
  * or remove the weakest clips (never the closing one) until it fits under it.
  * Clips the user added by hand (external media) are never removed.
  */
-export function fitToTarget(project: ReelProject, library: ClipSidecar[], analysis: MusicAnalysis | null, opts: { maxAdd?: number } = {}): FitResult {
+export function fitToTarget(project: ReelProject, library: ClipSidecar[], analysis: MusicAnalysis | null, opts: { maxAdd?: number; prepare?: (clip: ReelClip) => ReelClip | null } = {}): FitResult {
   const target = project.targetSeconds;
   let p: ReelProject = { ...project, clips: [...project.clips] };
   let seconds = duration(p, analysis);
@@ -77,7 +77,8 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
     const maxAdd = opts.maxAdd ?? 20;
     for (const source of pool) {
       if (added.length >= maxAdd || seconds >= target - under) break;
-      const clip = reelClipFromSidecar(source);
+      const clip = opts.prepare ? opts.prepare(reelClipFromSidecar(source)) : reelClipFromSidecar(source);
+      if (!clip) continue;
       // Keep the closing clip (the best play, on the drop) last.
       const clips = [...p.clips];
       clips.splice(Math.max(0, clips.length - 1), 0, clip);
@@ -87,6 +88,20 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
       p = trial;
       seconds = d;
       added.push(source.id);
+    }
+  }
+
+  // Still short (not enough clips, or the next one would overshoot): give every clip a little more
+  // build-up before its first kill, using footage the clips already have, until the reel reaches the target.
+  for (let step = 1; seconds < target - 0.6 && step <= 8; step++) {
+    const [lo, hi] = project.style.leadIn;
+    const style = { ...p.style, leadIn: [Math.min(lo + 0.25 * step, 4), Math.min(hi + 0.3 * step, 5.5)] as [number, number] };
+    const trial = { ...p, style };
+    const d = duration(trial, analysis);
+    if (d > target + over) break;
+    if (d > seconds) {
+      p = trial;
+      seconds = d;
     }
   }
 

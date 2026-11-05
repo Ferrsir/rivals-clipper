@@ -171,3 +171,21 @@ test('a picture overlay follows the face keyframes in the rendered clip', { skip
     assert.ok(px(1.9, 0.3)[2] > 180, 'and has left the old spot');
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 });
+
+test('scoreboard frames are recognised from their dark, grey look', async () => {
+  const { frameStats, isScoreboard, trimAround } = await import('../src/main/studio/clip-filter');
+  const fill = (r: number, g: number, b: number) => { const a = new Uint8Array(10 * 4 * 3); for (let i = 0; i < a.length; i += 3) { a[i] = r; a[i + 1] = g; a[i + 2] = b; } return a; };
+  assert.ok(isScoreboard(frameStats(fill(40, 42, 46), 10, 4)));
+  assert.ok(!isScoreboard(frameStats(fill(90, 110, 70), 10, 4)));
+  const c = { in: 0, out: 7, hits: [4] };
+  assert.deepEqual(trimAround(c, [0.5, 1, 1.5]), { in: 1.8, out: 7, hits: [4] }, 'trimmed off before the kill');
+  assert.equal(trimAround(c, [3.5]), null, 'too close to the kill: drop the clip');
+  assert.deepEqual(trimAround(c, [6]), { in: 0, out: 5.95, hits: [4] });
+});
+
+test('game crops frame the hero left of the crosshair; a hand-moved crop wins', async () => {
+  const { cropFilter } = await import('../src/main/studio/render');
+  const base = { cropX: 0.5, cropY: 0.5, cropZoom: 1 };
+  assert.match(cropFilter(base, { width: 1080, height: 1080 }, 0, 0.2), /iw\/2-ih\*0\.2-ow\/2/);
+  assert.doesNotMatch(cropFilter({ ...base, cropX: 0.3 }, { width: 1080, height: 1080 }, 0, 0.2), /ih\*0\.2/);
+});

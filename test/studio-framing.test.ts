@@ -47,12 +47,15 @@ for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} r
       const i = (Math.round(y * outputHeight) * 320 + Math.round(x * 320)) * 3;
       return [...rgb.subarray(i, i + 3)];
     };
-    const top = sample(.1, .5, .02);
+    // Left of the feed box, which now spans most of the top on square outputs.
+    const top = sample(.1, .2, .02);
     assert.ok(top[2] > 180 && top[0] < 50, `clock should be removed, received ${top}`);
     // Where the source feed (x .9-.98, y .03-.09) lands inside the boxed feed overlay.
     const box = feedBox({ width: 320, height: outputHeight });
-    const fx = (box.x + box.width * ((.94 - FEED_REGION.x0) / (FEED_REGION.x1 - FEED_REGION.x0))) / 320;
-    const fy = (box.y + box.height * ((.06 - FEED_REGION.y0) / (FEED_REGION.y1 - FEED_REGION.y0))) / outputHeight;
+    // Source is 1000x500: the feed crop is anchored to the right edge in units of the height.
+    const cropX0 = 1000 - 500 * (FEED_REGION.right + FEED_REGION.width);
+    const fx = (box.x + box.width * ((940 - cropX0) / (500 * FEED_REGION.width))) / 320;
+    const fy = (box.y + box.height * ((30 / 500 - FEED_REGION.y0) / (FEED_REGION.y1 - FEED_REGION.y0))) / outputHeight;
     assert.equal(box.x + box.width, 320, 'feed box is flush with the right edge');
     const before = sample(.1, fx, fy), after = sample(.4, fx, fy);
     assert.ok(before[1] > before[0] + 50 && before[1] > before[2] + 50, `feed before source transition: ${before}`);
