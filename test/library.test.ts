@@ -36,6 +36,20 @@ const luna = clip({ hero: 'Luna Snow', kills: 1, score: 15, tags: ['single'], ma
 const magik2 = clip({ hero: 'Magik', kills: 2, score: 40, tags: ['double', 'healer-hunt'], match: { map: 'Klyntar', gameType: 'Competitive' }, trigger: 'manual', rating: 3 });
 const all = [magik, luna, magik2];
 
+test('malformed valid JSON sidecars cannot break library query or facets', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'library-invalid-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bad = [null, { version: 1, videoFile: 'bad.mp4' }, { ...magik, events: [null] },
+    { ...magik, tags: [4] }, { ...magik, match: { map: 4 } }, { ...magik, ai: { tags: [], summary: {} } }];
+  bad.forEach((c, i) => fs.writeFileSync(path.join(dir, `bad-${i}.json`), JSON.stringify(c)));
+  fs.writeFileSync(path.join(dir, 'good.json'), JSON.stringify(magik));
+  const lib = new Library(() => dir);
+  assert.equal(lib.facets().total, 1);
+  assert.equal(lib.query({ text: 'magik', sort: 'kills' }).total, 1);
+  fs.writeFileSync(path.join(dir, 'bad-0.json'), JSON.stringify(luna));
+  assert.equal(lib.facets().total, 2, 'a repaired file becomes readable again');
+});
+
 test('library filters by hero, map, mode, kills, rating and trigger', () => {
   assert.deepEqual(queryClips(all, { hero: 'magik' }).items.map((c) => c.id), [magik2.id, magik.id]);
   assert.deepEqual(queryClips(all, { map: 'Klyntar', gameType: 'Competitive' }).items, [magik2]);

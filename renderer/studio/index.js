@@ -841,7 +841,7 @@ function renderCenter() {
         { class: 'st-progress' },
         h('div', { class: 'st-progress-msg' }, job.message || 'Working…'),
         h('div', { class: 'st-bar' }, h('div', { style: { width: pct(job.pct || 0) } })),
-        h('button', { class: 'st-btn small ghost', onclick: () => api.cancel(job.jobId) }, 'Cancel'),
+        h('button', { class: 'st-btn small ghost', disabled: !job.jobId, onclick: () => api.cancel(job.jobId) }, 'Cancel'),
       ),
     );
   }
@@ -1444,14 +1444,22 @@ function exportFolderRow() {
 }
 
 async function startRender(req) {
+  if (S.job && !['done', 'error', 'cancelled'].includes(S.job.stage)) return;
   saveSoon.flush(S.project);
   const request = { preview: !!req.preview, formats: req.formats ?? [S.project.format], noMusicCopy: !!req.noMusicCopy, gpu: !!req.gpu };
+  const snapshot = structuredClone(S.project);
+  const job = { jobId: undefined, autoUpload: req.autoUpload ?? [], snapshot, projectId: snapshot.id, projectName: snapshot.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+  S.job = job;
+  renderTop();
+  renderCenter();
   try {
     // Uploads use the reel as it was rendered, even if it is edited while the export runs.
-    const snapshot = structuredClone(S.project);
     const { jobId } = await api.render(snapshot, request);
-    S.job = { jobId, autoUpload: req.autoUpload ?? [], snapshot, projectId: S.project.id, projectName: S.project.name, stage: 'clips', pct: 0, message: 'Starting…', preview: request.preview, key: planKey() };
+    job.jobId = jobId;
   } catch (err) {
+    job.stage = 'error';
+    job.message = err.message;
+    job.error = err.message;
     toast(root, err.message, 'error', 7000);
   }
   renderTop();

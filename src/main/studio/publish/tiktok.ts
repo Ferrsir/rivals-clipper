@@ -111,7 +111,8 @@ export async function upload(acc: Account, access: string, file: string, meta: T
     const info = await api(fetchFn, access, '/post/publish/creator_info/query/', {});
     const options: string[] = info.privacy_level_options ?? [];
     const want = meta.privacy === 'public' ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY';
-    const privacy_level = options.includes(want) ? want : options.includes('SELF_ONLY') ? 'SELF_ONLY' : options[0];
+    const privacy_level = options.includes(want) ? want : options.includes('SELF_ONLY') ? 'SELF_ONLY' : undefined;
+    if (!privacy_level) throw new Error('TikTok does not support the requested privacy. Nothing was uploaded.');
     data = await api(fetchFn, access, '/post/publish/video/init/', { post_info: { title: meta.title.slice(0, 2200), privacy_level, disable_comment: false, disable_duet: false, disable_stitch: false }, source_info });
   } else {
     data = await api(fetchFn, access, '/post/publish/inbox/video/init/', { source_info });

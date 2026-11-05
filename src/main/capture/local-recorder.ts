@@ -39,6 +39,10 @@ export interface LocalRecorderOptions {
   ffmpeg: () => Promise<string>;
   /** Main process owns recovery, including restarting detection for a changed resolution. */
   onInterrupted?: () => void;
+  /** Injectable capture boundary for deterministic tests with synthetic encoded video. */
+  probe?: typeof probeCapture;
+  spawnVideo?: (bin: string, args: string[]) => ChildProcessWithoutNullStreams;
+  audioHelperPath?: () => string | undefined;
 }
 
 export class LocalRecorder implements ClipRecorder {
@@ -56,6 +60,7 @@ export class LocalRecorder implements ClipRecorder {
   private saving = new Set<Promise<void>>();
   /** Bumped by every start() and stop(), so a start that is still probing knows it was overtaken. */
   private gen = 0;
+  private tearingDown?: Promise<void>;
 
   constructor(private log: Log, private opts: LocalRecorderOptions) {}
 
@@ -91,7 +96,7 @@ export class LocalRecorder implements ClipRecorder {
     const { localEncoder, captureMonitor } = localOptions(settings);
     const prefer: EncoderId | 'auto' = localEncoder;
     // After a crash, probe again: the screen resolution may have changed.
-    const probe = await probeCapture(ffmpeg, captureMonitor, prefer, true);
+    const probe = await (this.opts.probe ?? probeCapture)(ffmpeg, captureMonitor, prefer, true);
     check();
     this.probe = probe;
     if (!probe.ok || !probe.encoder) throw new Error(probe.problem ?? 'Screen capture is not available');
@@ -116,7 +121,7 @@ export class LocalRecorder implements ClipRecorder {
 
     // Audio: the game's own sound (or the whole desktop) and the mic, each on its own track.
     let micRecorded = false;
-    const bin = helperPath();
+    const bin = (this.opts.audioHelperPath ?? helperPath)();
     if (bin) {
       const audio = new AudioCapture(bin, audioMs);
       audio.on('status', (m: string) => this.log(m));
@@ -138,6 +143,8 @@ export class LocalRecorder implements ClipRecorder {
 
     try {
       await this.waitForVideo(10_000, check);
+      check();
+      this.checkVideoProcess();
     } catch (err) {
       // A failed start must not leave screen/audio capture running in the background.
       // A newer start owns its own resources and must not be torn down here.
@@ -161,7 +168,16 @@ export class LocalRecorder implements ClipRecorder {
     await this.teardown();
   }
 
-  private async teardown(): Promise<void> {
+  private teardown(): Promise<void> {
+    if (this.tearingDown) return this.tearingDown;
+    const pending = this.teardownNow();
+    this.tearingDown = pending;
+    const release = () => { if (this.tearingDown === pending) this.tearingDown = undefined; };
+    void pending.then(release, release);
+    return pending;
+  }
+
+  private async teardownNow(): Promise<void> {
     this.stopping = true;
     if (this.active) this.stopClip();
     // Let a clip that is being saved finish before the buffers are torn down.
@@ -187,7 +203,7 @@ export class LocalRecorder implements ClipRecorder {
 
   async startClip(fileName: string, pastDurationMs: number, onDone: (v: SavedVideo) => void): Promise<void> {
     if (this.active) return;
-    if (!this.ff || !this.lastStart) throw new Error('Local recorder is not running');
+    if (this.stopping || !this.info || !this.ff || !this.lastStart) throw new Error('Local recorder is not running');
     const handle = this.ts.beginCapture(pastDurationMs);
     // The audio rings only hold about the pre-roll. A clip can run for maxClipSeconds, so keep its audio
     // from the clip's first frame (less a second of slack) until it is saved.
@@ -210,7 +226,7 @@ export class LocalRecorder implements ClipRecorder {
   // ---------- internals ----------
 
   private spawnFfmpeg(ffmpeg: string, args: string[]): void {
-    const proc = spawn(ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = this.opts.spawnVideo ? this.opts.spawnVideo(ffmpeg, args) : spawn(ffmpeg, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.ff = proc;
     this.stderrTail = [];
     const buffer = this.ts;
@@ -262,8 +278,12 @@ export class LocalRecorder implements ClipRecorder {
         } catch (err) {
           return reject(err);
         }
+        try {
+          this.checkVideoProcess();
+        } catch (err) {
+          return reject(err);
+        }
         if (this.ts.ready) return resolve();
-        if (!this.ff) return reject(new Error(`ffmpeg exited: ${this.stderrTail.slice(-3).join(' | ') || 'no output'}`));
         if (Date.now() - started > timeoutMs) return reject(new Error('No video from the screen recorder after 10 seconds'));
         setTimeout(tick, 100);
       };
@@ -271,19 +291,33 @@ export class LocalRecorder implements ClipRecorder {
     });
   }
 
-  private async saveClip(clip: ActiveClip, until: number): Promise<void> {
-    try {
-      await this.writeClip(clip, until);
-    } finally {
-      clip.releaseAudio();
+  private checkVideoProcess(): void {
+    if (!this.ff || this.ff.exitCode !== null || this.ff.signalCode != null) {
+      throw new Error(`ffmpeg exited: ${this.stderrTail.slice(-3).join(' | ') || 'no output'}`);
     }
   }
 
-  private async writeClip(clip: ActiveClip, until: number): Promise<void> {
+  private async saveClip(clip: ActiveClip, until: number): Promise<void> {
+    let video: SavedVideo;
+    try {
+      video = await this.writeClip(clip, until);
+    } catch (error) {
+      video = { duration: 0, startTimeEpoch: until, error: (error as Error).message };
+    } finally {
+      clip.releaseAudio();
+    }
+    try {
+      clip.onDone(video);
+    } catch (error) {
+      // A failed sidecar/UI callback must not turn a successfully saved video into a second failure callback.
+      this.log(`Clip notification failed${video.filePath ? `; saved video is at ${video.filePath}` : ''}`, String(error));
+    }
+  }
+
+  private async writeClip(clip: ActiveClip, until: number): Promise<SavedVideo> {
     const result = this.ts.endCapture(clip.handle, until);
     if (!result) {
-      clip.onDone({ duration: 0, startTimeEpoch: until, error: 'No video in the replay buffer yet' });
-      return;
+      return { duration: 0, startTimeEpoch: until, error: 'No video in the replay buffer yet' };
     }
     const { startEpoch, endEpoch } = result;
     // Audio arrives ~150 ms behind real time; wait until it covers the end of the video.
@@ -293,13 +327,17 @@ export class LocalRecorder implements ClipRecorder {
       await new Promise((r) => setTimeout(r, 50));
     }
 
-    const tmp = path.join(clip.folder, '.recording');
-    const base = path.join(tmp, clip.fileName);
-    const videoTs = `${base}.ts`;
+    let tmp = path.join(clip.folder, '.recording');
+    let base = '';
     const out = path.join(clip.folder, `${clip.fileName}.mp4`);
-    const temps = [videoTs];
+    const temps: string[] = [];
+    let saved = false;
     try {
       fs.mkdirSync(tmp, { recursive: true });
+      tmp = fs.mkdtempSync(path.join(tmp, `${clip.fileName}-`));
+      base = path.join(tmp, clip.fileName);
+      const videoTs = `${base}.ts`;
+      temps.push(videoTs);
       await fs.promises.writeFile(videoTs, result.data);
       const tracks: Array<{ file: string; label: 'game' | 'mic' }> = [];
       if (audio) {
@@ -324,12 +362,21 @@ export class LocalRecorder implements ClipRecorder {
         temps.push(silent);
         tracks.unshift({ file: silent, label: 'game' });
       }
-      await execFfmpeg(this.ffBin ?? (await this.opts.ffmpeg()), muxArgs(videoTs, tracks, out));
-      clip.onDone({ filePath: out, duration: Math.round(endEpoch - startEpoch), startTimeEpoch: Math.round(startEpoch), audioTracks: tracks.map((t) => t.label) });
+      const partial = `${base}.mp4`;
+      temps.push(partial);
+      await execFfmpeg(this.ffBin ?? (await this.opts.ffmpeg()), muxArgs(videoTs, tracks, partial));
+      if (fs.existsSync(out)) throw new Error('A clip with this filename already exists; refusing to replace it');
+      await fs.promises.rename(partial, out);
+      saved = true;
+      return { filePath: out, duration: Math.round(endEpoch - startEpoch), startTimeEpoch: Math.round(startEpoch), audioTracks: tracks.map((t) => t.label) };
     } catch (err) {
-      clip.onDone({ duration: 0, startTimeEpoch: Math.round(startEpoch), error: (err as Error).message });
+      const recoveryFolder = temps.some(file => fs.existsSync(file)) ? tmp : undefined;
+      return { duration: 0, startTimeEpoch: Math.round(startEpoch), error: (err as Error).message, recoveryFolder };
     } finally {
-      for (const f of temps) fs.promises.unlink(f).catch(() => undefined);
+      if (saved) {
+        for (const file of temps) await fs.promises.unlink(file).catch(() => undefined);
+        await fs.promises.rmdir(tmp).catch(() => undefined);
+      }
     }
   }
 

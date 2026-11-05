@@ -118,13 +118,15 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     const v = k in r ? r[k] : (base as unknown as Record<string, unknown>)[k];
     passthrough[k] = v !== null && typeof v === typeof def && Array.isArray(v) === Array.isArray(def) ? v : def;
   }
-  const preRollSeconds = clampInt(r.preRollSeconds, 3, 40, base.preRollSeconds);
+  const postRollSeconds = clampInt(r.postRollSeconds, 2, 15, base.postRollSeconds);
+  const maxClipSeconds = clampInt(r.maxClipSeconds, 15, 300, base.maxClipSeconds);
+  const preRollSeconds = Math.min(clampInt(r.preRollSeconds, 3, 40, base.preRollSeconds), Math.max(0, maxClipSeconds - postRollSeconds));
   const s: Settings = {
     ...(passthrough as unknown as Settings),
     rootFolder: str(r.rootFolder, base.rootFolder),
     preRollSeconds,
-    postRollSeconds: clampInt(r.postRollSeconds, 2, 15, base.postRollSeconds),
-    maxClipSeconds: clampInt(r.maxClipSeconds, 15, 300, base.maxClipSeconds),
+    postRollSeconds,
+    maxClipSeconds,
     // The buffer has to hold the whole pre-roll plus a margin, or clips come out short.
     bufferSeconds: Math.max(clampInt(r.bufferSeconds, 20, 300, base.bufferSeconds), preRollSeconds + 10),
     resolution: oneOf(r.resolution, ['native', '1080p', '1440p', '2160p'] as const, base.resolution),

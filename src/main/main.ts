@@ -25,6 +25,7 @@ import { StreakTracker } from './streak';
 import { registerStudio } from './studio/register';
 import { findFfmpeg } from './studio/ffmpeg-bin';
 import { AiTagger, untagged } from './ai-tagger';
+import { installGracefulShutdown, sendIfOpen } from './shutdown';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -36,6 +37,9 @@ interface PendingClip {
   hero?: string;
   ultUsedBeforeKills: boolean;
   firstKillAt?: number;
+  match: ClipSidecar['match'];
+  matchSource: ClipSidecar['match'];
+  bufferInfo: BufferInfo;
 }
 
 let win: BrowserWindow | undefined;
@@ -61,6 +65,7 @@ const localRecorder = new LocalRecorder((msg, extra) => status(msg, extra), {
   ffmpeg: localFfmpeg,
   onInterrupted: () => {
     if (engine !== 'local' || !gameRunning) return;
+    finishCapture();
     void detector.stop();
     retryBuffer('Screen recording interrupted');
   },
@@ -86,6 +91,8 @@ let pending: PendingClip | undefined;
 let stopTimer: NodeJS.Timeout | undefined;
 let gameProcess: GameProcess | undefined;
 let gameRunning = false;
+let quitting = false;
+let shutdownStudio: (() => Promise<void>) | undefined;
 /** Between match_start and match_end. AI tagging waits until this is false. */
 let inMatch = false;
 let lastStatus = 'Waiting for Marvel Rivals';
@@ -113,7 +120,7 @@ const tagger = new AiTagger({
     }
   },
   save: (videoFile, info) => updateSidecar(videoFile, { ai: info }),
-  canRun: () => !inMatch && !pending,
+  canRun: () => !quitting && !inMatch && !pending,
   enabled: () => settings.aiTagging && settings.aiProvider !== 'none',
   onTagged: (clip) => {
     pushClip(clip);
@@ -165,11 +172,11 @@ function statusPayload(extra?: unknown) {
 function status(msg: string, extra?: unknown) {
   lastStatus = msg;
   log?.write('status', { msg, extra });
-  win?.webContents.send('status', statusPayload(extra));
+  sendIfOpen(win, 'status', statusPayload(extra));
 }
 
 function pushClip(clip: ClipSidecar) {
-  win?.webContents.send('clip-saved', clip);
+  sendIfOpen(win, 'clip-saved', clip);
 }
 
 // ---------- storage root (F: drive by default) ----------
@@ -190,47 +197,59 @@ function prepareRoot() {
 // ---------- clipping ----------
 
 async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number, stopAt: number) {
+  if (quitting || pending) return;
   if (!recorder.info) {
     status('Kill detected but the replay buffer is not running yet');
     streak.finish();
     return;
   }
   const fileName = clipFileName(new Date(now), 0, state.myHero);
-  pending = {
+  const clip: PendingClip = pending = {
     fileName,
     trigger,
     events: [],
     hero: state.myHero,
     ultUsedBeforeKills: state.ultUsedBefore(now),
+    match: { ...state.context },
+    matchSource: state.context,
+    bufferInfo: { ...recorder.info },
   };
   scheduleStop(stopAt);
   try {
     // A kill seen on screen is reported a moment after it happened, so reach back that much further.
-    await recorder.startClip(fileName, pastMs + lateBy(now, Date.now()), (video) => onClipSaved(video));
+    await recorder.startClip(fileName, pastMs + lateBy(now, Date.now()), (video) => onClipSaved(video, clip));
     status(trigger === 'manual' ? 'Saving manual clip' : 'Kill! Clipping');
   } catch (err) {
     status(`Could not start clip: ${(err as Error).message}`);
-    pending = undefined;
-    streak.finish();
+    if (pending === clip) finishCapture();
   }
 }
 
 function scheduleStop(stopAt: number) {
   if (stopTimer) clearTimeout(stopTimer);
-  stopTimer = setTimeout(() => recorder.stopClip(), Math.max(0, stopAt - Date.now()));
+  stopTimer = setTimeout(stopCapture, Math.max(0, stopAt - Date.now()));
 }
 
-function onClipSaved(video: SavedVideo) {
-  const clip = pending;
+function finishCapture() {
   pending = undefined;
   streak.finish();
   if (stopTimer) clearTimeout(stopTimer);
+  stopTimer = undefined;
+}
+
+function stopCapture() {
+  finishCapture();
+  recorder.stopClip();
+}
+
+function onClipSaved(video: SavedVideo, clip: PendingClip) {
+  if (pending === clip) finishCapture();
   if (!clip || !video.filePath || video.error) {
-    status('Clip failed to save', video.error);
+    status(video.recoveryFolder ? `Clip failed to save. Recovery files are in ${video.recoveryFolder}` : 'Clip failed to save', video.error);
     return;
   }
   const kills = clip.events.filter((e) => e.type === 'kill').length;
-  const info = recorder.info ?? lastBufferInfo ?? { width: 0, height: 0, fps: 0, micRecorded: false };
+  const info = clip.bufferInfo;
   // The local recorder says which tracks it wrote; Overwolf clips follow the buffer settings.
   const tracks = video.audioTracks ?? (info.micRecorded ? ['game', 'mic'] : ['game']);
   const saved = writeSidecar({
@@ -242,14 +261,14 @@ function onClipSaved(video: SavedVideo) {
     durationMs: video.duration,
     trigger: clip.trigger,
     hero: clip.hero,
-    match: { ...state.context },
+    match: { ...clip.match, outcome: clip.matchSource.outcome },
     events: clip.events,
     ultUsedBeforeKills: clip.ultUsedBeforeKills,
     video: { width: info.width, height: info.height, fps: info.fps },
     audioTracks: tracks.map((label, index) => ({ index, label })),
     useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
-  matchClips.push(saved.videoFile);
+  if (clip.matchSource === state.context) matchClips.push(saved.videoFile);
   status(`Saved ${kills}-kill clip (score ${saved.score})`);
   pushClip(saved);
   tagger.enqueue(saved.videoFile);
@@ -269,16 +288,23 @@ function handleKill(now: number, total?: number) {
   }
   // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
-  setTimeout(() => pending?.events.push(state.describeKill(total, now)), 400);
+  const clip = pending;
+  if (clip) {
+    const event = state.describeKill(total, now);
+    clip.events.push(event);
+    setTimeout(() => Object.assign(event, state.describeKill(total, now)), 400);
+  }
 }
 
 function handleManualClip() {
   const now = Date.now();
   if (pending) {
-    scheduleStop(now + settings.postRollSeconds * 1000);
+    const action = streak.onKill(now);
+    if (action.type === 'extend') scheduleStop(action.stopAt);
     return;
   }
-  const past = Math.min(30_000, settings.bufferSeconds * 1000 - 2000);
+  const past = Math.min(30_000, settings.bufferSeconds * 1000 - 2000, Math.max(0, (settings.maxClipSeconds - settings.postRollSeconds) * 1000));
+  streak.begin(now, past, now + 2000);
   void beginClip('manual', now, past, now + 2000);
 }
 
@@ -286,6 +312,7 @@ function handleManualClip() {
 
 /** `at` is when it happened: screen detection reports events a moment after they showed on screen. */
 function onGameEvent(feature: string, key: string, value: unknown, at = Date.now()) {
+  if (quitting) return;
   const now = at;
   log.write('event', { feature, key, value, ...(feature === 'screen' ? { at, lateMs: Date.now() - at } : {}) });
   switch (key) {
@@ -294,7 +321,10 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       break;
     case 'assist':
       pending?.events.push({ type: 'assist', at: now, myHero: state.myHero });
-      if (settings.assistsExtendClip && pending) handleKill(now);
+      if (settings.assistsExtendClip && pending) {
+        const action = streak.onKill(now);
+        if (action.type === 'extend') scheduleStop(action.stopAt);
+      }
       break;
     case 'death':
       pending?.events.push({ type: 'death', at: now, myHero: state.myHero });
@@ -315,7 +345,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     case 'match_end':
       inMatch = false;
       tagger.kick();
-      if (pending) recorder.stopClip();
+      if (pending) stopCapture();
       status('Match ended');
       break;
   }
@@ -367,6 +397,7 @@ function setupGep() {
     gameRunning = false;
     inMatch = false;
     tagger.kick();
+    stopCapture();
     void recorder.stop().then(() => status('Marvel Rivals closed'));
   });
   gep.on('error', (_e, _gameId, err) => status('GEP error', err));
@@ -387,6 +418,8 @@ function retryBuffer(reason: string) {
 }
 
 async function startBuffer() {
+  if (quitting) return;
+  stopCapture();
   captureRecovery.clearPending();
   gameRunning = true;
   const rec = recorder;
@@ -448,6 +481,7 @@ function applyEngine(reconsider = false): void {
   if (prev) {
     captureRecovery.reset();
     // Switching while running: stop the old engine. Its clip in progress still saves.
+    stopCapture();
     const old = recorder;
     gameRunning = false;
     inMatch = false;
@@ -484,6 +518,7 @@ function setupLocalMode() {
     gameRunning = false;
     inMatch = false;
     gameProcess = undefined;
+    stopCapture();
     void Promise.all([detector.shutdown(), localRecorder.stop()]).then(() => {
       status('Marvel Rivals closed');
       tagger.kick();
@@ -502,6 +537,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   void win.loadFile(path.join(__dirname, '../../renderer/index.html'));
+  win.once('closed', () => { win = undefined; });
 }
 
 function setupIpc() {
@@ -575,7 +611,7 @@ function setupIpc() {
   }));
   ipcMain.handle('ai:install', (_e, provider: AiProvider) => openInstaller(provider));
   ipcMain.handle('ai:login', async (_e, provider: AiProvider) => {
-    const result = await login(provider, (s) => win?.webContents.send('ai-status', s));
+    const result = await login(provider, s => sendIfOpen(win, 'ai-status', s));
     if (result.loggedIn) {
       settings = { ...settings, aiProvider: provider, onboarded: true };
       saveSettings(settings);
@@ -645,7 +681,7 @@ app.whenReady().then(() => {
   prepareRoot();
   if (!fs.existsSync(paths(settings.rootFolder).settings)) saveSettings({ ...DEFAULT_SETTINGS, ...settings });
   setupIpc();
-  registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
+  shutdownStudio = registerStudio({ getSettings: () => settings, ffmpegPath: () => recorder.ffmpegPath, ai });
   createWindow();
   registerHotkey();
   setupLocalMode();
@@ -653,12 +689,21 @@ app.whenReady().then(() => {
   applyEngine();
 });
 
-app.on('will-quit', () => {
+installGracefulShutdown(app, async () => {
+  quitting = true;
+  gameRunning = false;
+  bufferStarts++;
   captureRecovery.reset();
   globalShortcut.unregisterAll();
   gameWatcher.stop();
-  void detector.shutdown().catch(() => undefined);
+  if (stopTimer) clearTimeout(stopTimer);
+  status('Closing: finishing saved clips…');
+  stopCapture();
+  const results = await Promise.allSettled([detector.shutdown(), recorder.stop(), shutdownStudio?.()]);
+  for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   log?.flushSync();
-  void recorder.stop().catch(() => undefined);
+}, error => {
+  log?.write('shutdown-error', String(error));
+  log?.flushSync();
 });
 app.on('window-all-closed', () => app.quit());

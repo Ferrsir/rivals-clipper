@@ -3,11 +3,26 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { AudioCapture } from '../src/main/capture/audio-helper';
+import { AudioCapture, audioCaptureArgs } from '../src/main/capture/audio-helper';
 import { encodeChunk } from '../src/main/capture/audio-buffer';
 import { GameWatcher } from '../src/main/capture/game-watcher';
 import { ScreenDetector } from '../src/main/vision/screen-detector';
 import { DEFAULT_SETTINGS } from '../src/main/settings';
+
+test('game-only capture never implicitly requests desktop sound', () => {
+  const args = audioCaptureArgs({ gamePid: 42, mic: 'default', bufferMs: 5000 });
+  assert.deepEqual(args, ['capture', '--game-pid', '42', '--mic', 'default']);
+});
+
+test('an unavailable game source disables only game audio and preserves the mic', () => {
+  for (const gamePid of [undefined, 0, -1, NaN, 1.5]) {
+    assert.deepEqual(audioCaptureArgs({ gamePid, mic: 'my-mic', bufferMs: 5000 }), ['capture', '--no-game', '--mic', 'my-mic']);
+  }
+});
+
+test('desktop audio requires an explicit desktop request', () => {
+  assert.deepEqual(audioCaptureArgs({ gamePid: 42, desktopAudio: true, bufferMs: 5000 }), ['capture', '--game-loopback']);
+});
 
 function fakeHelper() {
   const events = new EventEmitter();

@@ -9,7 +9,7 @@
 // Game sound uses Windows' per-process loopback (Windows 10 build 20348+ / Windows 11), which records
 // only the game's own audio, not Discord or music. It does not touch the game process: Windows' audio
 // engine hands us a copy of the game's output, the same way OBS's "Application Audio Capture" works.
-// If per-process capture is unavailable it falls back to everything playing on the default speakers.
+// Per-process capture never falls back to desktop audio. Desktop sound requires --game-loopback.
 //
 // Every track is written continuously (silence is filled in when nothing plays), and every chunk is
 // stamped with the wall-clock time of its first sample, so the app can line audio up with video exactly.
@@ -585,6 +585,10 @@ static int cmdCapture(int argc, wchar_t **argv) {
       if (micId == L"default") micId.clear();
     }
   }
+  if (game && !pid && !loopback) {
+    game = false;
+    status("{\"event\":\"notice\",\"message\":\"no valid game process was supplied; desktop sound will not be recorded\"}");
+  }
   QueryPerformanceFrequency(&g_qpcFreq);
   g_startHns = nowHns();
   g_startEpochMs = nowEpochMs();
@@ -596,18 +600,18 @@ static int cmdCapture(int argc, wchar_t **argv) {
     CaptureArgs a;
     a.track = 0;
     a.pid = pid;
-    a.source = (pid && !loopback && processLoopbackSupported()) ? Source::ProcessLoopback : Source::EndpointLoopback;
-    if (a.source == Source::EndpointLoopback && pid && !loopback)
-      status("{\"event\":\"notice\",\"message\":\"per-app audio needs Windows 11; recording all desktop sound instead\"}");
-    // The game track runs on its own thread, fallback included, so it never waits for the mic thread
-    // (which only ends on stop). A capture thread returns early only when per-app capture keeps failing.
+    a.source = (pid && !loopback) ? Source::ProcessLoopback : Source::EndpointLoopback;
+    if (a.source == Source::ProcessLoopback && !processLoopbackSupported())
+      status("{\"event\":\"notice\",\"message\":\"game-only audio is unavailable on this Windows version; desktop sound will not be recorded. Select Everything I hear in Settings to record desktop audio\"}");
+    // Keep retrying the same source independently of the mic. Never turn a failed game-only
+    // request into desktop capture: Discord/music must stay out unless explicitly selected.
     threads.emplace_back([a]() {
-      captureThread(a);
-      if (g_stop || a.source != Source::ProcessLoopback) return;
-      CaptureArgs fb = a;
-      fb.source = Source::EndpointLoopback;
-      status("{\"event\":\"notice\",\"message\":\"falling back to all desktop sound for the game track\"}");
-      captureThread(fb);
+      do {
+        captureThread(a);
+        if (g_stop || a.source != Source::ProcessLoopback) return;
+        status("{\"event\":\"notice\",\"message\":\"game-only capture failed; retrying the game source in 5 seconds. Desktop sound is not being recorded\"}");
+        for (int i = 0; i < 50 && !g_stop; i++) Sleep(100);
+      } while (!g_stop);
     });
   }
   if (mic) {

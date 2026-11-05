@@ -66,8 +66,10 @@ a clip is saved. Keyframes are 1 s apart, so a clip starts within a second of th
 
 Audio comes from `rc-audio.exe`, a small helper that records the game's own sound (or everything you hear, if you
 picked that) and your mic, each into its own buffer. Saving a clip cuts the audio to the same wall-clock window as
-the video. Per-app game audio needs Windows 11 (or Windows 10 build 20348 or later); on older systems it falls back to
-everything you hear.
+the video. Per-app game audio needs Windows 11 (or Windows 10 build 20348 or later). If unavailable or
+failing, it keeps retrying the game source and never switches to desktop sound automatically. The
+game track may be absent or silent during a failure; the mic and video continue independently.
+Choose **Everything I hear** in Settings only when you want desktop sound, including other apps.
 
 If the helper exits unexpectedly, video keeps recording and audio retries after 2, 4, 8, 16 and 30 seconds.
 Already-buffered sound is retained; the interruption itself is silent. After five unsuccessful retries the app
@@ -83,6 +85,12 @@ switching engines or quitting cancels pending recovery.
 A recorder process that stays alive but emits no encoded video for 15 seconds is also restarted.
 The check uses a monotonic clock and runs every two seconds. Any footage already buffered is saved
 through the ordinary interrupted-clip path; footage absent during the stall cannot be recovered.
+
+Closing the app waits for an active clip to finish conversion and metadata writing before exiting.
+If conversion fails, the app reports a recovery folder under `clips/.recording/` containing the raw
+video and any audio already written. Keep that folder until the footage is recovered. Successful
+clips clean up their temporary files. Clip names include a unique suffix to avoid replacing another
+clip triggered at the same time.
 
 ## Cost while you play
 
