@@ -171,3 +171,103 @@ test('a picture overlay follows the face keyframes in the rendered clip', { skip
     assert.ok(px(1.9, 0.3)[2] > 180, 'and has left the old spot');
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 });
+
+test('scoreboard frames are recognised from their dark, grey look', async () => {
+  const { frameStats, isScoreboard, trimAround } = await import('../src/main/studio/clip-filter');
+  const fill = (r: number, g: number, b: number) => { const a = new Uint8Array(10 * 4 * 3); for (let i = 0; i < a.length; i += 3) { a[i] = r; a[i + 1] = g; a[i + 2] = b; } return a; };
+  assert.ok(isScoreboard(frameStats(fill(40, 42, 46), 10, 4)));
+  assert.ok(isScoreboard(frameStats(fill(22, 34, 48), 10, 4)), 'tinted panel still counts');
+  assert.ok(!isScoreboard(frameStats(fill(90, 110, 70), 10, 4)));
+  assert.ok(!isScoreboard(frameStats(fill(30, 45, 80), 10, 4)), 'dark but colourful gameplay is kept');
+  const { heldRuns } = await import('../src/main/studio/clip-filter');
+  assert.deepEqual(heldRuns([false, true, false, true, true, false]), [0.75, 1], 'a single dark sample is ignored');
+  const c = { in: 0, out: 7, hits: [4] };
+  assert.deepEqual(trimAround(c, [0.5, 1, 1.5]), { in: 1.8, out: 7, hits: [4] }, 'trimmed off before the kill');
+  assert.equal(trimAround(c, [3.5]), null, 'too close to the kill: drop the clip');
+  assert.deepEqual(trimAround(c, [6]), { in: 0, out: 5.7, hits: [4] }, 'cut a whole sample before the scoreboard');
+});
+
+test('game crops frame the hero left of the crosshair; a hand-moved crop wins', async () => {
+  const { cropFilter } = await import('../src/main/studio/render');
+  const base = { cropX: 0.5, cropY: 0.5, cropZoom: 1 };
+  assert.match(cropFilter(base, { width: 1080, height: 1080 }, 0, 0.2), /iw\/2-ih\*0\.2-ow\/2/);
+  assert.doesNotMatch(cropFilter({ ...base, cropX: 0.3 }, { width: 1080, height: 1080 }, 0, 0.2), /ih\*0\.2/);
+});
+
+test('the feed box shows only while kills are in the game feed, and fades', async () => {
+  const { feedWindows, feedAlphaExpr, FEED_HOLD } = await import('../src/main/studio/render');
+  assert.deepEqual(feedWindows([], 10, 6), []);
+  assert.deepEqual(feedWindows([12, 13], 10, 20), [[1.85, 3 + FEED_HOLD]], 'chained kills share one window');
+  assert.deepEqual(feedWindows([11, 30], 10, 8), [[0.85, 1 + FEED_HOLD]], 'kills outside the clip are ignored');
+  assert.equal(feedAlphaExpr([]), '0');
+  assert.match(feedAlphaExpr([[1, 2], [5, 6]]), /^255\*max\(clip/);
+});
+
+test('own kill-feed rows are told apart from teammates\' rows and scenery', async () => {
+  const { slotStats, isOwnRow } = await import('../src/main/studio/feed-rows');
+  const W = 120, H = 30;
+  const frame = (paint: (i: number, j: number) => [number, number, number]) => {
+    const a = new Uint8Array(W * H * 3);
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) a.set(paint(i, j), (j * W + i) * 3);
+    return a;
+  };
+  // Slot 0: your white plate from x 46 to 117 in its top 3 px rows (about the measured 0.16 share).
+  // Slot 1: another player's dark plate with blue text. Slot 2: a bright sign at the left.
+  const rgb = frame((i, j) => (j < 3 && i >= 46 && i <= 117 ? [235, 235, 235] : j >= 10 && j < 16 && i >= 46 ? (i % 4 ? [20, 20, 30] : [60, 120, 230]) : j >= 20 && j < 26 && i < 42 ? [240, 240, 240] : [40, 50, 60]));
+  const s = slotStats(rgb, W, H);
+  assert.ok(isOwnRow(s[0]), `own row ${JSON.stringify(s[0])}`);
+  assert.ok(s[0].x0 > 0.36 && s[0].x0 < 0.4 && s[0].x1 > 0.97, 'plate edges');
+  assert.ok(!isOwnRow(s[1]), 'teammate row');
+  assert.ok(!isOwnRow(s[2]), 'scenery that does not reach the right edge');
+});
+
+test('kills move to when your row appears; teammates\' kills are dropped', async () => {
+  const { ownRows, rowOnsets, withFeedRows } = await import('../src/main/studio/feed-rows');
+  // 22-36-48 as measured: Deadpool enters the top at 2.0 s, Angela at 4.0 s (Deadpool slides to slot 1),
+  // CorrinMa's Mister Fantastic takes the top at 6.5 s. Sidecar hits: 3.00, 4.30, 7.03.
+  const samples = Array.from({ length: 44 }, (_, f) => {
+    const t = f / 4;
+    const own: Array<number | null> = [null, null, null];
+    if (t >= 2 && t < 3.75) own[0] = 0.38;
+    if (t >= 3.75 && t < 6.25) own[1] = 0.38;
+    if (t >= 4 && t < 6.5) own[0] = 0.3;
+    if (t >= 6.5 && t < 8.25) own[1] = 0.3;
+    if (t >= 6.5 && t < 6.75) own[2] = 0.38;
+    return { t, own };
+  });
+  assert.deepEqual(rowOnsets(samples), [1.875, 3.875]);
+  const clip = withFeedRows({ hits: [3, 4.3, 7.03], kills: 3 }, samples);
+  assert.deepEqual(clip.hits, [1.875, 3.875]);
+  assert.equal(clip.kills, 2);
+  const rows = ownRows(samples);
+  assert.ok(rows.every((r) => r.to - r.from >= 0.5), 'single-sample flashes are not rows');
+  assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625));
+  assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, []), { hits: [3], kills: 1 }, 'scan failed: keep the clip as it was');
+  const none = withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] })));
+  assert.deepEqual([none.hits, none.kills], [[], 0], 'every row is a teammate\'s: no kills of yours');
+});
+
+test('the feed box shows only your rows, on black', { skip: !available }, () => {
+  const ff = ffmpeg;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-own-rows-'));
+  try {
+    const source = path.join(dir, 's.mp4');
+    // 1000x500 source; the feed crop is x 755-982, y 12-67. A white "own" row in slot 0, an orange "other" row in slot 1.
+    execFileSync(ff, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=0x3070c0:s=1000x500:r=30:d=2', '-vf', 'drawbox=x=800:y=14:w=180:h=12:c=white:t=fill,drawbox=x=800:y=33:w=180:h=12:c=orange:t=fill', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
+    const clip = { uid: 'r', clipId: 'r', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
+      feedRows: [{ slot: 0, from: 0, to: 2, x0: 0.15 }] };
+    const size = { width: 320, height: 320 };
+    const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    execFileSync(ff, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
+    const rgb = execFileSync(ff, ['-v', 'error', '-ss', '0.5', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
+    const box = feedBox(size);
+    const px = (fx: number, fy: number) => { const i = (Math.round(box.y + fy * box.height) * 320 + Math.round(box.x + fx * box.width)) * 3; return [...rgb.subarray(i, i + 3)]; };
+    const cropX0 = 1000 - 500 * 0.49;
+    const at = (x: number, y: number) => px((x - cropX0) / (500 * 0.454), (y - 12.5) / 55);
+    assert.ok(at(900, 20).every((v) => v > 200), `own row shown: ${at(900, 20)}`);
+    const other = at(900, 39);
+    assert.ok(!(other[0] > 200 && other[2] < 90), `other player's row hidden: ${other}`);
+    assert.ok(other[2] > 90, `no black slab where you have no row (the game shows through): ${other}`);
+    assert.ok(!at(770, 20).every((v) => v < 40), `left of your row the game shows through: ${at(770, 20)}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

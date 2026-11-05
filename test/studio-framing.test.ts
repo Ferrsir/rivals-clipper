@@ -35,10 +35,10 @@ for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} r
   try {
     const source = path.join(dir, 'source.mp4');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:s=1000x500:r=30:d=2', '-vf',
-      "drawbox=x=0:y=0:w=iw:h=50:c=red:t=fill,drawbox=x=0:y=450:w=iw:h=50:c=yellow:t=fill,drawbox=x=900:y=15:w=80:h=30:c=green:t=fill,drawbox=x=900:y=15:w=80:h=30:c=white:t=fill:enable='gte(t,1)'",
+      "drawbox=x=0:y=0:w=iw:h=50:c=red:t=fill,drawbox=x=0:y=450:w=iw:h=50:c=yellow:t=fill,drawbox=x=900:y=15:w=80:h=30:c=lime:t=fill,drawbox=x=900:y=15:w=80:h=30:c=white:t=fill:enable='gte(t,1)'",
       '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
     const clip: ReelClip = { uid: 'layout', clipId: 'layout', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30,
-      hasMic: false, hits: [1], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
+      hasMic: false, hits: [.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
     const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'layout', clipIndex: 0, kind: 'lead', src: [.4, 1.4], out: [0, .5], speed: 2 }],
       size: { width: 320, height: outputHeight }, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
@@ -47,12 +47,15 @@ for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} r
       const i = (Math.round(y * outputHeight) * 320 + Math.round(x * 320)) * 3;
       return [...rgb.subarray(i, i + 3)];
     };
-    const top = sample(.1, .5, .02);
+    // Left of the feed box, which now spans most of the top on square outputs.
+    const top = sample(.1, .2, .02);
     assert.ok(top[2] > 180 && top[0] < 50, `clock should be removed, received ${top}`);
     // Where the source feed (x .9-.98, y .03-.09) lands inside the boxed feed overlay.
     const box = feedBox({ width: 320, height: outputHeight });
-    const fx = (box.x + box.width * ((.94 - FEED_REGION.x0) / (FEED_REGION.x1 - FEED_REGION.x0))) / 320;
-    const fy = (box.y + box.height * ((.06 - FEED_REGION.y0) / (FEED_REGION.y1 - FEED_REGION.y0))) / outputHeight;
+    // Source is 1000x500: the feed crop is anchored to the right edge in units of the height.
+    const cropX0 = 1000 - 500 * (FEED_REGION.right + FEED_REGION.width);
+    const fx = (box.x + box.width * ((940 - cropX0) / (500 * FEED_REGION.width))) / 320;
+    const fy = (box.y + box.height * ((30 / 500 - FEED_REGION.y0) / (FEED_REGION.y1 - FEED_REGION.y0))) / outputHeight;
     assert.equal(box.x + box.width, 320, 'feed box is flush with the right edge');
     const before = sample(.1, fx, fy), after = sample(.4, fx, fy);
     assert.ok(before[1] > before[0] + 50 && before[1] > before[2] + 50, `feed before source transition: ${before}`);

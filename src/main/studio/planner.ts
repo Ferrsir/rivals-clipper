@@ -379,14 +379,16 @@ function layoutAll(input: PlanInput, grid: Grid | null, dropOut: number | null, 
 /** Meet a requested duration by shortening padding, never by dropping a kill or accelerating a streak beyond its style. */
 export function plan(input: PlanInput): Timeline {
   let best = planUnfitted(input);
-  if (!input.targetSeconds || best.duration <= input.targetSeconds + 1 / input.fps) return best;
+  // "About 30 seconds": within 3% is on target, so a reel 1% over isn't squeezed by a whole pass.
+  const budget = input.targetSeconds ? input.targetSeconds * 1.03 + 1 / input.fps : Infinity;
+  if (best.duration <= budget) return best;
   let style = input.style;
   for (let pass = 0; pass < 12; pass++) {
-    const factor = Math.max(0.25, Math.min(0.8, input.targetSeconds / best.duration));
+    const factor = Math.max(0.25, Math.min(0.95, input.targetSeconds! / best.duration));
     style = {...style, leadIn:style.leadIn.map(value => Math.max(0.12, value * factor)) as [number,number], tail:style.tail.map(value => Math.max(0.12, value * factor)) as [number,number]};
     const candidate = planUnfitted({...input, style});
     if (candidate.kills.length === best.kills.length && candidate.duration < best.duration) best = candidate;
-    if (best.duration <= input.targetSeconds + 1 / input.fps) break;
+    if (best.duration <= budget) break;
   }
   return best;
 }
@@ -502,7 +504,7 @@ function planUnfitted(input: PlanInput): Timeline {
   const noHits = input.clips.filter((c) => !cleanHits(c).length).length;
   if (noHits) warnings.push(`${noHits} clip${noHits === 1 ? ' has' : 's have'} no kill marked, so ${noHits === 1 ? 'it' : 'they'} just get trimmed to the beat.`);
   if (input.maxSeconds && duration > input.maxSeconds) warnings.push(`The reel is ${duration.toFixed(0)} s, longer than this platform allows (${input.maxSeconds} s).`);
-  if (input.targetSeconds && duration > input.targetSeconds + 1 / fps) warnings.push(`Needs review: the reel is ${duration.toFixed(1)} s, over your requested ${input.targetSeconds} s. All selected kills were preserved. Choose fewer clips or increase the duration.`);
+  if (input.targetSeconds && duration > input.targetSeconds * 1.03 + 1 / fps) warnings.push(`Needs review: the reel is ${duration.toFixed(1)} s, over your requested ${input.targetSeconds} s. All selected kills were preserved. Choose fewer clips or increase the duration.`);
 
   return {
     fps,

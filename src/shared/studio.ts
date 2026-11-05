@@ -196,6 +196,8 @@ export interface ReelClip {
   /** Mute this clip's game audio. */
   muteGame?: boolean;
   preserveKillFeed?: boolean;
+  /** Your own rows in the game's kill feed (found on the footage); the feed box shows only these. */
+  feedRows?: FeedRow[];
   followCharacter?: boolean;
   cropTrack?: Array<{t:number;x:number}>;
   /** Footage you dropped into the Studio yourself (not from the clip library). */
@@ -206,6 +208,14 @@ export interface ReelClip {
   cropY: number;
   /** 1 = full height. Higher punches in. */
   cropZoom: number;
+}
+
+/** One of your rows in the game's kill feed: its slot (0 = top), clip seconds, and plate left edge (0..1 of the feed box). */
+export interface FeedRow {
+  slot: number;
+  from: number;
+  to: number;
+  x0: number;
 }
 
 export interface ReelMusic {

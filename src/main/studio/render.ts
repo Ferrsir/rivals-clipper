@@ -13,7 +13,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { overlayFilters } from './overlay';
-import type { ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
+import { FEED_SLOTS } from './feed-rows';
+import type { FeedRow, ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
   width: number;
@@ -69,7 +70,7 @@ export function atempoChain(speed: number): string {
 }
 
 /** Crop the source to the output's shape around the clip's crop centre. */
-export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' | 'cropTrack'>, out: Size, offset = 0): string {
+export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' | 'cropTrack'>, out: Size, offset = 0, heroOffset = 0): string {
   const ar = out.width / out.height;
   const z = Math.max(1, clip.cropZoom || 1);
   const cx = Math.min(1, Math.max(0, clip.cropX ?? 0.5));
@@ -85,29 +86,102 @@ export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' |
       tracked=`if(lt(t+${r6(offset)},${r6(b.t)}),${r6(a.x)}+(${r6(b.x-a.x)})*clip((t+${r6(offset)}-${r6(a.t)})/${r6(b.t-a.t)},0,1),${tracked})`;
     }
     center=`clip((iw*(${tracked})-ow/2)/max(1,iw-ow),0,1)`;
+  } else if (heroOffset > 0 && Math.abs(cx - 0.5) < 1e-3) {
+    // Not moved by hand: frame the hero, who stands left of the crosshair.
+    center = `clip((iw/2-ih*${r6(heroOffset)}-ow/2)/max(1,iw-ow),0,1)`;
   }
   return `crop=w=${w}:h=${h}:x='(iw-ow)*(${center})':y=(ih-oh)*${r6(cy)}`;
 }
 
-/** Where Marvel Rivals draws its kill feed, as fractions of the 16:9 game frame (all rows, right-aligned). */
-export const FEED_REGION = { x0: 0.7, x1: 0.995, y0: 0.02, y1: 0.205 };
+/**
+ * Where Marvel Rivals draws its kill feed. The HUD is anchored to the right edge and scales with the
+ * frame height, so the region is in units of the source HEIGHT measured from the right edge. Measured
+ * on Ferris's 2580x1080 recordings: rows span x 0.80-0.99 and y 0.025-0.135 of the frame (3 row slots).
+ */
+export const FEED_REGION = { right: 0.036, width: 0.454, y0: 0.025, y1: 0.135 };
 
 export function feedCropFilter(): string {
   const r = FEED_REGION;
-  return `crop=w=trunc(iw*${r6(r.x1 - r.x0)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc(iw*${r6(r.x0)}/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
+  return `crop=w=trunc(ih*${r6(r.width)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc((iw-ih*${r6(r.right + r.width)})/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
 }
 
-/** Size and place of the kill-feed box: flush with the top-right corner, enlarged for vertical outputs. */
+/** Size and place of the kill-feed box: flush with the top-right corner, big enough to read on a phone. */
 export function feedBox(size: Size): { width: number; height: number; x: number; y: number } {
   const r = FEED_REGION;
   const portrait = size.height > size.width * 1.2;
-  const width = Math.round((size.width * (portrait ? 0.62 : 0.46)) / 2) * 2;
-  // The source region's own aspect (16:9 game frame), so rows are never squashed.
-  const height = Math.round(((width * (r.y1 - r.y0) * 9) / ((r.x1 - r.x0) * 16)) / 2) * 2;
+  const width = Math.round((size.width * (portrait ? 0.8 : 0.6)) / 2) * 2;
+  const height = Math.round((width * (r.y1 - r.y0)) / r.width / 2) * 2;
   // Vertical apps put their own buttons along the very top; keep the box just under them.
   const y = portrait ? Math.round(size.height * 0.07) : 0;
   return { width, height, x: size.width - width, y };
 }
+
+/**
+ * Where each row's plate sits inside the feed box, in units of the box height: measured on Ferris's
+ * footage, plates are 0.024 of the frame height tall (0.218 of the 0.11-high box), the first starts
+ * 0.008 below the box top and rows repeat every 0.0355 of the frame height.
+ */
+export const FEED_ROW = { first: 0.073, pitch: 0.323, height: 0.218, margin: 0.012 };
+
+/** How long a kill stays in the game's feed after it happens, seconds. */
+export const FEED_HOLD = 4.5;
+
+/**
+ * Times (seconds, clip-local from `offset`) when the feed box shows: from just before each kill until
+ * its row leaves the game's feed. Overlapping windows merge. Empty when the clip has no kills.
+ */
+export function feedWindows(hits: number[], offset: number, span: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const h of [...hits].sort((a, b) => a - b)) {
+    const a = Math.max(0, h - offset - 0.15);
+    const b = Math.min(span, h - offset + FEED_HOLD);
+    if (b <= a) continue;
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 0.6) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+function mergeWindows(w: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a, b] of [...w].sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 0.6) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/**
+ * Your feed rows inside a stage-A span, in its local time. undefined when the clip was never scanned
+ * (fall back to showing the feed around each kill); [] when it was and has none here (no box).
+ */
+export function ownRowWindows(rows: FeedRow[] | undefined, offset: number, span: number): FeedRow[] | undefined {
+  if (!rows) return undefined;
+  return rows
+    .map((r) => ({ ...r, from: Math.max(0, r.from - offset), to: Math.min(span, r.to - offset) }))
+    .filter((r) => r.to - r.from > 0.05 && r.slot < FEED_SLOTS)
+    .slice(0, 24);
+}
+
+/** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
+export function feedAlphaExpr(windows: [number, number][]): string {
+  if (!windows.length) return '0';
+  const parts = windows.map(([a, b]) => `clip(min((T-${r6(a)})/0.12,(${r6(b)}-T)/0.35),0,1)`);
+  const max = parts.reduce((acc, p) => `max(${acc},${p})`);
+  return `255*${max}`;
+}
+
+/**
+ * Rivals draws your hero left of and below the crosshair (about 0.2 of the frame height left of centre).
+ * Centre game crops this far left of the screen centre, in units of source height, so both the hero
+ * and what they aim at stay in frame.
+ */
+export const HERO_OFFSET = { square: 0.15, portrait: 0.2 };
+
+/** Top and bottom HUD bands removed from game footage: the clock/objective block and the HP bar. */
+export const HUD_INSET = { top: 0.14, bottom: 0.89 };
 
 export function hashOf(v: unknown): string {
   return crypto.createHash('sha1').update(JSON.stringify(v)).digest('hex').slice(0, 16);
@@ -130,7 +204,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 10, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 15, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -142,8 +216,8 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   // feed is extracted from the unmodified source below, then follows the same segment trims
   // and retiming as the gameplay, so its kills cannot drift away from the original action.
   const cleanPortrait = size.height >= size.width && clip.preserveKillFeed !== false;
-  const inset = cleanPortrait ? 'crop=w=iw:h=trunc(ih*0.79/2)*2:x=0:y=trunc(ih*0.11/2)*2,' : '';
-  const gameplay = `${inset}${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  const inset = cleanPortrait ? `crop=w=iw:h=trunc(ih*${r6(HUD_INSET.bottom - HUD_INSET.top)}/2)*2:x=0:y=trunc(ih*${r6(HUD_INSET.top)}/2)*2,` : '';
+  const gameplay = `${inset}${cropFilter(clip, size, s0, cleanPortrait ? (size.height > size.width * 1.2 ? HERO_OFFSET.portrait : HERO_OFFSET.square) / (HUD_INSET.bottom - HUD_INSET.top) : 0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
   // Your pictures go onto the full source frame first, so their positions are the AI's face locations.
   const ov = overlayFilters({ overlays: o.overlays ?? [], clip, firstInput: 1, offset: s0, span: s1 - s0 + 0.3, fps, inLabel: 'srcRaw', outLabel: 'src' });
   if (ov.lines.length) {
@@ -154,11 +228,47 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   if (size.height >= size.width && clip.preserveKillFeed !== false) {
     // The whole source kill feed, cropped as one box (rows and the darkened scenery behind them),
     // pinned to the top-right corner for the entire clip, like the reference edits.
+    // It shows only while the game's feed has rows (from just before a kill until its row leaves),
+    // fading in and out, so the reel never opens on an empty black plate.
     const box = feedBox(size);
-    lines.push(`${src}split=2[gameSrc][feedSrc]`);
-    lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,eq=brightness=-0.05:contrast=1.08:saturation=1.05,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
-    lines.push(`[gameSrc]${gameplay}[gamePicture]`);
-    lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y},${split}`);
+    const span = s1 - s0 + 0.3;
+    const rows = ownRowWindows(clip.feedRows, s0, span);
+    const windows = rows ? mergeWindows(rows.map((r) => [r.from, r.to])) : feedWindows(clip.hits ?? [], s0, span);
+    const border = `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))}`;
+    const fade = `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`;
+    if (rows?.length) {
+      // Only your rows, cut out at their plate edges, each on its own black backing: no scenery, no
+      // other players' rows, no empty plate. The rest of the box is transparent.
+      lines.push(`${src}split=2[gameSrc][feedSrc]`);
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
+      let cur = 'fbase';
+      lines.push(`[fbg]colorchannelmixer=aa=0[${cur}]`);
+      rows.forEach((r, i) => {
+        // Each plate's fixed place in its slot (measured), with a thin black frame so its edges are clean.
+        const top = FEED_ROW.first + r.slot * FEED_ROW.pitch - FEED_ROW.margin;
+        const y = Math.max(0, Math.floor((top * box.height) / 2) * 2);
+        const yEnd = Math.min(box.height, Math.ceil(((top + FEED_ROW.height + 2 * FEED_ROW.margin) * box.height) / 2) * 2);
+        const pad = Math.max(2, Math.round(box.height / 80) * 2);
+        const x = Math.max(pad, Math.floor((r.x0 * box.width) / 2) * 2);
+        const w = box.width - x;
+        const h = Math.max(2, yEnd - y);
+        const py = Math.max(0, y - pad / 2);
+        const ph = Math.min(box.height - py, h + (y - py) + pad / 2);
+        lines.push(`[fr${i}]crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${w + pad}:h=${ph}:x=${pad}:y=${y - py}:color=black[frc${i}]`);
+        const next = `fo${i}`;
+        lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
+        cur = next;
+      });
+      lines.push(`[${cur}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${feedAlphaExpr(windows).replace(/^255\*/, '')}',setsar=1[feed]`);
+      lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+      lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
+    } else if (!rows && windows.length) {
+      lines.push(`${src}split=2[gameSrc][feedSrc]`);
+      // Darken everything but the bright row text and icons, so sky and scenery don't show through.
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.6/0.035 0.8/0.55 1/1',${border},${fade}`);
+      lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+      lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
+    } else lines.push(`${src}${gameplay},${split}`);
   } else lines.push(`${src}${gameplay},${split}`);
   const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>
