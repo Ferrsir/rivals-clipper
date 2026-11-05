@@ -562,7 +562,7 @@ async function makeReel() {
       step(1, 'The clips are lined up. Add a song under Music (import an MP3 or pick a free one), then press Make reel again or Preview.', { needs: true });
       return;
     }
-    step(2, `${S.project.clips?.length ?? 0} clips with ${S.project.music.title || "your song"}. Cutting every kill to the beat…`);
+    step(2, `${S.project.clips?.length ?? 0} clips with ${S.project.music.title || "your song"}. Cutting every hit to the beat…`);
     S.autoReview = !!S.init?.ai?.signedIn;
     await startRender({preview: true});
     await waitFor(() => !S.job || ['done', 'error', 'cancelled'].includes(S.job.stage));
@@ -663,7 +663,7 @@ function ideasPanel() {
     lengthHint.textContent = sec ? `Length: about ${sec} s (from your prompt)` : 'Length: about 30 s (say e.g. "45 seconds" to change it)';
   };
   showLength();
-  const req = h('textarea', { class: 'st-reel-prompt', rows: 12, placeholder: 'Describe the reel. Paste as much as you like: the hero, the vibe, the song, which plays to use, what to do with your own clips and pictures…\n\nExample: 30 second Magik edit, best streaks only, phonk with a hard drop, end on the triple kill.', maxlength: 20000, value: S.ideaRequest, disabled: working, oninput: (e) => {
+  const req = h('textarea', { class: 'st-reel-prompt', rows: 12, placeholder: 'Describe the reel. Paste as much as you like: the hero, the vibe, the song, which plays to use, what to do with your own clips and pictures…\n\nExample: 30 second Magik edit, best streaks only, phonk with a hard drop, end on the triple kill.\n\nOr add your own clip from any game or anime: here\'s Gojo vs Toji and a Deadpool icon, put the icon on Gojo\'s face, 20-30 seconds to the song Aizo.', maxlength: 20000, value: S.ideaRequest, disabled: working, oninput: (e) => {
     S.ideaRequest = e.target.value;
     localStorage.setItem('reel-prompt', S.ideaRequest);
     showLength();
@@ -682,7 +682,7 @@ function ideasPanel() {
     req,
     h('div', { class: 'st-row st-prompt-meta' }, lengthHint, h('span', { class: 'st-note' }, `${S.library.length} clips · ${S.tracks.length} songs · Ctrl+Enter`)),
     assetsBox(working),
-    h('button', { class: 'st-btn primary st-make-reel', disabled: !ai || working || !S.library.length || busyRender, onclick: makeReel }, working ? 'Making your reel…' : 'Make reel'),
+    h('button', { class: 'st-btn primary st-make-reel', disabled: !ai || working || !(S.library.length || loadAssets().some((a) => a.kind === 'video')) || busyRender, onclick: makeReel }, working ? 'Making your reel…' : 'Make reel'),
     !ai ? h('p', { class: 'st-note' }, 'Sign in with Claude or ChatGPT under Settings to make reels from a prompt.') : null,
     S.creation ? stepsView(S.creation) : null,
     h('details', { class: 'st-more-ideas' }, h('summary', {}, 'Not sure what to make? Get ideas'),
@@ -691,7 +691,7 @@ function ideasPanel() {
         h('button', { class: 'st-btn small', disabled: working || S.busy['ideas-quick'], onclick: () => guarded('ideas-quick', async () => (S.ideas = await api.ideas.quick(f.id)), null) }, 'Quick ideas'))),
   ];
   const list = h('div', { class: 'st-ideas' });
-  if (!S.library.length) list.append(h('p', { class: 'st-empty' }, 'Record some clips first. Reels are built from your own plays.'));
+  if (!S.library.length && !loadAssets().some((a) => a.kind === 'video')) list.append(h('p', { class: 'st-empty' }, 'Record some clips first, or add your own clip from any game or show above.'));
   else if (S.ideas && !S.ideas.length) list.append(h('p', { class: 'st-empty' }, 'No ideas from these clips yet. Clips with kills work best.'));
   for (const idea of S.ideas ?? []) list.append(ideaCard(idea));
   const panel = h('div', { class: 'st-panel st-create' }, head, list);

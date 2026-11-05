@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AiClient } from '../ai-auth';
 import type { ImageOverlay, OverlayKey, ReelClip } from '../../shared/studio';
+import { type FaceAnchor, greyFrames, simplifyKeys, trackFace } from './facetrack';
 
 const r6 = (v: number) => (Math.round(v * 1e6) / 1e6).toString();
 
@@ -78,7 +79,23 @@ export function faceKeys(raw: unknown, times: number[], fallback: { x: number; y
   return keys;
 }
 
-/** Ask the AI where the face is in frames taken across the overlay's time range. */
+/** The AI's confident sightings only (no held positions), for the tracker to anchor on. */
+export function faceAnchors(raw: unknown, times: number[]): FaceAnchor[] {
+  const rows: any[] = raw && typeof raw === 'object' && Array.isArray((raw as any).frames) ? (raw as any).frames : [];
+  const out: FaceAnchor[] = [];
+  times.forEach((t, index) => {
+    const r = rows.find((row) => row && row.index === index);
+    if (r && r.visible === true && [r.x, r.y, r.size].every((v) => typeof v === 'number' && Number.isFinite(v)) && r.x >= 0 && r.x <= 1 && r.y >= 0 && r.y <= 1 && r.size >= 0.02 && r.size <= 0.8 && (r.confidence ?? 1) >= 0.5) {
+      out.push({ t, x: r.x, y: r.y, size: r.size * 1.25 });
+    }
+  });
+  return out;
+}
+
+/**
+ * Ask the AI where the face is in frames taken across the overlay's time range, then follow it on
+ * every frame in between so the picture stays on the face through fast movement.
+ */
 export async function locateFace(ffmpeg: string, ai: AiClient, clip: ReelClip, ov: ImageOverlay, what: string, signal?: AbortSignal): Promise<OverlayKey[]> {
   const span = Math.max(0.1, ov.to - ov.from);
   const count = Math.min(12, Math.max(3, Math.ceil(span * 2.5)));
@@ -101,7 +118,16 @@ export async function locateFace(ffmpeg: string, ai: AiClient, clip: ReelClip, o
       expectJson: true,
       timeoutMs: 180_000,
     });
-    return faceKeys(r.json, times, { x: ov.x, y: ov.y, size: ov.size });
+    const coarse = faceKeys(r.json, times, { x: ov.x, y: ov.y, size: ov.size });
+    const anchors = faceAnchors(r.json, times);
+    if (!anchors.length) return coarse;
+    try {
+      const g = await greyFrames(ffmpeg, clip.videoFile, ov.from, Math.min(clip.durationSec, ov.to), { srcW: clip.width, srcH: clip.height, signal });
+      const tracked = simplifyKeys(trackFace(g, anchors));
+      return tracked.length >= 2 ? tracked : coarse;
+    } catch {
+      return coarse;
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

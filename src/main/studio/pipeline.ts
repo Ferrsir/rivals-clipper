@@ -1,4 +1,6 @@
 import { trackClip } from './tracking';
+import { captionChunks } from './speech';
+import { type SpokenLine, type Synth, voiceOver } from './voices';
 import type { AiClient } from '../ai-auth';
 // Runs a whole export: plan per frame rate, stage A per clip (cached), stage B per output size,
 // then copies for platforms that share a size and optional no-music copies.
@@ -26,6 +28,8 @@ export interface PipelineOpts {
   encoder: EncoderChoice;
   onProgress: (p: Omit<RenderProgress, 'jobId'>) => void;
   signal?: AbortSignal;
+  /** Makes the AI voices, when the project has them on. */
+  synth?: Synth;
 }
 
 export function outputFps(project: ReelProject, f: ExportFormat, preview: boolean): number {
@@ -60,9 +64,19 @@ export function planFor(project: ReelProject, analysis: MusicAnalysis | null, fp
   return timeline;
 }
 
-/** Map subtitles from clip seconds to reel seconds through the retimed segments. Parts cut from the edit are dropped. */
+/** Subtitles on screen, a few words at a time (TikTok style) for spoken lines. */
 export function subtitleTimes(project: ReelProject, tl: Timeline): Array<{ text: string; start: number; end: number }> {
-  const out: Array<{ text: string; start: number; end: number }> = [];
+  return subtitleSpans(project, tl).flatMap((l) => (l.speaker ? captionChunks(l.text, l.start, l.end) : [{ text: l.text, start: l.start, end: l.end }]));
+}
+
+/** Lines with a speaker, in reel seconds, for the AI voices. */
+export function spokenLines(project: ReelProject, tl: Timeline): SpokenLine[] {
+  return subtitleSpans(project, tl).filter((l): l is SpokenLine => !!l.speaker);
+}
+
+/** Map subtitles from clip seconds to reel seconds through the retimed segments. Parts cut from the edit are dropped. */
+export function subtitleSpans(project: ReelProject, tl: Timeline): Array<{ text: string; start: number; end: number; speaker?: string }> {
+  const out: Array<{ text: string; start: number; end: number; speaker?: string }> = [];
   const toOut = (uid: string, t: number): number | undefined => {
     const seg = tl.segments.find((s) => s.clipUid === uid && t >= s.src[0] - 1e-4 && t <= s.src[1] + 1e-4);
     return seg ? seg.out[0] + (t - seg.src[0]) / Math.max(1e-3, seg.speed) : undefined;
@@ -76,7 +90,7 @@ export function subtitleTimes(project: ReelProject, tl: Timeline): Array<{ text:
     const start = toOut(sub.clipUid, from);
     const end = toOut(sub.clipUid, to);
     if (start === undefined || end === undefined || end - start < 0.1) continue;
-    out.push({ text: sub.text, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 });
+    out.push({ text: sub.text, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, ...(sub.speaker ? { speaker: sub.speaker } : {}) });
   }
   return out;
 }
@@ -298,6 +312,13 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     job.args = job.args.map(arg => arg === out ? partialOut : arg);
     try {
       await runFfmpeg(o.ffmpeg, job, workDir, (p) => report('assemble', clipShare + (1 - clipShare) * p, req.preview ? 'Rendering preview' : `Rendering ${fmts.map((x) => x.label).join(' + ')}`), o.signal);
+      // AI voices for the characters' lines, over the finished mix.
+      const spoken = project.voices?.on && o.synth ? spokenLines(project, tl) : [];
+      if (spoken.length && o.synth && project.voices) {
+        const voiced = { ffmpeg: o.ffmpeg, synth: o.synth, lines: spoken, settings: project.voices, reelSeconds: tl.duration, workDir, signal: o.signal, onLine: (i: number, n: number) => report('assemble', 0.99, `Voicing line ${i + 1} of ${n}`) };
+        await voiceOver({ ...voiced, file: partialOut, hasVideo: true });
+        if (noMusicAudio && fs.existsSync(noMusicAudio)) await voiceOver({ ...voiced, file: noMusicAudio, hasVideo: false });
+      }
       fs.renameSync(partialOut, out);
     } catch (error) {
       if (noMusicAudio) fs.rmSync(noMusicAudio, { force: true });

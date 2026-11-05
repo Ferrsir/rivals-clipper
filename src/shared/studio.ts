@@ -219,6 +219,8 @@ export interface ReelMusic {
 export interface ReelProject {
   sourceWarnings?: string[];
   version: 1;
+  /** What the footage is from ("Marvel Rivals", "Jujutsu Kaisen"...). Empty means Marvel Rivals library clips. */
+  game?: string;
   id: string;
   name: string;
   createdAt: number;
@@ -248,6 +250,8 @@ export interface ReelProject {
   overlays?: ImageOverlay[];
   /** Subtitles tied to moments inside a clip, so they stay on the right words when the clip is retimed. */
   subtitles?: ClipSubtitle[];
+  /** AI voices for the subtitle lines. */
+  voices?: VoiceSettings | null;
   /** Your own videos and pictures that this project can use. */
   assets?: MediaAsset[];
 }
@@ -262,6 +266,14 @@ export interface MediaAsset {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  /** Action moments found in a video (loud hits, impact frames), seconds. Used like kill markers. */
+  moments?: Moment[];
+}
+
+/** A moment of action in footage without kill markers. s is its strength (higher is bigger). */
+export interface Moment {
+  t: number;
+  s: number;
 }
 
 /** Positions are fractions of the clip's full source frame; times are seconds inside the clip. */
@@ -297,6 +309,27 @@ export interface ClipSubtitle {
   from: number;
   to: number;
   text: string;
+  /** Who says it ("Gojo"). Lines with a speaker can be voiced. */
+  speaker?: string;
+}
+
+/** A voice for one character. */
+export interface VoiceRole {
+  speaker: string;
+  /** Voice id from the voice list, e.g. "piper:en_US-ryan-high" or "sapi:Microsoft David Desktop". */
+  voice: string;
+  /** Semitones up (+) or down (-). */
+  pitch?: number;
+}
+
+/** AI voices reading the subtitle lines, over the original sound. */
+export interface VoiceSettings {
+  on: boolean;
+  cast: VoiceRole[];
+  /** Original sound level while a voice speaks, 0..1. */
+  duck: number;
+  /** Voice level, 0..2. */
+  volume: number;
 }
 
 export interface OutroText {
@@ -455,6 +488,8 @@ export interface ReelIdea {
   subtitles?: Array<{ onClip: string; from: number; to: number; text: string }>;
   /** Your own media the plan may use; clipIds can include "asset:<id>" for your videos. */
   assets?: MediaAsset[];
+  /** What the footage is from, e.g. "Jujutsu Kaisen". */
+  game?: string;
   /** Why this would do well. */
   why: string;
   source: 'ai' | 'quick';
