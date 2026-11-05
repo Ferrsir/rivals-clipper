@@ -17,6 +17,8 @@ export function profileFor(style: StyleRecipe, format: ExportFormat): Profile {
       return { bpm: [125, 170], energy: [0.65, 1], wantsDrop: true, label: 'fast, hard-hitting tracks with a clear drop (phonk, hardstyle, trap)' };
     case 'beat-cuts':
       return { bpm: [110, 160], energy: [0.55, 1], wantsDrop: true, label: 'punchy tracks with a steady beat' };
+    case 'montage':
+      return { bpm: [90, 160], energy: [0.5, 1], wantsDrop: true, label: 'songs with a strong beat and a clear drop, so the big play lands on it' };
     case 'story':
       return { bpm: [85, 160], energy: [0.45, 1], wantsDrop: true, label: 'songs with a vocal build-up and a big drop, so the intro can talk and the gameplay hits on the drop' };
     case 'cinematic':

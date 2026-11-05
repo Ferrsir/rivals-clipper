@@ -276,3 +276,27 @@
 .st-panel .st-reel-prompt {max-height:42vh;}
 .st .st-make-reel {width:100%;padding:11px 16px;position:sticky;top:0;z-index:2;margin:8px 0 10px;}
 .st-top {flex-wrap:wrap;}
+
+/* ---- Create panel: prompt, your media, Make reel, steps ---- */
+.st-create { display:flex; flex-direction:column; gap:10px; }
+.st-create.st-drop { outline:2px dashed var(--accent); outline-offset:-6px; }
+.st .st-create .st-reel-prompt { min-height:260px; max-height:55vh; font-size:13.5px; }
+.st-prompt-meta { justify-content:space-between; }
+.st-length { color:var(--text, #e8eaf0); }
+.st .st-create .st-make-reel { position:sticky; bottom:0; top:auto; font-size:15px; font-weight:700; padding:13px 16px; margin:2px 0; box-shadow:0 -8px 16px var(--st-bg2); }
+.st-assets { border:1px dashed #454b59; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; }
+.st-asset-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.st-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:4px 4px 4px 10px; border-radius:999px; background:var(--st-hover); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.st-chip-x { border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:14px; padding:0 6px; }
+.st-steps { list-style:none; margin:0 0 6px; padding:0; display:flex; flex-direction:column; gap:6px; }
+.st .st-steps li.st-step { display:flex; align-items:center; gap:10px; color:var(--muted); }
+.st-step-dot { width:22px; height:22px; flex:0 0 22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; border:1px solid #454b59; }
+.st .st-steps li.done { color:inherit; }
+.st-steps li.done .st-step-dot { background:var(--st-good); border-color:var(--st-good); color:#0c0e12; }
+.st .st-steps li.now { color:inherit; font-weight:600; }
+.st-steps li.now .st-step-dot { border-color:var(--accent); color:var(--accent); animation:st-pulse 1.2s ease-in-out infinite; }
+.st-steps li.needs .st-step-dot { border-color:var(--st-warn); color:var(--st-warn); }
+.st-steps li.err .st-step-dot { background:var(--st-bad); border-color:var(--st-bad); color:#0c0e12; }
+.st-step-notes { margin:4px 0 0; padding-left:18px; line-height:1.5; }
+.st-more-ideas summary { cursor:pointer; color:var(--muted); font-size:12px; margin:4px 0; }
+@keyframes st-pulse { 50% { box-shadow:0 0 0 4px rgba(255,200,40,.18); } }

@@ -12,8 +12,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FeedMask } from './feed-mask';
-import type { OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
+import { overlayFilters } from './overlay';
+import type { ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
   width: number;
@@ -89,12 +89,32 @@ export function cropFilter(clip: Pick<ReelClip, 'cropX' | 'cropY' | 'cropZoom' |
   return `crop=w=${w}:h=${h}:x='(iw-ow)*(${center})':y=(ih-oh)*${r6(cy)}`;
 }
 
+/** Where Marvel Rivals draws its kill feed, as fractions of the 16:9 game frame (all rows, right-aligned). */
+export const FEED_REGION = { x0: 0.7, x1: 0.995, y0: 0.02, y1: 0.205 };
+
+export function feedCropFilter(): string {
+  const r = FEED_REGION;
+  return `crop=w=trunc(iw*${r6(r.x1 - r.x0)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc(iw*${r6(r.x0)}/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
+}
+
+/** Size and place of the kill-feed box: flush with the top-right corner, enlarged for vertical outputs. */
+export function feedBox(size: Size): { width: number; height: number; x: number; y: number } {
+  const r = FEED_REGION;
+  const portrait = size.height > size.width * 1.2;
+  const width = Math.round((size.width * (portrait ? 0.62 : 0.46)) / 2) * 2;
+  // The source region's own aspect (16:9 game frame), so rows are never squashed.
+  const height = Math.round(((width * (r.y1 - r.y0) * 9) / ((r.x1 - r.x0) * 16)) / 2) * 2;
+  // Vertical apps put their own buttons along the very top; keep the box just under them.
+  const y = portrait ? Math.round(size.height * 0.07) : 0;
+  return { width, height, x: size.width - width, y };
+}
+
 export function hashOf(v: unknown): string {
   return crypto.createHash('sha1').update(JSON.stringify(v)).digest('hex').slice(0, 16);
 }
 
 interface ClipJobOpts {
-  feedMask?: FeedMask;
+  overlays?: ImageOverlay[];
   audioCount?: number;
   clip: ReelClip;
   segments: TimelineSegment[];
@@ -110,7 +130,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 9, mask: o.feedMask?.file, source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 10, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -124,18 +144,22 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   const cleanPortrait = size.height >= size.width && clip.preserveKillFeed !== false;
   const inset = cleanPortrait ? 'crop=w=iw:h=trunc(ih*0.79/2)*2:x=0:y=trunc(ih*0.11/2)*2,' : '';
   const gameplay = `${inset}${cropFilter(clip, size, s0)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1`;
+  // Your pictures go onto the full source frame first, so their positions are the AI's face locations.
+  const ov = overlayFilters({ overlays: o.overlays ?? [], clip, firstInput: 1, offset: s0, span: s1 - s0 + 0.3, fps, inLabel: 'srcRaw', outLabel: 'src' });
+  if (ov.lines.length) {
+    lines.push('[0:v]setpts=PTS-STARTPTS[srcRaw]');
+    lines.push(...ov.lines);
+  }
+  const src = ov.lines.length ? '[src]' : '[0:v]setpts=PTS-STARTPTS,';
   if (size.height >= size.width && clip.preserveKillFeed !== false) {
-    const feedWidth = Math.round(size.width * 0.58 / 2) * 2;
-    lines.push(`[0:v]setpts=PTS-STARTPTS,split=2[gameSrc][feedSrc]`);
-    const feedCrop='crop=w=trunc(iw*0.16/2)*2:h=trunc(ih*0.09/2)*2:x=iw-ow:y=trunc(ih*0.025/2)*2';
-    if(o.feedMask) {
-      lines.push(`[feedSrc]${feedCrop},scale=${o.feedMask.width}:${o.feedMask.height},format=rgb24[feedRgb]`);
-      lines.push('[1:v]setpts=PTS-STARTPTS,format=gray[feedAlpha]');
-      lines.push(`[feedRgb][feedAlpha]alphamerge,scale=${feedWidth}:-2:flags=bicubic[feed]`);
-    } else lines.push(`[feedSrc]${feedCrop},scale=${feedWidth}:-2:flags=bicubic[feed]`);
+    // The whole source kill feed, cropped as one box (rows and the darkened scenery behind them),
+    // pinned to the top-right corner for the entire clip, like the reference edits.
+    const box = feedBox(size);
+    lines.push(`${src}split=2[gameSrc][feedSrc]`);
+    lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,eq=brightness=-0.05:contrast=1.08:saturation=1.05,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
     lines.push(`[gameSrc]${gameplay}[gamePicture]`);
-    lines.push(`[gamePicture][feed]overlay=x=W-w-${Math.round(size.width*0.04)}:y=${Math.round(size.height*0.07)},${split}`);
-  } else lines.push(`[0:v]setpts=PTS-STARTPTS,${gameplay},${split}`);
+    lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y},${split}`);
+  } else lines.push(`${src}${gameplay},${split}`);
   const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>
     `[0:a:${idx}]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=${n}${segs.map((_, i) => `[${label}${i}]`).join('')}`;
@@ -184,7 +208,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   const total = segs.reduce((s, x) => s + Math.max(1, Math.round((x.out[1] - x.out[0]) * fps)) / fps, 0);
   const args = [
     '-ss', r6(s0), '-t', r6(s1 - s0 + 0.3), '-i', clip.videoFile,
-    ...(o.feedMask ? ['-ss',r6(s0),'-f','rawvideo','-pixel_format','gray','-video_size',`${o.feedMask.width}x${o.feedMask.height}`,'-framerate',String(o.feedMask.fps),'-i',o.feedMask.file] : []),
+    ...ov.inputs.flat(),
     '-map', '[v]', '-map', '[ga]', '-map', '[ma]',
     ...intermediateCodec(o.preview, fps),
     output,

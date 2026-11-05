@@ -120,7 +120,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     const v = k in r ? r[k] : (base as unknown as Record<string, unknown>)[k];
     passthrough[k] = v !== null && typeof v === typeof def && Array.isArray(v) === Array.isArray(def) ? v : def;
   }
-  const postRollSeconds = clampInt(r.postRollSeconds, 2, 4, base.postRollSeconds);
+  const postRollSeconds = clampInt(r.postRollSeconds, 3, 4, base.postRollSeconds);
   const maxClipSeconds = clampInt(r.maxClipSeconds, 15, 300, base.maxClipSeconds);
   const preRollSeconds = Math.min(clampInt(r.preRollSeconds, 3, 4, base.preRollSeconds), Math.max(0, maxClipSeconds - postRollSeconds));
   const s: Settings = {

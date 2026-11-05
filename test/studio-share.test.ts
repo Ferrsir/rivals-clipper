@@ -97,7 +97,7 @@ test('AI ideas are cleaned: unknown clips, songs and styles are dropped', () => 
   const out = sanitizeIdeas(raw, LIB, [TRACK], FORMATS.tiktok);
   assert.equal(out.length, 1);
   assert.deepEqual(out[0].clipIds, ['c', 'a']);
-  assert.equal(out[0].styleId, 'story');
+  assert.equal(out[0].styleId, 'montage');
   assert.equal(out[0].music.trackId, undefined);
   assert.deepEqual(out[0].music.bpm, [130, 220]);
   assert.deepEqual(out[0].captions, ['one', 'three']);

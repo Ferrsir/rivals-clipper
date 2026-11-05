@@ -186,7 +186,7 @@ function change(fn, parts = []) {
 async function openProject(id) {
   if (saveSoon.pending()) saveSoon.flush();
   const p = id ? await api.projects.get(id) : null;
-  S.project = p ?? (await api.projects.create({ format: 'tiktok', styleId: 'story' }));
+  S.project = p ?? (await api.projects.create({ format: 'tiktok', styleId: 'montage' }));
   if (!S.projects.some((x) => x.id === S.project.id)) S.projects.unshift({ id: S.project.id, name: S.project.name, updatedAt: S.project.updatedAt, clips: S.project.clips.length });
   store.set('studio:last', S.project.id);
   S.sel = null;
@@ -543,37 +543,113 @@ async function makeReel() {
   const prompt = S.ideaRequest;
   const format = fmt().id;
   S.busy['make-reel'] = true;
-  const step = (name, detail) => { S.creation = { step: name, detail }; renderLeft(); };
+  const step = (index, detail, extra = {}) => { S.creation = { ...(S.creation || {}), step: index, detail, error: undefined, done: false, ...extra }; renderLeft(); };
+  S.creation = { step: 0, notes: [] };
   try {
-    step('Planning your reel', `${S.init?.ai?.provider === 'claude' ? 'Claude' : 'ChatGPT / Codex'} is reading your prompt and selecting clips. This can take up to three minutes.`);
-    const ideas = await api.ideas.ai(format, prompt, 1);
-    if (!ideas?.length) throw new Error('No usable plan was returned. Your prompt is saved so you can try again.');
+    step(0, `${S.init?.ai?.provider === 'claude' ? 'Claude' : 'ChatGPT / Codex'} is looking at your clips and planning the edit. This can take a couple of minutes.`);
+    const ideas = await api.ideas.ai(format, prompt, 1, loadAssets());
+    if (!ideas?.length) throw new Error('No usable plan came back. Your prompt is saved, so you can press Make reel again.');
     S.ideas = ideas;
     const idea = ideas[0];
-    step('Building the timeline', idea.concept || idea.title);
+    step(1, idea.concept || idea.title);
     saveSoon.flush(S.project);
-    const project = await api.ideas.apply(idea);
+    const project = await api.ideas.apply(idea, prompt);
+    S.creation.notes = project.buildNotes || [];
     S.projects.unshift({id: project.id, name: project.name, updatedAt: project.updatedAt, clips: project.clips.length});
     await openProject(project.id);
     S.leftTab = 'ideas';
-    if ((idea.music?.search || /music|song|rasputin/i.test(prompt)) && !S.project.music) {
-      step('Choose music to continue', 'The timeline is ready. Import or select your song under Music, then press Preview.');
+    if (!S.project.music) {
+      step(1, 'The clips are lined up. Add a song under Music (import an MP3 or pick a free one), then press Make reel again or Preview.', { needs: true });
       return;
     }
-    if (/jujutsu|jjk|overlay.{0,30}(picture|image|magik)/i.test(prompt)) {
-      step('Timeline ready — requested assets need attention', 'External video intros and layered character artwork need an editing feature that is not available yet. Gameplay framing and the kill-feed overlay are available.');
-      return;
-    }
-    step('Rendering your preview', 'Clips are being timed to the available music and rendered. Follow the render progress in the preview.');
-    S.autoReview = true;
+    step(2, `${S.project.clips?.length ?? 0} clips with ${S.project.music.title || "your song"}. Cutting every kill to the beat…`);
+    S.autoReview = !!S.init?.ai?.signedIn;
     await startRender({preview: true});
+    await waitFor(() => !S.job || ['done', 'error', 'cancelled'].includes(S.job.stage));
     if (S.job?.stage === 'error') throw new Error(S.job.error || S.job.message);
+    if (S.job?.stage === 'cancelled') throw new Error('The preview was cancelled.');
+    if (S.init?.ai?.signedIn) {
+      step(3, 'Your AI is watching frames from the finished preview.');
+      await waitFor(() => !S.autoReview && !S.busy.review, 600_000);
+      const r = S.review;
+      if (r) S.creation.notes = [...(S.creation.notes || []), `Review: ${r.verdict === 'needs-changes' ? 'needs changes' : 'looks ready'}. ${r.summary || ''}`.trim()];
+    }
+    S.creation = { ...S.creation, step: MAKE_STEPS.length, done: true, detail: 'Preview ready. Watch it, then ask for changes below the preview or export it.' };
   } catch (error) {
-    S.creation = {step: 'Reel needs attention', error: error.message};
+    S.creation = { ...(S.creation || { step: 0 }), error: error.message };
   } finally {
     S.busy['make-reel'] = false;
     renderLeft(); renderTop();
   }
+}
+
+/** Resolve once `test()` is true (checked a few times a second), or after `ms`. */
+function waitFor(test, ms = 3_600_000) {
+  const until = Date.now() + ms;
+  return new Promise((resolve) => {
+    const tick = () => (test() || Date.now() > until ? resolve() : setTimeout(tick, 300));
+    tick();
+  });
+}
+
+const MAKE_STEPS = ['Reading your prompt and picking clips', 'Hitting your length and matching the music', 'Rendering the preview', 'Reviewing the result'];
+
+function loadAssets() {
+  if (S.assets) return S.assets;
+  try { S.assets = JSON.parse(localStorage.getItem('reel-assets') || '[]'); } catch { S.assets = []; }
+  if (!Array.isArray(S.assets)) S.assets = [];
+  return S.assets;
+}
+function saveAssets() {
+  try { localStorage.setItem('reel-assets', JSON.stringify(S.assets || [])); } catch { /* private mode */ }
+}
+async function addAssets(files) {
+  try {
+    const added = files ? await api.assets.import(files) : await api.assets.pick();
+    if (!added?.length) return;
+    S.assets = [...loadAssets(), ...added];
+    saveAssets();
+    renderLeft();
+  } catch (error) { toast(root, error.message, 'error'); }
+}
+
+/** "30 seconds", "30s", "half a minute" -> 30 (mirrors the main process). */
+function promptSeconds(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\bhalf (?:a )?minute\b/.test(t)) return 30;
+  const range = t.match(/(\d{1,3}(?:\.\d+)?)\s*(?:-|–|to)\s*(\d{1,3}(?:\.\d+)?)\s*-?\s*(?:s|secs?|seconds?)\b/);
+  const sec = range ? range[2] : t.match(/(\d{1,3}(?:\.\d+)?)\s*-?\s*(?:s|secs?|seconds?)\b/)?.[1];
+  if (sec && +sec >= 5 && +sec <= 180) return +sec;
+  const min = t.match(/(\d(?:\.\d+)?|a|one)\s*-?\s*(?:min|mins|minutes?)\b/);
+  if (min) { const v = (min[1] === 'a' || min[1] === 'one' ? 1 : +min[1]) * 60; if (v <= 180) return v; }
+  return undefined;
+}
+
+function stepsView(c) {
+  return h('div', { class: 'st-creation', role: 'status', 'aria-live': 'polite' },
+    h('ol', { class: 'st-steps' }, MAKE_STEPS.map((label, i) => {
+      const state = c.error && i === c.step ? 'err' : c.needs && i === c.step ? 'needs' : i < c.step || c.done ? 'done' : i === c.step ? 'now' : 'todo';
+      return h('li', { class: `st-step ${state}` }, h('span', { class: 'st-step-dot' }, state === 'done' ? '✓' : state === 'err' ? '!' : String(i + 1)), h('span', {}, label));
+    })),
+    c.detail ? h('p', { class: 'st-note' }, c.detail) : null,
+    c.notes?.length ? h('ul', { class: 'st-step-notes' }, c.notes.map((n) => h('li', {}, n))) : null,
+    c.error ? h('p', { class: 'st-error' }, c.error) : null,
+  );
+}
+
+function assetsBox(working) {
+  const list = loadAssets();
+  return h('div', { class: 'st-assets' },
+    h('div', { class: 'st-row' },
+      h('span', { class: 'st-label' }, 'Your own clips & pictures'),
+      h('div', { class: 'st-spacer' }),
+      h('button', { class: 'st-btn small', disabled: working, onclick: () => addAssets() }, '+ Add files')),
+    list.length
+      ? h('div', { class: 'st-asset-chips' }, list.map((a) => h('span', { class: 'st-chip', title: a.file },
+          `${a.kind === 'image' ? 'Picture' : 'Video'} · ${a.name}${a.durationSec ? ` · ${fmtTime(a.durationSec)}` : ''}`,
+          h('button', { class: 'st-chip-x', title: 'Remove', disabled: working, onclick: () => { S.assets = list.filter((x) => x !== a); saveAssets(); renderLeft(); } }, '×'))))
+      : h('p', { class: 'st-note' }, 'Optional. Drop videos or pictures here, then say what to do with them, e.g. "start with my clip, put the picture over his face, subtitles: ..."'),
+  );
 }
 
 function ideasPanel() {
@@ -581,40 +657,53 @@ function ideasPanel() {
   const ai = S.init.ai.signedIn;
   S.ideaRequest ||= localStorage.getItem('reel-prompt') || '';
   const working = !!S.busy['make-reel'];
-  const req = h('textarea', { class: 'st-reel-prompt', rows: 9, placeholder: 'Describe the reel you want. Include the hero, length, music, intro and editing style…', maxlength: 20000, value: S.ideaRequest, disabled: working, oninput: (e) => {
+  const lengthHint = h('span', { class: 'st-note st-length' });
+  const showLength = () => {
+    const sec = promptSeconds(S.ideaRequest);
+    lengthHint.textContent = sec ? `Length: about ${sec} s (from your prompt)` : 'Length: about 30 s (say e.g. "45 seconds" to change it)';
+  };
+  showLength();
+  const req = h('textarea', { class: 'st-reel-prompt', rows: 12, placeholder: 'Describe the reel. Paste as much as you like: the hero, the vibe, the song, which plays to use, what to do with your own clips and pictures…\n\nExample: 30 second Magik edit, best streaks only, phonk with a hard drop, end on the triple kill.', maxlength: 20000, value: S.ideaRequest, disabled: working, oninput: (e) => {
     S.ideaRequest = e.target.value;
     localStorage.setItem('reel-prompt', S.ideaRequest);
+    showLength();
   } });
-  const status = S.creation;
-  const getAi = () => guarded('ideas-ai', async () => {
-    S.ideas = await api.ideas.ai(f.id, S.ideaRequest);
-  }, null);
   req.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && ai && !working) {
       e.preventDefault(); void makeReel();
     }
   });
+  const getAi = () => guarded('ideas-ai', async () => {
+    S.ideas = await api.ideas.ai(f.id, S.ideaRequest, 5, loadAssets());
+  }, null);
+  const busyRender = S.job && !['done','error','cancelled'].includes(S.job.stage);
   const head = [
     h('label', { class: 'st-label' }, 'Describe your reel'),
-    h('button', { class: 'st-btn primary st-make-reel', disabled: !ai || working || !S.library.length || (S.job && !['done','error','cancelled'].includes(S.job.stage)), onclick: makeReel }, working ? 'Making reel…' : 'Make reel'),
     req,
-    h('p', { class: 'st-note' }, 'Uses your saved clips and imported music. Add external footage or artwork before including it in an edit.'),
-    h('div', { class: 'st-row' },
-      h('button', { class: 'st-btn small', disabled: working || !ai || S.busy['ideas-ai'], onclick: getAi }, 'Suggest ideas'),
-      h('button', { class: 'st-btn small', disabled: working || S.busy['ideas-quick'], onclick: () => guarded('ideas-quick', async () => (S.ideas = await api.ideas.quick(f.id)), null) }, 'Quick ideas'),
-    ),
-    status ? h('div', { class: 'st-creation', role: 'status', 'aria-live': 'polite' },
-      h('strong', {}, status.step),
-      status.detail ? h('p', { class: 'st-note' }, status.detail) : null,
-      status.error ? h('p', { class: 'st-error' }, status.error) : null,
-    ) : null,
+    h('div', { class: 'st-row st-prompt-meta' }, lengthHint, h('span', { class: 'st-note' }, `${S.library.length} clips · ${S.tracks.length} songs · Ctrl+Enter`)),
+    assetsBox(working),
+    h('button', { class: 'st-btn primary st-make-reel', disabled: !ai || working || !S.library.length || busyRender, onclick: makeReel }, working ? 'Making your reel…' : 'Make reel'),
+    !ai ? h('p', { class: 'st-note' }, 'Sign in with Claude or ChatGPT under Settings to make reels from a prompt.') : null,
+    S.creation ? stepsView(S.creation) : null,
+    h('details', { class: 'st-more-ideas' }, h('summary', {}, 'Not sure what to make? Get ideas'),
+      h('div', { class: 'st-row' },
+        h('button', { class: 'st-btn small', disabled: working || !ai || S.busy['ideas-ai'], onclick: getAi }, 'Suggest ideas'),
+        h('button', { class: 'st-btn small', disabled: working || S.busy['ideas-quick'], onclick: () => guarded('ideas-quick', async () => (S.ideas = await api.ideas.quick(f.id)), null) }, 'Quick ideas'))),
   ];
   const list = h('div', { class: 'st-ideas' });
-  if (!S.library.length) list.append(h('p', { class: 'st-empty' }, 'Record some clips first. Ideas are built from your own plays.'));
-  else if (!S.ideas) list.append(h('p', { class: 'st-empty' }, ai ? 'Describe the edit and press Make reel. Suggest ideas gives you options first.' : 'Sign in with Claude or ChatGPT in Settings to create from a prompt. Quick ideas works locally.'));
-  else if (!S.ideas.length) list.append(h('p', { class: 'st-empty' }, 'No ideas from these clips yet. Clips with kills work best.'));
+  if (!S.library.length) list.append(h('p', { class: 'st-empty' }, 'Record some clips first. Reels are built from your own plays.'));
+  else if (S.ideas && !S.ideas.length) list.append(h('p', { class: 'st-empty' }, 'No ideas from these clips yet. Clips with kills work best.'));
   for (const idea of S.ideas ?? []) list.append(ideaCard(idea));
-  return h('div', { class: 'st-panel' }, head, list);
+  const panel = h('div', { class: 'st-panel st-create' }, head, list);
+  panel.addEventListener('dragover', (e) => { e.preventDefault(); panel.classList.add('st-drop'); });
+  panel.addEventListener('dragleave', () => panel.classList.remove('st-drop'));
+  panel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    panel.classList.remove('st-drop');
+    const files = [...(e.dataTransfer?.files || [])].map((file) => window.studioBridge?.pathForFile?.(file)).filter(Boolean);
+    if (files.length) void addAssets(files);
+  });
+  return panel;
 }
 
 function ideaCard(idea) {
@@ -1533,7 +1622,6 @@ function onProgress(p) {
   if (!S.job || p.jobId !== S.job.jobId) return;
   Object.assign(S.job, p);
   if (p.stage === 'done') {
-    if (S.creation && S.job.preview) { S.creation = {step: 'Preview ready', detail: 'Watch the result, then adjust or export.'}; renderLeft(); }
     // The job belongs to the reel it was started from, which may not be the one open now.
     // The main process has already recorded the export on that reel's history.
     const here = S.job.projectId === S.project.id;
@@ -1588,14 +1676,14 @@ function reviewPanel() {
 }
 
 function revisionPanel() {
-  const text = h('textarea', {class:'st-revision-prompt', rows:3, maxlength:20000, placeholder:'What should change? For example: start on the first hit, lower game audio, use the triple last…',value:S.revisionRequest || '',oninput:e=>S.revisionRequest=e.target.value});
+  const text = h('textarea', {class:'st-revision-prompt', rows:3, maxlength:20000, placeholder:'What should change? e.g. make it closer to 30 seconds with more clips, end every clip right after the kill, put my picture over his face…',value:S.revisionRequest || '',oninput:e=>S.revisionRequest=e.target.value});
   return h('div',{class:'st-revision'}, h('label',{class:'st-label'},'Request changes'),text,
     h('button',{class:'st-btn primary',disabled:!S.init.ai.signedIn || S.busy.revise || (S.job && !['done','error','cancelled'].includes(S.job.stage)),onclick:async()=>{
       if (!S.revisionRequest?.trim() || S.busy.revise) return;
       S.busy.revise=true; S.revisionStatus='Applying your changes…'; renderCenter();
       const id=S.project.id, originalKey=planKey();
       try {
-        const result=await api.ai.reviseReel(structuredClone(S.project),S.revisionRequest);
+        const result=await api.ai.reviseReel(structuredClone(S.project),S.revisionRequest,loadAssets());
         if (S.project.id!==id || planKey()!==originalKey) throw new Error('The reel changed while the AI was working. Your edits were kept; request the revision again.');
         change(project=>Object.assign(project,result.project));
         S.revisionStatus=result.summary+' Rendering a new preview…';

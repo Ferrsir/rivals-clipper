@@ -9,9 +9,10 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { AiClient } from '../ai-auth';
 import type { ClipSidecar } from '../../shared/types';
-import type { ExportFormat, FormatId, MusicTrack, ReelIdea } from '../../shared/studio';
+import type { ExportFormat, FormatId, MediaAsset, MusicTrack, ReelIdea } from '../../shared/studio';
 import { STYLES } from './styles';
 import { hookText } from './projects';
+import { requestedSeconds } from './fit';
 
 /** What the reference edits do, in words the AI can work from. */
 export const REFERENCE_STYLE = [
@@ -77,7 +78,7 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
         imageSearch: `${hero} marvel`,
         captions: [`They said ${hero} was a throw pick`, 'So I queued anyway', 'Then this happened', 'Still a throw pick?'],
         clipIds: buildUp(byScore(list).slice(0, n)),
-        styleId: 'story',
+        styleId: 'montage',
         music: { mood: 'confident, bass-heavy', bpm: [125, 150], search: 'phonk bass', trackId: pickTrack(tracks, [125, 150]) },
         why: `${list.length} ${hero} clips: a single-hero edit reads as a story and gets "main" comments.`,
       }),
@@ -119,7 +120,7 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
         imageSearch: 'versus battle',
         captions: [`${a} first`, 'Not bad', `Now ${b}`, 'Okay...'],
         clipIds: [...buildUp(byScore(la).slice(0, half)), ...buildUp(byScore(lb).slice(0, half))],
-        styleId: 'story',
+        styleId: 'montage',
         music: { mood: 'hype, big drop', bpm: [125, 150], search: 'hype electronic drop', trackId: pickTrack(tracks, [125, 150]) },
         why: 'A "who wins" question gets people arguing in the comments, which pushes the video.',
       }),
@@ -159,7 +160,7 @@ export function quickIdeas(clips: ClipSidecar[], tracks: MusicTrack[], format: E
         imageSearch: 'this is fine dog',
         captions: ['Team is dead', 'Five of them', 'One of me', 'Not today'],
         clipIds: buildUp(clutch.slice(0, Math.max(2, Math.min(n, clutch.length)))),
-        styleId: 'story',
+        styleId: 'montage',
         music: { mood: 'tense build, big drop', bpm: [110, 140], search: 'cinematic tension drop', trackId: pickTrack(tracks, [110, 140]) },
         why: 'Clutches have built-in tension, so viewers stay to see if you pull it off.',
       }),
@@ -192,9 +193,10 @@ function str(v: unknown, max: number): string {
 }
 
 /** Turn whatever the AI sent into safe ideas that only use clips and songs that exist. */
-export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicTrack[], format: ExportFormat): ReelIdea[] {
+export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicTrack[], format: ExportFormat, assets: MediaAsset[] = [], request = ''): ReelIdea[] {
   const arr: any[] = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.ideas) ? (raw as any).ideas : [];
-  const known = new Set(clips.map((c) => c.id));
+  const known = new Set([...clips.map((c) => c.id), ...assets.filter((a) => a.kind === 'video').map((a) => `asset:${a.id}`)]);
+  const assetIds = new Set(assets.map((a) => a.id));
   const trackIds = new Set(tracks.map((t) => t.id));
   const styles = new Set(STYLES.map((s) => s.id));
   const out: ReelIdea[] = [];
@@ -212,13 +214,23 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
       imageIdea: str(r?.imageIdea, 160),
       imageSearch: str(r?.imageSearch, 60),
       captions: (Array.isArray(r?.captions) ? r.captions : []).map((x: unknown) => str(x, 60)).filter(Boolean).slice(0, 14),
-      styleId: styles.has(r?.styleId) ? r.styleId : 'story',
+      styleId: styles.has(r?.styleId) ? r.styleId : 'montage',
       format: format.id as FormatId,
       clipIds: [...new Set<string>(clipIds)].slice(0, 20),
       clipEdits: (Array.isArray(r?.clipEdits) ? r.clipEdits : []).filter((edit: any) =>
         edit && known.has(edit.clipId) && Number.isFinite(edit.in) && Number.isFinite(edit.out) && edit.in >= 0 && edit.out > edit.in,
       ).slice(0, 20).map((edit: any) => ({ clipId: edit.clipId, in: edit.in, out: edit.out })),
-      targetSeconds: Number.isFinite(r?.targetSeconds) && r.targetSeconds >= 1 && r.targetSeconds <= format.maxSeconds ? r.targetSeconds : undefined,
+      // The number in your prompt wins over the AI's guess.
+      targetSeconds: requestedSeconds(request) ?? (Number.isFinite(r?.targetSeconds) && r.targetSeconds >= 1 && r.targetSeconds <= format.maxSeconds ? r.targetSeconds : undefined),
+      assets,
+      overlays: (Array.isArray(r?.overlays) ? r.overlays : [])
+        .filter((o: any) => o && typeof o.assetId === 'string' && assetIds.has(o.assetId.replace(/^asset:/, '')) && typeof o.onClip === 'string' && known.has(o.onClip))
+        .slice(0, 20)
+        .map((o: any) => ({ assetId: o.assetId.replace(/^asset:/, ''), onClip: o.onClip, from: Number(o.from) || 0, to: Number(o.to) || (Number(o.from) || 0) + 3, anchor: o.anchor === 'fixed' ? 'fixed' : 'face', x: Number(o.x) || 0.5, y: Number(o.y) || 0.4, size: Number(o.size) || 0.15, shape: o.shape === 'square' ? 'square' : 'circle' })),
+      subtitles: (Array.isArray(r?.subtitles) ? r.subtitles : [])
+        .filter((t: any) => t && typeof t.text === 'string' && typeof t.onClip === 'string' && known.has(t.onClip))
+        .slice(0, 120)
+        .map((t: any) => ({ onClip: t.onClip, from: Number(t.from) || 0, to: Number(t.to) || (Number(t.from) || 0) + 2, text: str(t.text, 140) })),
       music: {
         trackId: typeof r?.music?.trackId === 'string' && trackIds.has(r.music.trackId) ? r.music.trackId : undefined,
         start: Number.isFinite(r?.music?.start) && r.music.start >= 0 ? r.music.start : 'auto',
@@ -234,7 +246,7 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
   return out;
 }
 
-export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number }): string {
+export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; assets?: MediaAsset[] }): string {
   const clipRows = byScore(o.clips)
     .slice(0, 80)
     .map((c) => ({ id: c.id, hero: c.hero, kills: kills(c), killSeconds: c.events.filter(e => e.type === 'kill').map(e => Math.round(e.at - c.startTimeEpoch) / 1000), tags: plainTags(c).slice(0, 6), score: c.score, rating: c.rating, map: c.match?.map, seconds: c.durationMs / 1000 }));
@@ -243,11 +255,19 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     .slice(0, 40)
     .map((t) => ({ trackId: t.id, title: t.title, artist: t.artist, bpm: Math.round(t.analysis!.bpm), energy: Math.round(t.analysis!.energy * 100) / 100, hasDrop: t.analysis!.drops.length > 0, license: t.license }));
   const n = Math.max(3, Math.round(o.format.idealSeconds[1] / SECONDS_PER_CLIP));
+  const target = requestedSeconds(o.request);
+  const assets = (o.assets ?? []).map((a) => ({ id: `asset:${a.id}`, kind: a.kind, name: a.name, seconds: a.durationSec, size: a.width && a.height ? `${a.width}x${a.height}` : undefined }));
   return [
     `Come up with ${o.count} different ideas for ${o.format.label} reels (${o.format.idealSeconds[0]} to ${o.format.idealSeconds[1]} seconds) from my Marvel Rivals clips.`,
     REFERENCE_STYLE,
     'Make each idea a different angle (a hero spotlight, a joke, a hot take, a challenge, a comeback story...). Default to clean gameplay edits. Leave hook, endText, imageIdea and captions empty unless the user explicitly requests text or an intro. Keep each caption line to 6 words or fewer. No slurs, nothing mean about real people.',
-    `Pick only enough clips to fit the requested duration. When no duration is requested, about ${n} clips is a starting point. Order them so it builds: the best play last. Only use clip ids from the list.`,
+    target
+      ? `The reel must be about ${target} seconds long. Each kill clip gives roughly 3 to 6 seconds of edit (a few seconds of build-up, the kills, then a cut right after the last kill), so select about ${Math.max(2, Math.round(target / 4.5))} clips with kills. Too short is a failure; the app adds or drops clips to land on the length.`
+      : `When no duration is requested, aim for 20 to 30 seconds: about ${n} kill clips. Order them so it builds: the best play last. Only use clip ids from the list.`,
+    'Use styleId "montage" unless the user asks for a different feel. Every clip should end right after its last kill and cut to the next on the beat.',
+    assets.length
+      ? `The user dropped in their own media: ${JSON.stringify(assets)}. Use a video asset by putting its id ("asset:...") in clipIds where they ask for it. For a picture they want over someone's face or somewhere in a clip, add overlays [{assetId, onClip (a clip id or asset id), from, to (seconds inside that clip), anchor:"face" or "fixed", x, y, size (fractions of the frame), shape:"circle" or "square"}]. For subtitles they ask for, add subtitles [{onClip, from, to, text}] using the words they gave you; never invent dialogue you did not hear.`
+      : '',
     'Return targetSeconds as the requested maximum reel duration (use the upper end for a range). Return clipEdits [{clipId,in,out}] in source seconds for selected clips. Preserve every listed killSeconds within each chosen clip; never crop a multi-kill into an unsupported single kill or invent markers. Choose fewer clips if the full streaks cannot fit. Select music.start in song seconds only if explicitly requested, otherwise use auto.',
     `Edit styles to choose from: ${STYLES.map((s) => `${s.id} (${s.description})`).join('; ')}.`,
     songs.length ? `My songs (use a trackId only if it really fits): ${JSON.stringify(songs)}` : 'I have no songs yet, so describe the music to search for.',
@@ -260,7 +280,7 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     .join('\n\n');
 }
 
-export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; ffmpeg?:string }): Promise<ReelIdea[]> {
+export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; ffmpeg?:string; assets?: MediaAsset[] }): Promise<ReelIdea[]> {
   if (o.request.length > 20000) throw new Error('Keep your reel prompt under 20,000 characters.');
   if (!ai) throw new Error('Sign in with Claude or ChatGPT under Settings to get AI ideas.');
   if (!o.clips.some((c) => kills(c) > 0)) throw new Error('Record a few clips with kills first.');
@@ -270,7 +290,7 @@ export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[
     const images:string[]=[];
     if(o.ffmpeg && dir) {
       const requestedHeroes=[...new Set(clips.map(c=>c.hero).filter((hero):hero is string=>!!hero))].filter(hero=>o.request.toLowerCase().includes(hero.toLowerCase()));
-      clips=byScore(requestedHeroes.length ? clips.filter(c=>requestedHeroes.includes(c.hero || '')) : clips).slice(0,12);
+      clips=byScore(requestedHeroes.length ? clips.filter(c=>requestedHeroes.includes(c.hero || '')) : clips).slice(0,24);
       for(const [index,clip] of clips.entries()) {
         const image=path.join(dir,`clip-${index}.jpg`);
         await new Promise<void>((resolve,reject)=>execFile(o.ffmpeg!,['-v','error','-i',clip.videoFile,'-vf',`fps=3/${Math.max(.1,clip.durationMs/1000)},scale=960:-2,tile=1x3:padding=4:color=black`,'-frames:v','1','-y',image],{windowsHide:true,timeout:30000},error=>error?reject(error):resolve()));
@@ -278,8 +298,10 @@ export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[
       }
     }
     const evidence=images.length ? `Attached images are source contact sheets, in this exact clip-ID order: ${JSON.stringify(clips.map(c=>c.id))}. Each sheet has three chronological uniformly sampled frames. Inspect player visibility, action, clutter and occlusion when selecting. Reject menu/death-only or badly obscured footage. These samples cannot establish every kill; use the trusted markers and preserve complete streaks. Do not pretend unobserved footage was reviewed.` : 'No source frames are attached. Selection is based on metadata only.';
-    const r = await ai.ask({ prompt: ideasPrompt({...o,clips})+'\n\n'+evidence, imagePaths:images, system: 'You help a Marvel Rivals creator plan short gameplay edits. Inspect supplied media evidence when available. Follow the requested JSON shape exactly.', expectJson: true, timeoutMs: 180_000 });
-    const ideas = sanitizeIdeas(r.json, clips, o.tracks, o.format);
+    const pictures=(o.assets ?? []).filter(a=>a.kind==='image' && fs.existsSync(a.file)).slice(0,4);
+    const assetNote=pictures.length ? `\n\nThe last ${pictures.length} attached image(s) are the user's pictures, in this order: ${JSON.stringify(pictures.map(a=>'asset:'+a.id))}.` : '';
+    const r = await ai.ask({ prompt: ideasPrompt({...o,clips})+'\n\n'+evidence+assetNote, imagePaths:[...images,...pictures.map(a=>a.file)], system: 'You help a Marvel Rivals creator plan short gameplay edits. Inspect supplied media evidence when available. Follow the requested JSON shape exactly.', expectJson: true, timeoutMs: 180_000 });
+    const ideas = sanitizeIdeas(r.json, clips, o.tracks, o.format, o.assets ?? [], o.request);
     if (!ideas.length) throw new Error('The AI did not come back with usable ideas. Try again.');
     return ideas;
   } finally {
