@@ -23,6 +23,15 @@ function run(ffmpeg: string, args: string[]): Promise<string> {
       error ? reject(new Error(String(stderr).slice(-1000) || error.message)) : resolve(String(stdout) + String(stderr))));
 }
 
+export function reviewTimes(duration:number,kills:number[]):number[] {
+  const end=Math.max(0,duration-.06);
+  const times=[...kills.map(time=>Math.min(end,Math.max(0,time+.15))),0,end];
+  for(let i=0;i<8;i++) times.push(Math.min(end,duration*(i+.5)/8));
+  const selected:number[]=[];
+  for(const time of times) if(!selected.some(value=>Math.abs(value-time)<.08) && selected.length<12) selected.push(time);
+  return selected.sort((a,b)=>a-b);
+}
+
 /** Review the rendered file, not the AI's proposed edit. Frame review cannot certify motion or sound. */
 export async function reviewRenderedReel(o: {
   ai?: AiClient; ffmpeg: string; file: string; project: ReelProject;
@@ -33,12 +42,12 @@ export async function reviewRenderedReel(o: {
   const timeline = planFor(o.project, o.analysis, 30);
   fs.mkdirSync(o.reviewDir, { recursive: true });
   const directory = fs.mkdtempSync(path.join(o.reviewDir, 'pass-'));
-  const frameFile = path.join(directory, 'frame-%02d.jpg');
   const audio = await run(o.ffmpeg, ['-i', o.file, '-t', '300', '-vn', '-af', 'volumedetect', '-f', 'null', '-']);
   const durationMatch = audio.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
   if (!durationMatch) throw new Error('Could not measure the rendered duration.');
   const duration = Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3]);
-  await run(o.ffmpeg, ['-y', '-i', o.file, '-t', '300', '-vf', `fps=1/${Math.max(.1, duration / 8)},scale=540:-2`, '-frames:v', '8', frameFile]);
+  const times=reviewTimes(Math.min(duration,300),timeline.kills);
+  for(const [index,time] of times.entries()) await run(o.ffmpeg,['-y','-ss',String(time),'-i',o.file,'-vf','scale=540:-2','-frames:v','1',path.join(directory,`frame-${String(index).padStart(2,'0')}.jpg`)]);
   const frames = fs.readdirSync(directory).filter(name => /^frame-\d+\.jpg$/.test(name)).sort().map(name => path.join(directory, name));
   if (!frames.length) throw new Error('The rendered reel has no readable frames.');
   const references=(o.referenceImages ?? []).filter(file=>fs.existsSync(file) && /\.(png|jpe?g)$/i.test(file)).slice(0,2);
@@ -53,6 +62,7 @@ export async function reviewRenderedReel(o: {
     prompt: [
       'Review this Marvel Rivals reel: player should stay lower-central, gameplay fills the canvas, small readable kill banners upper right over the original clock area, no irrelevant HUD clutter or text cards, distinct plays and complete streaks.',
       'These are chronological sampled frames, not the complete video. Critique clipping of the player, scenery pasted as a feed, unreadable feed names, objective timer clutter and unwanted captions. Be strict. If uncertain list the limitation.',
+      `Output frame times in seconds: ${JSON.stringify(times)}. Samples prioritize just after marked kills so the last elimination is not omitted by uniform sampling.`,
       references.length ? `The first ${frames.length} images are output frames. The final ${references.length} images are actual style references. Compare framing and feed treatment directly; the reference may be square while this output is vertical. Do not claim identical motion or audio from stills.` : 'No reference images are supplied. Do not claim a comparison to earlier videos.',
       `The project duration budget is ${o.project.targetSeconds ?? 'unspecified'} seconds MAXIMUM, not an exact duration. Shorter is acceptable unless the user explicitly specifies a minimum. In-game subtitles are baked into source footage; distinguish them from captions added by Studio.`,
       `User request: ${o.request.slice(0, 20000)}`,
