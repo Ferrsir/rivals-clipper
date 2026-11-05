@@ -21,7 +21,8 @@ import { findFont, planFor, renderProject } from './pipeline';
 import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
 import { describeFit, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
-import { scoreboardTimes, trimAround } from './clip-filter';
+import { scanClip, trimAround, type ClipScan } from './clip-filter';
+import { withFeedRows } from './feed-rows';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
@@ -342,9 +343,14 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // Never use footage with the Tab scoreboard up: trim around it, or drop the clip.
     const ff0 = await ffmpeg();
     const pool = libraryClips().filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => b.score - a.score).slice(0, 60);
-    const bad = new Map<string, number[]>();
-    for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) bad.set(file, await scoreboardTimes(ff0, file, signal));
-    const prepare = (c: ReelClip) => (c.external ? c : trimAround(c, bad.get(c.videoFile) ?? []));
+    const scans = new Map<string, ClipScan>();
+    for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal));
+    // Kill times from when your row appears in the feed (dropping teammates' kills), then trim off the scoreboard.
+    const prepare = (c: ReelClip) => {
+      if (c.external) return c;
+      const scan = scans.get(c.videoFile);
+      return trimAround(scan ? withFeedRows(c, scan.feed) : c, scan?.scoreboard ?? []);
+    };
     const before = project.clips.length;
     project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);
     const dropped = before - project.clips.length;

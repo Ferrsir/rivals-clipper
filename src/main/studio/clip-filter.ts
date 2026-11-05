@@ -4,6 +4,8 @@
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import { FEED_SAMPLE, feedSamples, slotStats, type FeedSample, type SlotStats } from './feed-rows';
+import { feedCropFilter } from './render';
 
 export interface FrameStats {
   /** Mean luma 0..255. */
@@ -39,7 +41,7 @@ export function frameStats(rgb: Uint8Array, width: number, height: number): Fram
   return { y: y / n, sat: sat / n, leftY: left / leftN };
 }
 
-// Measured on real scoreboard frames (48x20): mean luma 31-40, left strip 17-29, saturation (max-min)
+// Measured on real scoreboard frames (48x20; the means hold at the 120x20 used now): mean luma 31-40, left strip 17-29, saturation (max-min)
 // under 30; gameplay luma 84-100. Dark gameplay can be as dark but keeps its colour, so saturation
 // tells them apart.
 export const isScoreboard = (s: FrameStats) => s.y < 60 && s.leftY < 50 && s.sat < 30;
@@ -53,34 +55,56 @@ export function heldRuns(flags: boolean[]): number[] {
   return times;
 }
 
-const W = 48;
+const W = FEED_SAMPLE.width;
 const H = 20;
-const cache = new Map<string, number[]>();
+const FH = FEED_SAMPLE.height;
 
-/** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
-export function scoreboardTimes(ffmpeg: string, file: string, signal?: AbortSignal): Promise<number[]> {
+export interface ClipScan {
+  /** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
+  scoreboard: number[];
+  /** Your rows in the kill feed, sampled at the same times. */
+  feed: FeedSample[];
+}
+
+const cache = new Map<string, ClipScan>();
+const EMPTY: ClipScan = { scoreboard: [], feed: [] };
+
+/** One small decode per clip: the whole frame (scoreboard check) stacked on the kill-feed crop. */
+export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Promise<ClipScan> {
   let key = file;
   try {
     const st = fs.statSync(file);
     key = `${file}|${st.size}|${st.mtimeMs}`;
   } catch {
-    return Promise.resolve([]);
+    return Promise.resolve(EMPTY);
   }
   const hit = cache.get(key);
   if (hit) return Promise.resolve(hit);
+  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=2[a][b];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[full][feed]vstack=inputs=2[out]`;
   return new Promise((resolve) => {
-    execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-vf', `fps=4,scale=${W}:${H}:flags=area,format=rgb24`, '-an', '-f', 'rawvideo', 'pipe:1'],
+    execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-filter_complex', graph, '-map', '[out]', '-an', '-f', 'rawvideo', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {
-        if (error) return resolve([]);
-        const size = W * H * 3;
+        if (error) return resolve(EMPTY);
+        const full = W * H * 3;
+        const size = full + W * FH * 3;
         const flags: boolean[] = [];
-        for (let f = 0; (f + 1) * size <= out.length; f++) flags.push(isScoreboard(frameStats(out.subarray(f * size, (f + 1) * size), W, H)));
-        const times = heldRuns(flags);
+        const slots: SlotStats[][] = [];
+        for (let f = 0; (f + 1) * size <= out.length; f++) {
+          const frame = out.subarray(f * size, (f + 1) * size);
+          flags.push(isScoreboard(frameStats(frame.subarray(0, full), W, H)));
+          slots.push(slotStats(frame.subarray(full), W, FH));
+        }
+        const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots) };
         if (cache.size > 2000) cache.clear();
-        cache.set(key, times);
-        resolve(times);
+        cache.set(key, scan);
+        resolve(scan);
       });
   });
+}
+
+/** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
+export async function scoreboardTimes(ffmpeg: string, file: string, signal?: AbortSignal): Promise<number[]> {
+  return (await scanClip(ffmpeg, file, signal)).scoreboard;
 }
 
 /**

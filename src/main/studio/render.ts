@@ -13,7 +13,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { overlayFilters } from './overlay';
-import type { ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
+import { FEED_SLOTS } from './feed-rows';
+import type { FeedRow, ImageOverlay, OutroText, ExportFormat, IntroCard, Mix, ReelClip, StyleRecipe, Timeline, TimelineSegment } from '../../shared/studio';
 
 export interface Size {
   width: number;
@@ -135,6 +136,28 @@ export function feedWindows(hits: number[], offset: number, span: number): [numb
   return out;
 }
 
+function mergeWindows(w: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a, b] of [...w].sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 0.6) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/**
+ * Your feed rows inside a stage-A span, in its local time. undefined when the clip was never scanned
+ * (fall back to showing the feed around each kill); [] when it was and has none here (no box).
+ */
+export function ownRowWindows(rows: FeedRow[] | undefined, offset: number, span: number): FeedRow[] | undefined {
+  if (!rows) return undefined;
+  return rows
+    .map((r) => ({ ...r, from: Math.max(0, r.from - offset), to: Math.min(span, r.to - offset) }))
+    .filter((r) => r.to - r.from > 0.05 && r.slot < FEED_SLOTS)
+    .slice(0, 24);
+}
+
 /** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
 export function feedAlphaExpr(windows: [number, number][]): string {
   if (!windows.length) return '0';
@@ -174,7 +197,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 11, hits: clip.hits, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 12, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -201,11 +224,34 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     // It shows only while the game's feed has rows (from just before a kill until its row leaves),
     // fading in and out, so the reel never opens on an empty black plate.
     const box = feedBox(size);
-    const windows = feedWindows(clip.hits ?? [], s0, s1 - s0 + 0.3);
-    if (windows.length) {
+    const span = s1 - s0 + 0.3;
+    const rows = ownRowWindows(clip.feedRows, s0, span);
+    const windows = rows ? mergeWindows(rows.map((r) => [r.from, r.to])) : feedWindows(clip.hits ?? [], s0, span);
+    const border = `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))}`;
+    const fade = `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`;
+    if (rows?.length) {
+      // Only your rows, cut out at their plate edges, on solid black: no scenery, no other players' rows.
+      lines.push(`${src}split=2[gameSrc][feedSrc]`);
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
+      let cur = 'fbase';
+      lines.push(`[fbg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[${cur}]`);
+      const slotH = box.height / FEED_SLOTS;
+      rows.forEach((r, i) => {
+        const x = Math.max(0, Math.floor((r.x0 * box.width - 2) / 2) * 2);
+        const y = Math.round(r.slot * slotH);
+        const h = Math.min(box.height - y, Math.round((r.slot + 1) * slotH) - y);
+        lines.push(`[fr${i}]crop=w=${box.width - x}:h=${h}:x=${x}:y=${y}[frc${i}]`);
+        const next = `fo${i}`;
+        lines.push(`[${cur}][frc${i}]overlay=x=${x}:y=${y}:enable='between(t,${r6(r.from)},${r6(r.to)})'[${next}]`);
+        cur = next;
+      });
+      lines.push(`[${cur}]${border},${fade}`);
+      lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+      lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
+    } else if (!rows && windows.length) {
       lines.push(`${src}split=2[gameSrc][feedSrc]`);
       // Darken everything but the bright row text and icons, so sky and scenery don't show through.
-      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.6/0.035 0.8/0.55 1/1',drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`);
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.6/0.035 0.8/0.55 1/1',${border},${fade}`);
       lines.push(`[gameSrc]${gameplay}[gamePicture]`);
       lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
     } else lines.push(`${src}${gameplay},${split}`);
