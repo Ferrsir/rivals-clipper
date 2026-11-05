@@ -208,7 +208,7 @@ export class LocalRecorder implements ClipRecorder {
   async startClip(fileName: string, pastDurationMs: number, onDone: (v: SavedVideo) => void): Promise<void> {
     if (this.active) return;
     if (this.stopping || !this.info || !this.ff || !this.lastStart) throw new Error('Local recorder is not running');
-    const handle = this.ts.beginCapture(pastDurationMs, Date.now(), this.lastClipEnd);
+    const handle = this.ts.beginCapture(pastDurationMs, Date.now(), Math.max(this.lastClipEnd, Date.now() - 5000));
     // The audio rings only hold about the pre-roll. A clip can run for maxClipSeconds, so keep its audio
     // from the clip's first frame (less a second of slack) until it is saved.
     const from = (this.ts.captureStart(handle) ?? Date.now() - pastDurationMs) - 1000;

@@ -321,10 +321,6 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       break;
     case 'assist':
       pending?.events.push({ type: 'assist', at: now, myHero: state.myHero });
-      if (settings.assistsExtendClip && pending) {
-        const action = streak.onKill(now);
-        if (action.type === 'extend') scheduleStop(action.stopAt);
-      }
       break;
     case 'death':
       pending?.events.push({ type: 'death', at: now, myHero: state.myHero });

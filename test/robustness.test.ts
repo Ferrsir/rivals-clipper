@@ -20,7 +20,7 @@ test('settings from a bad form or hand-edited file are made valid', () => {
     somethingElse: 1,
   });
   assert.equal(s.preRollSeconds, DEFAULT_SETTINGS.preRollSeconds);
-  assert.equal(s.postRollSeconds, 15);
+  assert.equal(s.postRollSeconds, 4);
   assert.equal(s.bufferSeconds, Math.max(20, s.preRollSeconds + 10), 'buffer covers pre-roll and respects the 20-second minimum');
   assert.equal(s.fps, 120);
   assert.equal(s.resolution, 'native');
