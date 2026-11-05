@@ -144,6 +144,7 @@ export class LocalRecorder implements ClipRecorder {
     try {
       await this.waitForVideo(10_000, check);
       check();
+      this.checkVideoProcess();
     } catch (err) {
       // A failed start must not leave screen/audio capture running in the background.
       // A newer start owns its own resources and must not be torn down here.
@@ -277,13 +278,23 @@ export class LocalRecorder implements ClipRecorder {
         } catch (err) {
           return reject(err);
         }
+        try {
+          this.checkVideoProcess();
+        } catch (err) {
+          return reject(err);
+        }
         if (this.ts.ready) return resolve();
-        if (!this.ff) return reject(new Error(`ffmpeg exited: ${this.stderrTail.slice(-3).join(' | ') || 'no output'}`));
         if (Date.now() - started > timeoutMs) return reject(new Error('No video from the screen recorder after 10 seconds'));
         setTimeout(tick, 100);
       };
       tick();
     });
+  }
+
+  private checkVideoProcess(): void {
+    if (!this.ff || this.ff.exitCode !== null || this.ff.signalCode != null) {
+      throw new Error(`ffmpeg exited: ${this.stderrTail.slice(-3).join(' | ') || 'no output'}`);
+    }
   }
 
   private async saveClip(clip: ActiveClip, until: number): Promise<void> {
