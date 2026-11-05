@@ -379,9 +379,13 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       for (const ov of faces) {
         const clip = project.clips.find(c => c.uid === ov.clipUid);
         if (!clip) continue;
-        const key = [clip.videoFile, ov.image, ov.from, ov.to].join('|');
+        // Only the part of the clip that is used, so the AI looks closely where it matters.
+        const from = Math.max(ov.from, clip.in);
+        const to = Math.min(ov.to, clip.out);
+        if (to - from < 0.1) continue;
+        const key = [clip.videoFile, ov.image, from, to].join('|');
         try {
-          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, ov, request.slice(0, 400), signal));
+          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, { ...ov, from, to }, request.slice(0, 400), signal));
           ov.track = found.get(key);
           ok++;
         } catch (error) {
