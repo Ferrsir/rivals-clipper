@@ -15,6 +15,7 @@ import { createProject } from '../src/main/studio/projects';
 import { STYLES, clone, getStyle } from '../src/main/studio/styles';
 import { FORMATS } from '../src/main/studio/formats';
 import { synthTrack } from './studio-synth';
+import { exportClip } from '../src/main/ffmpeg';
 
 function findTool(name: 'ffmpeg' | 'ffprobe'): string | undefined {
   const env = process.env[name.toUpperCase()];
@@ -34,6 +35,23 @@ const skip = !FF || !PROBE ? 'ffmpeg/ffprobe not installed' : false;
 if (process.env.CI && (!FF || !PROBE)) test('ffmpeg is available on CI', () => assert.fail('ffmpeg and ffprobe are needed for the render tests'));
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-render-'));
+
+test('silent video exports in Library and Studio even with stale audio metadata', { skip, timeout: 120_000 }, async () => {
+  const file = path.join(dir, 'silent.mp4');
+  ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=2', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
+  const exported = await exportClip(FF!, file, dir, { withMic: true, hasMicTrack: true });
+  assert.equal(probe(exported).streams.filter(s => s.codec_type === 'video').length, 1);
+  assert.equal(probe(exported).streams.filter(s => s.codec_type === 'audio').length, 0);
+  const p = createProject({ name: 'Silent', styleId: 'raw' });
+  p.clips = [{ uid: 'silent', clipId: 'silent', cropX: 0.5, cropY: 0.5, cropZoom: 1, videoFile: file, durationSec: 2, width: 320, height: 180, fps: 30, kills: 0, score: 0,
+    tags: [], hits: [], in: 0, out: 2, hasMic: true, useMic: true }];
+  const files = await renderProject({ ffmpeg: FF!, project: p, analysis: null,
+    req: { preview: true, formats: [p.format], noMusicCopy: false, gpu: false },
+    studioDir: path.join(dir, 'silent-studio'), reelsDir: path.join(dir, 'silent-reels'), encoder: { name: 'libx264' }, onProgress() {} });
+  assert.equal(probe(files[0]).streams.filter(s => s.codec_type === 'video').length, 1);
+  assert.equal(probe(files[0]).streams.filter(s => s.codec_type === 'audio').length, 1);
+  ff(['-i', files[0], '-f', 'null', '-']);
+});
 const SR = 11025;
 let musicFile = '';
 let analysis: ReturnType<typeof analyzeSamples> | null = null;

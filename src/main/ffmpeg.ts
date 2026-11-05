@@ -3,6 +3,7 @@
 
 import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { audioStreamCount } from './audio-streams';
 
 function run(ffmpeg: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -22,7 +23,8 @@ export async function exportClip(
 ): Promise<string> {
   const base = path.basename(videoFile).replace(/\.[^.]+$/, '');
   const out = path.join(outDir, `${base}${opts.withMic ? '_mic' : '_gameonly'}.mp4`);
-  if (opts.withMic && opts.hasMicTrack) {
+  const audioCount = await audioStreamCount(ffmpeg, videoFile);
+  if (opts.withMic && opts.hasMicTrack && audioCount > 1) {
     const vol = opts.micVolume ?? 1;
     await run(ffmpeg, [
       '-i', videoFile,
@@ -32,7 +34,7 @@ export async function exportClip(
       '-movflags', '+faststart', out,
     ]);
   } else {
-    await run(ffmpeg, ['-i', videoFile, '-map', '0:v:0', '-map', '0:a:0', '-c', 'copy', '-movflags', '+faststart', out]);
+    await run(ffmpeg, ['-i', videoFile, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-movflags', '+faststart', out]);
   }
   return out;
 }

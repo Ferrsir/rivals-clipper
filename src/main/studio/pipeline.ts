@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { audioStreamCount } from '../audio-streams';
 import type { ExportFormat, FormatId, MusicAnalysis, ReelProject, RenderProgress, RenderRequest, Timeline } from '../../shared/studio';
 import { FORMATS } from './formats';
 import { orderClips, plan } from './planner';
@@ -178,6 +179,10 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
   }
 
   const files: string[] = [];
+  const audioCounts = new Map<string, number>();
+  for (const clip of project.clips) {
+    if (!audioCounts.has(clip.videoFile)) audioCounts.set(clip.videoFile, await audioStreamCount(o.ffmpeg, clip.videoFile, o.signal));
+  }
   const base = req.preview ? '' : uniqueExportBase(o.reelsDir, project.name);
   let gi = 0;
   const totalGroups = groups.size;
@@ -215,7 +220,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
-      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
+      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
     });
 
     const clipShare = 0.6;

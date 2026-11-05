@@ -84,6 +84,7 @@ export function hashOf(v: unknown): string {
 }
 
 interface ClipJobOpts {
+  audioCount?: number;
   clip: ReelClip;
   segments: TimelineSegment[];
   size: Size;
@@ -98,7 +99,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 3, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 4, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -106,10 +107,12 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   const scaleFlags = o.preview ? 'fast_bilinear' : 'bicubic';
   const lines: string[] = [];
   lines.push(`[0:v]setpts=PTS-STARTPTS,${cropFilter(clip, size)},scale=${size.width}:${size.height}:flags=${scaleFlags},setsar=1,format=yuv420p,split=${n}${segs.map((_, i) => `[vi${i}]`).join('')}`);
-  const useMic = clip.useMic && clip.hasMic;
+  const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>
     `[0:a:${idx}]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=${n}${segs.map((_, i) => `[${label}${i}]`).join('')}`;
-  lines.push(audioIn(0, 'gi'));
+  lines.push(o.audioCount === 0
+    ? `anullsrc=r=48000:cl=stereo,atrim=end=${r6(s1 - s0 + 0.3)},asplit=${n}${segs.map((_, i) => `[gi${i}]`).join('')}`
+    : audioIn(0, 'gi'));
   if (useMic) lines.push(audioIn(1, 'mi'));
 
   const slowSpeedMax = 0.8;
@@ -494,8 +497,10 @@ export function buildAssembleJob(o: AssembleOpts): FfJob & { concatList: string 
     parts.push('[music]');
   }
   const finishAudio = (inputs: string[], label: string) => {
-    if (inputs.length === 1) return `${inputs[0]}loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
-    return `${inputs.join('')}amix=inputs=${inputs.length}:normalize=0:duration=first,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
+    // Some FFmpeg versions normalize digital silence to non-finite samples.
+    // Replace only those samples, and explicitly retain the stereo layout for AAC.
+    if (inputs.length === 1) return `${inputs[0]}loudnorm=I=-14:TP=-1.5:LRA=11,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
+    return `${inputs.join('')}amix=inputs=${inputs.length}:normalize=0:duration=first,loudnorm=I=-14:TP=-1.5:LRA=11,aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))':c=stereo,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=${r3(Math.max(0, dur - Math.max(0.2, fo)))}:d=${r3(Math.max(0.2, fo))}[${label}]`;
   };
   if (o.noMusicAudio && o.music) {
     // Split every source used by both mixes.
