@@ -542,7 +542,7 @@ async function makeReel() {
   S.busy['make-reel'] = true;
   const step = (name, detail) => { S.creation = { step: name, detail }; renderLeft(); };
   try {
-    step('Planning your reel', 'ChatGPT or Claude is reading your prompt and selecting clips. This can take up to three minutes.');
+    step('Planning your reel', `${S.init?.ai?.provider === 'claude' ? 'Claude' : 'ChatGPT / Codex'} is reading your prompt and selecting clips. This can take up to three minutes.`);
     const ideas = await api.ideas.ai(format, prompt);
     if (!ideas?.length) throw new Error('No usable plan was returned. Your prompt is saved so you can try again.');
     S.ideas = ideas;

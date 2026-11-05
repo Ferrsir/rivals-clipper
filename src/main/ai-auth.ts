@@ -177,8 +177,9 @@ export async function ask(provider: AiProvider, prompt: string, images: string[]
       const args = ['-p', '--output-format', 'json', '--tools', 'Read', '--strict-mcp-config'];
       for (const img of images) args.push('--add-dir', path.dirname(img));
       const r = await run('claude', args, { timeoutMs, input: withImages, cwd: work });
-      if (r.code !== 0) throw new Error(r.stderr || 'Claude request failed');
-      const parsed = JSON.parse(r.stdout);
+      let parsed: {result?: string; is_error?: boolean};
+      try { parsed = JSON.parse(r.stdout); } catch { throw new Error(r.stderr || 'Claude returned an unreadable response'); }
+      if (r.code !== 0 || parsed.is_error) throw new Error(parsed.result || r.stderr || 'Claude request failed');
       return String(parsed.result ?? '');
     }
     const outFile = path.join(work, 'answer.txt');

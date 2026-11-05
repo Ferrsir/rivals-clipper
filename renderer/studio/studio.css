@@ -253,3 +253,13 @@
 
 .st-revision {padding:12px;display:flex;flex-direction:column;gap:8px;border-top:1px solid #353b48;}
 .st-revision-prompt {width:100%;resize:vertical;box-sizing:border-box;min-height:80px;padding:10px;}
+
+/* Give the prompt and revision controls room without obscuring the edit. */
+.st .st-reel-prompt { padding:14px; border-radius:10px; font-size:13px; min-height:240px; }
+.st-left:has(.st-reel-prompt) .st-row { flex-wrap:wrap; gap:8px; }
+.st-left:has(.st-reel-prompt) .st-row > .primary { flex:1 0 100%; padding:11px 16px; }
+.st-creation { background:var(--st-bg2); border-left:3px solid var(--accent); }
+.st-creation strong { font-size:13px; }
+.st-revision { background:var(--st-bg2); border:1px solid var(--line); border-radius:10px; margin:8px; }
+.st-revision .st-label {font-weight:600;}
+.st-revision textarea {box-sizing:border-box;}

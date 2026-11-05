@@ -11,11 +11,11 @@ import { hookText } from './projects';
 
 /** What the reference edits do, in words the AI can work from. */
 export const REFERENCE_STYLE = [
-  'Reference edits (TikTok creator @imfuzedb, Marvel Rivals): 25 to 55 seconds.',
-  'They open on a hook card for 3 to 8 seconds: a hero picture or meme in a strip across the middle of the screen over a blurred copy of it, with big bold capital text under it.',
-  'The hook is often a short back-and-forth, one line at a time ("WHO\'S STRONGER?" / "HIM?" / "OR YOU?", or "I CAN\'T BELIEVE IT" / "SUCH AN UNKILLABLE DUO!" / "MAYBE NOT..."), or a single "POV: YOU MAIN DEADPOOL".',
-  'Then gameplay cut on the beat in 3 to 7 second pieces, punched in on the hero, with white flashes on cuts, afterimage trails on the big moment and the best kill landing on the song\'s drop. Short story captions can run over it.',
-  'It ends with big text over the last seconds ("JOIN US DP MAINS!", "Please buff us", "Tysm for 2k") and a fade to black. The tone is funny, confident and a little self-aware.',
+  'Build a polished Marvel Rivals gameplay edit from the actual library clips and imported music. Respect the user requested duration and style.',
+  'Open directly on action unless the user explicitly requests an intro. Do not invent title cards, dialogue, captions, or an outro.',
+  'Cut and retime around verified kill markers and musical beats, with the strongest play on the drop. Keep related kills together and avoid repeated footage.',
+  'Keep the player visible and preserve a readable upper-right kill feed in vertical outputs. Prefer restrained effects and purposeful transitions.',
+  'Use actual clip durations. Never claim that unavailable external footage or layered artwork has been added.',
 ].join(' ');
 
 const SECONDS_PER_CLIP = 4.5;
