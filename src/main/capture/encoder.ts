@@ -104,6 +104,8 @@ export interface RecordOptions {
   bitrateKbps: number;
   encoder: EncoderChoice;
   /** Only used on the CPU path: scale to this height (the GPU path records at monitor resolution). */
+  cropLeft?: number;
+  cropRight?: number;
   scaleHeight?: number;
   width?: number;
   height?: number;
@@ -178,7 +180,7 @@ export function recordArgs(o: RecordOptions): string[] {
   const kbps = o.bitrateKbps;
   return [
     '-hide_banner', '-nostdin', '-loglevel', 'warning',
-    '-f', 'lavfi', '-i', gameWindowSource(o.fps),
+    '-f', 'lavfi', '-i', gameWindowSource(o.fps) + (o.cropLeft ? `:crop_left=${o.cropLeft}:crop_right=${o.cropRight}` : ''),
     ...(vf ? ['-vf', vf] : []),
     ...encoderArgs(o.encoder, o.fps, kbps),
     '-an',

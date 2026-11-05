@@ -58,6 +58,7 @@ export class LocalRecorder implements ClipRecorder {
   private lastStart?: { settings: Settings; game: GameProcess; clipsFolder: string };
   private stderrTail: string[] = [];
   private saving = new Set<Promise<void>>();
+  private lastClipEnd = -Infinity;
   /** Bumped by every start() and stop(), so a start that is still probing knows it was overtaken. */
   private gen = 0;
   private tearingDown?: Promise<void>;
@@ -109,13 +110,16 @@ export class LocalRecorder implements ClipRecorder {
 
     const width = probe.width ?? 1920;
     const height = probe.height ?? 1080;
-    const format = planRecording(settings, { width, height }, probe.encoder);
+    const aspect = localOptions(settings).hudAspect;
+    const crop = aspect > 0 ? Math.max(0, Math.floor((width - height * aspect) / 4) * 2) : 0;
+    const pictureWidth = width - crop * 2;
+    const format = planRecording(settings, { width: pictureWidth, height }, probe.encoder);
     const { fps } = format;
     const bufferMs = settings.bufferSeconds * 1000;
     // Audio is held a little longer than video; a clip being recorded also pins its own audio (startClip).
     const audioMs = bufferMs + 5000;
     this.ts = new TsReplayBuffer({ maxMs: bufferMs, frameTicks: Math.round(90000 / fps) });
-    const args = recordArgs({ ...format, outputIdx: captureMonitor, width, height });
+    const args = recordArgs({ ...format, outputIdx: captureMonitor, width: pictureWidth, height, cropLeft: crop, cropRight: crop });
     this.log(`Recording at ${format.width}x${format.height}, ${fps} fps${format.scaleHeight ? ' (resized to your recording limit)' : ''}`);
     this.spawnFfmpeg(ffmpeg, args);
 
@@ -204,7 +208,7 @@ export class LocalRecorder implements ClipRecorder {
   async startClip(fileName: string, pastDurationMs: number, onDone: (v: SavedVideo) => void): Promise<void> {
     if (this.active) return;
     if (this.stopping || !this.info || !this.ff || !this.lastStart) throw new Error('Local recorder is not running');
-    const handle = this.ts.beginCapture(pastDurationMs);
+    const handle = this.ts.beginCapture(pastDurationMs, Date.now(), this.lastClipEnd);
     // The audio rings only hold about the pre-roll. A clip can run for maxClipSeconds, so keep its audio
     // from the clip's first frame (less a second of slack) until it is saved.
     const from = (this.ts.captureStart(handle) ?? Date.now() - pastDurationMs) - 1000;
@@ -320,6 +324,7 @@ export class LocalRecorder implements ClipRecorder {
       return { duration: 0, startTimeEpoch: until, error: 'No video in the replay buffer yet' };
     }
     const { startEpoch, endEpoch } = result;
+    this.lastClipEnd = Math.max(this.lastClipEnd, endEpoch);
     // Audio arrives ~150 ms behind real time; wait until it covers the end of the video.
     const audio = this.audio;
     const deadline = Date.now() + 1500;
@@ -368,6 +373,7 @@ export class LocalRecorder implements ClipRecorder {
       if (fs.existsSync(out)) throw new Error('A clip with this filename already exists; refusing to replace it');
       await fs.promises.rename(partial, out);
       saved = true;
+      await execFfmpeg(this.ffBin!, ['-y', '-ss', String(Math.min(5, (endEpoch-startEpoch)/2000)), '-i', out, '-frames:v', '1', '-vf', 'scale=640:-2', out.replace(/\.mp4$/i, '.cover.jpg')]).catch(() => undefined);
       return { filePath: out, duration: Math.round(endEpoch - startEpoch), startTimeEpoch: Math.round(startEpoch), audioTracks: tracks.map((t) => t.label) };
     } catch (err) {
       const recoveryFolder = temps.some(file => fs.existsSync(file)) ? tmp : undefined;

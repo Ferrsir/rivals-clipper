@@ -147,14 +147,14 @@ export class TsReplayBuffer {
    * Start a clip that includes `pastMs` of footage before `now`.
    * It begins at the last keyframe at or before that point (up to one GOP earlier), or the oldest one held.
    */
-  beginCapture(pastMs: number, now = Date.now()): CaptureHandle {
+  beginCapture(pastMs: number, now = Date.now(), afterEpoch = -Infinity): CaptureHandle {
     const target = now - pastMs;
     let startIdx = 0;
     for (let i = 0; i < this.gops.length; i++) {
       if (this.wallOf(this.gops[i].pts) <= target) startIdx = i;
       else break;
     }
-    const handle: CaptureHandle = { gops: this.gops.slice(startIdx), active: true };
+    const handle: CaptureHandle = { gops: this.gops.slice(startIdx).filter(g => this.wallOf(g.pts) >= afterEpoch), active: true };
     this.captures.add(handle);
     return handle;
   }
