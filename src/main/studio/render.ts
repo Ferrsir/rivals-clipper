@@ -115,6 +115,34 @@ export function feedBox(size: Size): { width: number; height: number; x: number;
   return { width, height, x: size.width - width, y };
 }
 
+/** How long a kill stays in the game's feed after it happens, seconds. */
+export const FEED_HOLD = 4.5;
+
+/**
+ * Times (seconds, clip-local from `offset`) when the feed box shows: from just before each kill until
+ * its row leaves the game's feed. Overlapping windows merge. Empty when the clip has no kills.
+ */
+export function feedWindows(hits: number[], offset: number, span: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const h of [...hits].sort((a, b) => a - b)) {
+    const a = Math.max(0, h - offset - 0.15);
+    const b = Math.min(span, h - offset + FEED_HOLD);
+    if (b <= a) continue;
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 0.6) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
+export function feedAlphaExpr(windows: [number, number][]): string {
+  if (!windows.length) return '0';
+  const parts = windows.map(([a, b]) => `clip(min((T-${r6(a)})/0.12,(${r6(b)}-T)/0.35),0,1)`);
+  const max = parts.reduce((acc, p) => `max(${acc},${p})`);
+  return `255*${max}`;
+}
+
 /**
  * Rivals draws your hero left of and below the crosshair (about 0.2 of the frame height left of centre).
  * Centre game crops this far left of the screen centre, in units of source height, so both the hero
@@ -146,7 +174,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 10, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 11, hits: clip.hits, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -170,11 +198,17 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   if (size.height >= size.width && clip.preserveKillFeed !== false) {
     // The whole source kill feed, cropped as one box (rows and the darkened scenery behind them),
     // pinned to the top-right corner for the entire clip, like the reference edits.
+    // It shows only while the game's feed has rows (from just before a kill until its row leaves),
+    // fading in and out, so the reel never opens on an empty black plate.
     const box = feedBox(size);
-    lines.push(`${src}split=2[gameSrc][feedSrc]`);
-    lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.5/0.05 0.72/0.55 1/1',drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
-    lines.push(`[gameSrc]${gameplay}[gamePicture]`);
-    lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y},${split}`);
+    const windows = feedWindows(clip.hits ?? [], s0, s1 - s0 + 0.3);
+    if (windows.length) {
+      lines.push(`${src}split=2[gameSrc][feedSrc]`);
+      // Darken everything but the bright row text and icons, so sky and scenery don't show through.
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,curves=all='0/0 0.6/0.035 0.8/0.55 1/1',drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))},format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`);
+      lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+      lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
+    } else lines.push(`${src}${gameplay},${split}`);
   } else lines.push(`${src}${gameplay},${split}`);
   const useMic = clip.useMic && clip.hasMic && (o.audioCount ?? 2) > 1;
   const audioIn = (idx: number, label: string) =>

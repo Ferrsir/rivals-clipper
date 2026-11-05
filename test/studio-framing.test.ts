@@ -38,7 +38,7 @@ for(const outputHeight of [568,320]) test(`clean layout at 320x${outputHeight} r
       "drawbox=x=0:y=0:w=iw:h=50:c=red:t=fill,drawbox=x=0:y=450:w=iw:h=50:c=yellow:t=fill,drawbox=x=900:y=15:w=80:h=30:c=lime:t=fill,drawbox=x=900:y=15:w=80:h=30:c=white:t=fill:enable='gte(t,1)'",
       '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
     const clip: ReelClip = { uid: 'layout', clipId: 'layout', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30,
-      hasMic: false, hits: [1], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
+      hasMic: false, hits: [.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
     const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'layout', clipIndex: 0, kind: 'lead', src: [.4, 1.4], out: [0, .5], speed: 2 }],
       size: { width: 320, height: outputHeight }, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);

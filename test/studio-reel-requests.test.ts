@@ -178,6 +178,9 @@ test('scoreboard frames are recognised from their dark, grey look', async () => 
   assert.ok(isScoreboard(frameStats(fill(40, 42, 46), 10, 4)));
   assert.ok(isScoreboard(frameStats(fill(22, 34, 48), 10, 4)), 'tinted panel still counts');
   assert.ok(!isScoreboard(frameStats(fill(90, 110, 70), 10, 4)));
+  assert.ok(!isScoreboard(frameStats(fill(30, 45, 80), 10, 4)), 'dark but colourful gameplay is kept');
+  const { heldRuns } = await import('../src/main/studio/clip-filter');
+  assert.deepEqual(heldRuns([false, true, false, true, true, false]), [0.75, 1], 'a single dark sample is ignored');
   const c = { in: 0, out: 7, hits: [4] };
   assert.deepEqual(trimAround(c, [0.5, 1, 1.5]), { in: 1.8, out: 7, hits: [4] }, 'trimmed off before the kill');
   assert.equal(trimAround(c, [3.5]), null, 'too close to the kill: drop the clip');
@@ -189,4 +192,13 @@ test('game crops frame the hero left of the crosshair; a hand-moved crop wins', 
   const base = { cropX: 0.5, cropY: 0.5, cropZoom: 1 };
   assert.match(cropFilter(base, { width: 1080, height: 1080 }, 0, 0.2), /iw\/2-ih\*0\.2-ow\/2/);
   assert.doesNotMatch(cropFilter({ ...base, cropX: 0.3 }, { width: 1080, height: 1080 }, 0, 0.2), /ih\*0\.2/);
+});
+
+test('the feed box shows only while kills are in the game feed, and fades', async () => {
+  const { feedWindows, feedAlphaExpr, FEED_HOLD } = await import('../src/main/studio/render');
+  assert.deepEqual(feedWindows([], 10, 6), []);
+  assert.deepEqual(feedWindows([12, 13], 10, 20), [[1.85, 3 + FEED_HOLD]], 'chained kills share one window');
+  assert.deepEqual(feedWindows([11, 30], 10, 8), [[0.85, 1 + FEED_HOLD]], 'kills outside the clip are ignored');
+  assert.equal(feedAlphaExpr([]), '0');
+  assert.match(feedAlphaExpr([[1, 2], [5, 6]]), /^255\*max\(clip/);
 });

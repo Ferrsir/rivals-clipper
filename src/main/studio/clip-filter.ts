@@ -39,8 +39,19 @@ export function frameStats(rgb: Uint8Array, width: number, height: number): Fram
   return { y: y / n, sat: sat / n, leftY: left / leftN };
 }
 
-// Measured on real scoreboard frames (48x20): mean luma 31-40, left strip 17-29; gameplay 84-100.
-export const isScoreboard = (s: FrameStats) => s.y < 60 && s.leftY < 50;
+// Measured on real scoreboard frames (48x20): mean luma 31-40, left strip 17-29, saturation (max-min)
+// under 30; gameplay luma 84-100. Dark gameplay can be as dark but keeps its colour, so saturation
+// tells them apart.
+export const isScoreboard = (s: FrameStats) => s.y < 60 && s.leftY < 50 && s.sat < 30;
+
+/** Keep only flagged samples that have a flagged neighbour (the scoreboard is held, not a single dark frame). */
+export function heldRuns(flags: boolean[]): number[] {
+  const times: number[] = [];
+  flags.forEach((f, i) => {
+    if (f && (flags[i - 1] || flags[i + 1])) times.push(i / 4);
+  });
+  return times;
+}
 
 const W = 48;
 const H = 20;
@@ -62,8 +73,9 @@ export function scoreboardTimes(ffmpeg: string, file: string, signal?: AbortSign
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {
         if (error) return resolve([]);
         const size = W * H * 3;
-        const times: number[] = [];
-        for (let f = 0; (f + 1) * size <= out.length; f++) if (isScoreboard(frameStats(out.subarray(f * size, (f + 1) * size), W, H))) times.push(f / 4);
+        const flags: boolean[] = [];
+        for (let f = 0; (f + 1) * size <= out.length; f++) flags.push(isScoreboard(frameStats(out.subarray(f * size, (f + 1) * size), W, H)));
+        const times = heldRuns(flags);
         if (cache.size > 2000) cache.clear();
         cache.set(key, times);
         resolve(times);
