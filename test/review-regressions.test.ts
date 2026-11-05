@@ -1,3 +1,4 @@
+import { matchPortrait } from '../src/main/vision/portrait';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -100,4 +101,13 @@ test('player-linked subtitles identify the local hero and reject other speakers'
   f.onOcr('subtitle', 1, {text:'ANGELA (OtherPlayer): Attack!',words:[]}, 1000);
   f.onOcr('subtitle', 2, {text:'MAGIK (Ferrsir): Crimson Chain!',words:[]}, 2000);
   assert.deepEqual(updates.filter(([key])=>key==='local_hero'),[['local_hero','MAGIK']]);
+});
+
+
+test('portrait matching rejects blank or unsupported image sizes', () => {
+  const blank = {id:'portrait' as const, w:34,h:36,u:0.25,mask:new Uint8Array(1224),luma:new Uint8Array(1224)};
+  assert.equal(matchPortrait(blank),undefined);
+  assert.equal(matchPortrait({...blank,w:32}),undefined);
+  const noise = Uint8Array.from({length:1224},(_,i)=>(i*73+31)%256);
+  assert.equal(matchPortrait({...blank,luma:noise}),undefined);
 });
