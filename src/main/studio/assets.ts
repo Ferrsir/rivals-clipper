@@ -4,6 +4,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import type { MediaAsset } from '../../shared/studio';
+import { detectMoments } from './moments';
 import { newId } from './projects';
 
 export const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'bmp'];
@@ -35,7 +36,9 @@ export async function importAssets(ffmpeg: string, files: string[]): Promise<Med
     if (!kind) continue;
     const info = await probeMedia(ffmpeg, file);
     if (kind === 'video' && !info.durationSec) throw new Error(`Couldn't read ${path.basename(file)} as a video.`);
-    out.push({ id: newId(), kind, file, name: path.basename(file), durationSec: kind === 'video' ? info.durationSec : undefined, width: info.width, height: info.height, hasAudio: kind === 'video' ? info.hasAudio : undefined });
+    // Any game, anime or film: find its action moments so cuts and effects land on them.
+    const moments = kind === 'video' && info.durationSec ? await detectMoments(ffmpeg, file, info.durationSec, info.hasAudio) : undefined;
+    out.push({ id: newId(), kind, file, name: path.basename(file), durationSec: kind === 'video' ? info.durationSec : undefined, width: info.width, height: info.height, hasAudio: kind === 'video' ? info.hasAudio : undefined, moments });
   }
   return out;
 }

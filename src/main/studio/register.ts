@@ -23,6 +23,11 @@ import { describeFit, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
 import { scanClip, trimAround, type ClipScan } from './clip-filter';
 import { withFeedRows } from './feed-rows';
+import { findSong, readIntent } from './intent';
+import { detectMoments, expandOwnFootage } from './moments';
+import { SpeechTools } from './tools';
+import { assignSpeakers, linesToSubtitles, transcribe } from './speech';
+import { aiCast, autoCast, localSynth } from './voices';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
@@ -213,6 +218,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
           encoder: enc,
           onProgress: (pr) => send(pr),
           signal: ac.signal,
+          synth: project.voices?.on ? localSynth({ ffmpeg: ff.path!, tools: speechTools(), progress: (m, pct) => send({ stage: 'assemble', pct: pct ?? 0.99, message: m }) }) : undefined,
         });
         if (!request.preview) {
           if (project.music) music().markUsed(project.music.trackId);
@@ -319,19 +325,84 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   // ---------- ideas ----------
   const libraryClips = () => listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
   handle('studio:ideas:quick', (_e, format: FormatId) => quickIdeas(libraryClips(), music().list(), getFormat(format)));
-  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number, assets?: unknown) =>
-    aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:await ffmpeg(), assets: sanitizeAssets(assets).filter(a => fs.existsSync(a.file)) }),
-  );
+  handle('studio:ideas:ai', async (_e, format: FormatId, request: string, count?:number, assets?: unknown) => {
+    const ff = await ffmpeg();
+    const own = sanitizeAssets(assets).filter(a => fs.existsSync(a.file));
+    // Videos added before moment detection existed get their action moments now.
+    for (const a of own) if (a.kind === 'video' && a.moments === undefined && a.durationSec) a.moments = await detectMoments(ff, a.file, a.durationSec, a.hasAudio !== false);
+    return aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:ff, assets: own });
+  });
   /**
    * Everything after the AI's plan that makes it a finished edit: a song from your library when none was
    * picked, the length you asked for (pulling in more kill clips or dropping weak ones), and faces located
    * for picture overlays. Returns notes for the "current step" display.
    */
+  const speechTools = () => new SpeechTools(path.join(studioDir(), 'tools'));
+  /**
+   * "make them have subtitles": what's said in the clips, as English lines, with who says each one
+   * (from the AI). "ai voices for them talking": a voice per character reads those lines.
+   */
+  const addSpeech = async (project: ReelProject, request: string, wantSubs: boolean, wantVoices: boolean, notes: string[], signal?: AbortSignal) => {
+    const ff = await ffmpeg();
+    const keepLanguage = /\b(original|japanese|native) (language|audio|subtitles?|subs)\b|\bdon'?t translate\b/i.test(request);
+    if (wantSubs || wantVoices) {
+      // Only transcribe when the plan has no lines of its own (your words win).
+      const sources = [...new Set(project.clips.map(c => c.videoFile))].filter(file => !(project.subtitles ?? []).some(t => project.clips.find(c => c.uid === t.clipUid)?.videoFile === file));
+      let whisper: { bin: string; model: string } | undefined;
+      for (const file of sources) {
+        const used = project.clips.filter(c => c.videoFile === file);
+        const from = Math.max(0, Math.min(...used.map(c => c.in)) - 0.5);
+        const to = Math.max(...used.map(c => c.out)) + 0.5;
+        try {
+          whisper ??= await speechTools().whisper(undefined, 'small', signal);
+          const heard = await transcribe({ ffmpeg: ff, whisper, clip: used[0], from, to, keepLanguage, signal });
+          let lines = heard.lines;
+          if (lines.length && ctx.ai) lines = await assignSpeakers({ ai: ctx.ai, ffmpeg: ff, clip: used[0], lines, request, signal }).catch(() => lines);
+          if (!lines.length) continue;
+          project.subtitles = [...(project.subtitles ?? []), ...linesToSubtitles(lines, project.clips, file)];
+          notes.push(`Subtitled ${lines.length} spoken line${lines.length === 1 ? '' : 's'}${heard.language && heard.language !== 'en' && !keepLanguage ? ` (translated from ${heard.language})` : ''}.`);
+        } catch (error) {
+          notes.push(`Couldn't make subtitles (${(error as Error).message}).`);
+          break;
+        }
+      }
+      if (!(project.subtitles ?? []).length) notes.push('No speech was found for subtitles. Write the lines in your prompt (e.g. Gojo: "Throughout heaven and earth...") and they will be used.');
+    }
+    if (wantVoices) {
+      // Lines you wrote without a speaker are read by one voice.
+      project.subtitles = (project.subtitles ?? []).map(t => (t.speaker ? t : { ...t, speaker: 'Narrator' }));
+      const speakers = [...new Set(project.subtitles.map(t => t.speaker!))];
+      if (speakers.length) {
+        const cast = ctx.ai ? await aiCast(ctx.ai, speakers, request) : autoCast(speakers, project.voices?.cast);
+        project.voices = { on: true, cast, duck: project.voices?.duck ?? 0.25, volume: project.voices?.volume ?? 1.1 };
+        notes.push(`AI voices: ${cast.map(r => `${r.speaker} (${r.voice.replace(/^piper:[a-z]{2}_[A-Z]{2}-/, '').replace(/-\w+$/, '')})`).join(', ')}. They're made on your PC with Piper; the first render downloads each voice once.`);
+      }
+    }
+  };
   const finishPlan = async (project: ReelProject, request: string, signal?: AbortSignal): Promise<{ project: ReelProject; notes: string[] }> => {
     const notes: string[] = [];
     const fmt = getFormat(project.format);
-    const target = requestedSeconds(request) ?? project.targetSeconds ?? 30;
+    const intent = readIntent(request);
+    const target = intent.seconds ?? project.targetSeconds ?? 30;
     project.targetSeconds = target;
+    // "to the song aizo": the song you named, from your music folder, wins over the AI's pick.
+    if (intent.song) {
+      const named = findSong(music().list(), intent.song);
+      if (named) {
+        const track = named.analysis ? named : await music().analyze(named.id).catch(() => named);
+        if (project.music?.trackId !== track.id) project.music = { trackId: track.id, file: track.file, title: track.title, start: 'auto' };
+        notes.push(`Using "${track.title}"${track.analysis ? ` (${Math.round(track.analysis.bpm)} BPM), cut on its beats with the biggest hit on the drop` : ''}.`);
+      } else {
+        notes.push(`"${intent.song}" isn't in your music yet. Add the song file under Music (or drop it in your music folder) and make the reel again to cut it to that song.`);
+      }
+    }
+    // Your own footage, from any game or show: long videos become excerpts around their best action.
+    const ownOnly = project.clips.length > 0 && project.clips.every(c => c.external);
+    if (ownOnly) {
+      const ex = expandOwnFootage(project, target);
+      project = ex.project;
+      if (ex.expanded) notes.push(`Cut your footage into ${project.clips.length} excerpts around its biggest moments.`);
+    }
     if (!project.music) {
       const best = suggestFromLibrary(music().list(), project.style, fmt, target)[0];
       const track = best && music().get(best.trackId);
@@ -342,7 +413,8 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     }
     // Never use footage with the Tab scoreboard up: trim around it, or drop the clip.
     const ff0 = await ffmpeg();
-    const pool = libraryClips().filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => b.score - a.score).slice(0, 60);
+    // Never pull Marvel Rivals library clips into an edit of your own footage.
+    const pool = ownOnly ? [] : libraryClips().filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => b.score - a.score).slice(0, 60);
     const scans = new Map<string, ClipScan>();
     for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal));
     // Kill times from when your row appears in the feed (dropping teammates' kills), then trim off the scoreboard.
@@ -369,25 +441,39 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       }
     }
     if (dropped) notes.push(`Left out ${dropped} clip${dropped === 1 ? '' : 's'} with the scoreboard open.`);
-    const fit = fitToTarget(project, pool, analysisFor(project), { prepare });
+    const fit = fitToTarget(project, pool, analysisFor(project), ownOnly ? { maxAdd: 0 } : { prepare });
     project = fit.project;
     const fitNote = describeFit(fit, target);
     if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));
-    if (fit.seconds < target - 3) notes.push(`You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
+    if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
     const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
     if (faces.length && ctx.ai) {
       const ff = await ffmpeg();
+      // One search per picture and moment, shared by every excerpt cut from the same video.
+      const found = new Map<string, Awaited<ReturnType<typeof locateFace>>>();
+      let ok = 0;
+      let failed = '';
       for (const ov of faces) {
         const clip = project.clips.find(c => c.uid === ov.clipUid);
         if (!clip) continue;
+        // Only the part of the clip that is used, so the AI looks closely where it matters.
+        const from = Math.max(ov.from, clip.in);
+        const to = Math.min(ov.to, clip.out);
+        if (to - from < 0.1) continue;
+        const key = [clip.videoFile, ov.image, from, to].join('|');
         try {
-          ov.track = await locateFace(ff, ctx.ai, clip, ov, request.slice(0, 400), signal);
-          notes.push('Found the face for your picture overlay.');
+          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, { ...ov, from, to }, request.slice(0, 400), signal));
+          ov.track = found.get(key);
+          ok++;
         } catch (error) {
-          notes.push(`Couldn't find the face for your picture (${(error as Error).message}); it sits where the AI first placed it.`);
+          failed = (error as Error).message;
         }
       }
+      if (ok) notes.push('Found the face for your picture overlay.');
+      if (failed) notes.push(`Couldn't find the face for your picture (${failed}); it sits where the AI first placed it.`);
     }
+    if (intent.subtitles || intent.voices) await addSpeech(project, request, intent.subtitles, intent.voices, notes, signal);
+    if (intent.faceOverlay && !(project.overlays ?? []).length) notes.push(!(project.assets ?? []).some(a => a.kind === 'image') ? 'Add the picture you want on their face (drop it in with your clip) and make the reel again.' : "The AI didn't place your picture; try naming who it goes on, e.g. \"put the Deadpool icon on Gojo's face\".");
     return { project, notes };
   };
   handle('studio:ideas:apply', async (_e, idea: ReelIdea, request?: string) => {

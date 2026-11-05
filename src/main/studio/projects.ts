@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../../shared/types';
-import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject } from '../../shared/studio';
+import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject, VoiceRole, VoiceSettings } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
 
@@ -98,10 +98,13 @@ export function createProject(opts: { name?: string; format?: FormatId; styleId?
   };
 }
 
-/** Apply an AI edit plan to trusted library sources, never to paths supplied by the model. */
-/** A video you dropped into the Studio, as a reel clip. It has no kill markers, so it is trimmed to the beat. */
+/**
+ * A video you dropped into the Studio, as a reel clip. It has no kill markers; the action moments found
+ * when it was added (loud hits, impact frames) stand in for them so they land on the beat.
+ */
 export function externalClip(a: MediaAsset): ReelClip {
   const dur = Math.max(0.5, a.durationSec || 5);
+  const hits = (a.moments ?? []).map((m) => m.t).filter((t) => t > 0 && t < dur);
   return {
     uid: newId(),
     clipId: `asset:${a.id}`,
@@ -115,7 +118,7 @@ export function externalClip(a: MediaAsset): ReelClip {
     height: a.height || 0,
     fps: 30,
     hasMic: false,
-    hits: [],
+    hits,
     in: 0,
     out: dur,
     useMic: false,
@@ -135,18 +138,30 @@ export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: 
   const assetById = new Map(assets.map(a => [a.id, a]));
   const used = new Set<string>();
   const uidFor = new Map<string, string>();
+  /** Every reel clip cut from the same source, so a picture or subtitle on it follows into each excerpt. */
+  const uidsFor = new Map<string, string[]>();
+  const assetEdits = new Map<string, Array<{ in: number; out: number }>>();
+  for (const e of idea.clipEdits ?? []) if (e.clipId.startsWith('asset:')) assetEdits.set(e.clipId, [...(assetEdits.get(e.clipId) ?? []), e]);
   const clips: ReelClip[] = [];
   for (const id of idea.clipIds) {
-    if (used.has(id)) throw new Error('The edit plan selects a repeated clip.');
-    used.add(id);
     if (id.startsWith('asset:')) {
+      // Your own video can be cut into several excerpts, so it may appear more than once.
       const asset = assetById.get(id.slice(6));
       if (!asset || asset.kind !== 'video') throw new Error('The edit plan uses one of your files that is not a video or is missing.');
       const clip = externalClip(asset);
-      uidFor.set(id, clip.uid);
+      const edit = assetEdits.get(id)?.shift();
+      if (edit && Number.isFinite(edit.in) && Number.isFinite(edit.out) && edit.in >= 0 && edit.out > edit.in + 0.2) {
+        clip.in = Math.min(edit.in, clip.durationSec - 0.2);
+        clip.out = Math.min(edit.out, clip.durationSec);
+        clip.hits = clip.hits.filter((h) => h > clip.in + 0.05 && h < clip.out - 0.02);
+      }
+      if (!uidFor.has(id)) uidFor.set(id, clip.uid);
+      uidsFor.set(id, [...(uidsFor.get(id) ?? []), clip.uid]);
       clips.push(clip);
       continue;
     }
+    if (used.has(id)) throw new Error('The edit plan selects a repeated clip.');
+    used.add(id);
     const source = byId.get(id);
     if (!source) throw new Error('The edit plan selects an unavailable clip.');
     const clip = reelClipFromSidecar(source);
@@ -158,6 +173,7 @@ export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: 
       clip.out = Math.min(edit.out, clip.durationSec);
     }
     uidFor.set(id, clip.uid);
+    uidsFor.set(id, [clip.uid]);
     clips.push(clip);
   }
   if (!clips.length) throw new Error('The edit plan contains no clips.');
@@ -166,12 +182,12 @@ export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: 
   project.assets = assets;
   project.targetSeconds = idea.targetSeconds;
   project.caption = idea.postCaption;
-  project.overlays = sanitizeOverlays((idea.overlays ?? []).map(o => {
+  project.game = idea.game;
+  project.overlays = sanitizeOverlays((idea.overlays ?? []).flatMap(o => {
     const image = assetById.get(o.assetId.replace(/^asset:/, ''));
-    const clipUid = uidFor.get(o.onClip);
-    return image?.kind === 'image' && clipUid ? { ...o, image: image.file, clipUid } : null;
+    return image?.kind === 'image' ? (uidsFor.get(o.onClip) ?? []).map(clipUid => ({ ...o, image: image.file, clipUid })) : [];
   }));
-  project.subtitles = sanitizeSubtitles((idea.subtitles ?? []).map(t => ({ ...t, clipUid: uidFor.get(t.onClip) })));
+  project.subtitles = sanitizeSubtitles((idea.subtitles ?? []).flatMap(t => (uidsFor.get(t.onClip) ?? []).map(clipUid => ({ ...t, clipUid }))));
   const track = tracks.find(t => t.id === idea.music?.trackId);
   if (track) {
     const start = idea.music.start ?? 'auto';
@@ -179,6 +195,12 @@ export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: 
     project.music = {trackId:track.id, file:track.file, title:track.title, start};
   }
   return sanitizeProject(project);
+}
+
+/** What the edit's footage is, for AI prompts: the game you named, Marvel Rivals for library clips, or "fan" for your own footage. */
+export function footageName(p: Pick<ReelProject, 'game' | 'clips'>): string {
+  if (p.game) return p.game;
+  return p.clips.length && p.clips.every((c) => c.external) ? 'fan' : 'Marvel Rivals';
 }
 
 /** Hook text: up to 4 lines of up to 80 characters each. */
@@ -264,6 +286,7 @@ export function sanitizeProject(p: any): ReelProject {
       : null;
   return {
     version: 1,
+    game: typeof p.game === 'string' && p.game.trim() ? p.game.replace(/\s+/g, ' ').trim().slice(0, 60) : undefined,
     id: typeof p.id === 'string' && /^[a-z0-9-]{1,40}$/i.test(p.id) ? p.id : base.id,
     name: typeof p.name === 'string' && p.name.trim() ? p.name.trim().slice(0, 80) : base.name,
     createdAt: num(p.createdAt, 0, 1e14, base.createdAt),
@@ -289,7 +312,17 @@ export function sanitizeProject(p: any): ReelProject {
     assets: sanitizeAssets(p.assets),
     overlays: sanitizeOverlays(p.overlays),
     subtitles: sanitizeSubtitles(p.subtitles),
+    voices: sanitizeVoices(p.voices),
   };
+}
+
+export function sanitizeVoices(v: any): VoiceSettings | null {
+  if (!v || typeof v !== 'object') return null;
+  const cast: VoiceRole[] = (Array.isArray(v.cast) ? v.cast : [])
+    .filter((r: any) => r && typeof r.speaker === 'string' && r.speaker.trim() && typeof r.voice === 'string' && /^(piper|sapi):[\w .()-]{1,80}$/.test(r.voice))
+    .slice(0, 12)
+    .map((r: any) => ({ speaker: r.speaker.trim().slice(0, 40), voice: r.voice, pitch: Number.isFinite(r.pitch) ? num(r.pitch, -8, 8, 0) : undefined }));
+  return { on: v.on === true, cast, duck: num(v.duck, 0, 1, 0.25), volume: num(v.volume, 0, 2, 1.1) };
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
@@ -311,6 +344,9 @@ export function sanitizeAssets(raw: unknown): MediaAsset[] {
       width: Number.isFinite(a.width) ? num(a.width, 0, 20000, 0) : undefined,
       height: Number.isFinite(a.height) ? num(a.height, 0, 20000, 0) : undefined,
       hasAudio: a.hasAudio === undefined ? undefined : !!a.hasAudio,
+      moments: Array.isArray(a.moments)
+        ? a.moments.filter((m: any) => m && Number.isFinite(m.t) && Number.isFinite(m.s) && m.t >= 0).slice(0, 120).map((m: any) => ({ t: num(m.t, 0, 36000, 0), s: num(m.s, 0, 100, 1) }))
+        : undefined,
     });
   }
   return out;
@@ -358,7 +394,8 @@ export function sanitizeSubtitles(raw: unknown): ClipSubtitle[] {
     .slice(0, 200)
     .map((s: any) => {
       const from = num(s.from, 0, 36000, 0);
-      return { clipUid: s.clipUid.slice(0, 40), from, to: num(s.to, from + 0.1, 36000, from + 2), text: String(s.text).replace(/\s+/g, ' ').trim().slice(0, 140) };
+      const speaker = typeof s.speaker === 'string' && s.speaker.trim() ? s.speaker.replace(/\s+/g, ' ').trim().slice(0, 40) : undefined;
+      return { clipUid: s.clipUid.slice(0, 40), from, to: num(s.to, from + 0.1, 36000, from + 2), text: String(s.text).replace(/\s+/g, ' ').trim().slice(0, 140), ...(speaker ? { speaker } : {}) };
     });
 }
 
