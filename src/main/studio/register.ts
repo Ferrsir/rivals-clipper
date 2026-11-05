@@ -18,7 +18,8 @@ import { Vault } from './publish/vault';
 import { FORMATS, FORMAT_LIST, getFormat } from './formats';
 import { MusicLibrary } from './music-library';
 import { findFont, planFor, renderProject } from './pipeline';
-import { createProject, hookText, newId, ProjectStore, reelClipFromSidecar, sanitizeProject } from './projects';
+import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeProject, reconcileProjectSources } from './projects';
+import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
 import { STYLES, clone, getStyle } from './styles';
 
@@ -139,7 +140,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   handle('studio:clips:facets', () => clipIndex.facets());
 
   handle('studio:autoFill', (_e, proj: unknown, seconds: number) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const used = new Set(project.clips.map((c) => c.videoFile));
     const pool = listClips(p().clips, 1000)
       .filter((c) => !used.has(c.videoFile) && fs.existsSync(c.videoFile))
@@ -160,7 +161,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
 
   // ---------- projects ----------
   handle('studio:projects:list', () => store().list());
-  handle('studio:projects:get', (_e, id: string) => store().get(id) ?? null);
+  handle('studio:projects:get', (_e, id: string) => { const project=store().get(id); return project ? reconcileProjectSources(project,listClips(p().clips,1000)) : null; });
   handle('studio:projects:create', (_e, opts: { name?: string; format?: FormatId; styleId?: string }) => store().save(createProject(opts ?? {})));
   handle('studio:projects:save', (_e, proj: unknown) => store().save(proj));
   handle('studio:projects:delete', (_e, id: string) => store().delete(id));
@@ -173,7 +174,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
 
   // ---------- planning ----------
   handle('studio:plan', (_e, proj: unknown) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const fmt = getFormat(project.format);
     return planFor(project, analysisFor(project), project.fps, fmt.maxSeconds);
   });
@@ -181,7 +182,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   // ---------- rendering ----------
   const jobs = new Map<string, { abort: () => void; done: Promise<void> }>();
   handle('studio:render', async (e, proj: unknown, req: RenderRequest) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const jobId = newId();
     const ac = new AbortController();
     const ff = await findFfmpeg(ctx.ffmpegPath());
@@ -199,6 +200,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
           ffmpeg: ff.path!,
           project,
           analysis: analysisFor(project),
+          ai: ctx.ai,
           req: request,
           studioDir: studioDir(),
           reelsDir: reelsDir(),
@@ -255,14 +257,14 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   handle('studio:music:update', (_e, id: string, patch: object) => music().update(id, patch));
   handle('studio:music:remove', (_e, id: string, deleteFile: boolean) => music().remove(id, !!deleteFile));
   handle('studio:music:suggest', (_e, proj: unknown) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const fmt = getFormat(project.format);
     const tl = planFor(project, null, project.fps, fmt.maxSeconds);
     const seconds = Math.max(fmt.idealSeconds[0], tl.duration || fmt.idealSeconds[1]);
     return { ranked: suggestFromLibrary(music().list(), project.style, fmt, seconds), sources: sourcesFor(fmt, project.style), note: fmt.music.note, seconds };
   });
   handle('studio:music:aiIdeas', async (_e, proj: unknown) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const fmt = getFormat(project.format);
     const tl = planFor(project, null, project.fps, fmt.maxSeconds);
     const prompt = aiMusicPrompt({
@@ -279,16 +281,21 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   });
 
   // ---------- AI ----------
-  handle('studio:ai:reviseReel', (_e, proj: unknown, request: string) => reviseReel(ctx.ai, sanitizeProject(proj), String(request ?? '')));
+  handle('studio:ai:reviseReel', (_e, proj: unknown, request: string) => reviseReel(ctx.ai, reconcileProjectSources(sanitizeProject(proj),listClips(p().clips,1000)), String(request ?? '')));
+  handle('studio:ai:reviewReel', async (_e, proj: unknown, file: string, request: string) => {
+    if (typeof file !== 'string' || !within(file) || !fs.existsSync(file) || !/\.mp4$/i.test(file)) throw new Error('Select an existing rendered reel inside your clips or export folder.');
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
+    return reviewRenderedReel({ ai:ctx.ai, ffmpeg:await ffmpeg(), file, project, analysis:analysisFor(project), request:String(request ?? ''), reviewDir:path.join(studioDir(), 'reviews'), referenceImages:['style-feed.jpg','style-gameplay.jpg'].map(name=>path.join(studioDir(),'references',name)) });
+  });
   handle('studio:ai:status', async () => (ctx.ai ? ctx.ai.status() : { signedIn: false, provider: 'none' }));
   handle('studio:ai:tweakStyle', (_e, proj: unknown, request: string) => tweakStyle(ctx.ai, sanitizeProject(proj).style, String(request ?? '')));
   handle('studio:ai:captions', (_e, proj: unknown, request: string, lines: number) => writeCaptions(ctx.ai, sanitizeProject(proj), String(request ?? ''), Math.max(2, Math.min(20, Number(lines) || 6))));
   handle('studio:ai:postCaption', (_e, proj: unknown) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     return postCaption(ctx.ai, project, getFormat(project.format));
   });
   handle('studio:ai:pickClips', async (_e, proj: unknown, seconds: number) => {
-    const project = sanitizeProject(proj);
+    const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const fmt = getFormat(project.format);
     const all = listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
     const ids = await pickClips(ctx.ai, all, fmt, project.style.name, Number(seconds) || fmt.idealSeconds[1]);
@@ -303,24 +310,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count: 5 }),
   );
   handle('studio:ideas:apply', (_e, idea: ReelIdea) => {
-    if (!idea || typeof idea !== 'object' || !Array.isArray(idea.clipIds)) throw new Error('Not an idea');
-    const byId = new Map<string, ClipSidecar>(libraryClips().map((c) => [c.id, c]));
-    const clips = idea.clipIds.map((id) => byId.get(id)).filter((c): c is ClipSidecar => !!c).map(reelClipFromSidecar);
-    if (!clips.length) throw new Error('The clips for this idea are no longer in your library.');
-    const fmt = getFormat(idea.format);
-    const proj = createProject({ name: String(idea.title ?? 'Reel idea').slice(0, 60), format: fmt.id, styleId: idea.styleId });
-    proj.clips = clips;
-    proj.order = 'manual';
-    proj.captions = (Array.isArray(idea.captions) ? idea.captions : []).filter((x) => typeof x === 'string' && x.trim()).slice(0, 14).map((text) => ({ text }));
-    const hook = hookText(idea.hook);
-    // About 1.6 s per hook line, so each one can be read.
-    proj.intro = null;
-    proj.outro = null;
-    proj.captions = [];
-    if (typeof idea.postCaption === 'string') proj.caption = idea.postCaption.slice(0, 2200);
-    const t = idea.music?.trackId ? music().get(idea.music.trackId) : undefined;
-    if (t) proj.music = { trackId: t.id, file: t.file, title: t.title, start: 'auto' };
-    return store().save(proj);
+    return store().save(projectFromIdea(idea, libraryClips(), music().list()));
   });
 
   // ---------- royalty-free music and pictures ----------

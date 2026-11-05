@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../../shared/types';
-import type { CaptionLine, FormatId, IntroCard, ReelClip, ReelProject } from '../../shared/studio';
+import type { CaptionLine, FormatId, IntroCard, MusicTrack, ReelClip, ReelIdea, ReelProject } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
 
@@ -21,6 +21,7 @@ export function reelClipFromSidecar(c: ClipSidecar): ReelClip {
     .filter((t) => t > 0 && t < dur)
     .sort((a, b) => a - b);
   return {
+    sourceFingerprint: sourceFingerprint(c),
     uid: newId(),
     clipId: c.id,
     videoFile: c.videoFile,
@@ -44,6 +45,33 @@ export function reelClipFromSidecar(c: ClipSidecar): ReelClip {
   };
 }
 
+function sourceFingerprint(c: ClipSidecar): string {
+  return crypto.createHash('sha256').update(JSON.stringify([c.videoFile,c.durationMs,c.startTimeEpoch,c.events,c.video])).digest('hex').slice(0,24);
+}
+
+/** Refresh stale source facts while preserving valid user trims and crop/mix choices. */
+export function reconcileProjectSources(project: ReelProject, library: ClipSidecar[]): ReelProject {
+  const byFile = new Map(library.map(c => [path.resolve(c.videoFile), c]));
+  const warnings = new Set(project.sourceWarnings ?? []);
+  const clips = project.clips.map(clip => {
+    const source = byFile.get(path.resolve(clip.videoFile));
+    if (!source) {
+      warnings.add(`Source unavailable in the clip library: ${path.basename(clip.videoFile)}. Replace or remove this clip before rendering.`);
+      return clip;
+    }
+    const fresh = reelClipFromSidecar(source);
+    const changed = clip.sourceFingerprint ? clip.sourceFingerprint !== fresh.sourceFingerprint
+      : Math.abs(clip.durationSec - fresh.durationSec) > .05 || clip.width !== fresh.width || clip.height !== fresh.height;
+    if (!changed) return {...clip,sourceFingerprint:fresh.sourceFingerprint};
+    warnings.add(`Source changed: ${path.basename(clip.videoFile)}. Kill markers and duration were refreshed; review the trim.`);
+    const validTrim = clip.in < fresh.durationSec && clip.out > clip.in;
+    return {...clip,sourceFingerprint:fresh.sourceFingerprint,durationSec:fresh.durationSec,width:fresh.width,height:fresh.height,
+      fps:fresh.fps,hits:fresh.hits,kills:fresh.kills,hero:fresh.hero,tags:fresh.tags,score:fresh.score,hasMic:fresh.hasMic,
+      in:validTrim ? Math.max(0,clip.in) : 0,out:validTrim ? Math.min(fresh.durationSec,clip.out) : fresh.durationSec};
+  });
+  return {...project,clips,sourceWarnings:[...warnings]};
+}
+
 export function createProject(opts: { name?: string; format?: FormatId; styleId?: string } = {}): ReelProject {
   const format = getFormat(opts.format ?? 'tiktok');
   const style = getStyle(opts.styleId ?? 'story');
@@ -64,6 +92,39 @@ export function createProject(opts: { name?: string; format?: FormatId; styleId?
     captions: [],
     intro: null,
   };
+}
+
+/** Apply an AI edit plan to trusted library sources, never to paths supplied by the model. */
+export function projectFromIdea(idea: ReelIdea, library: ClipSidecar[], tracks: MusicTrack[]): ReelProject {
+  if (!idea || !Array.isArray(idea.clipIds)) throw new Error('Not an edit plan.');
+  const byId = new Map(library.map(c => [c.id, c]));
+  const used = new Set<string>();
+  const clips = idea.clipIds.map(id => {
+    const source = byId.get(id);
+    if (!source || used.has(id)) throw new Error('The edit plan selects an unavailable or repeated clip.');
+    used.add(id);
+    const clip = reelClipFromSidecar(source);
+    const edit = idea.clipEdits?.find(e => e.clipId === id);
+    if (edit) {
+      if (!Number.isFinite(edit.in) || !Number.isFinite(edit.out) || edit.in < 0 || edit.out > clip.durationSec + 0.001 || edit.out <= edit.in) throw new Error('The edit plan contains an invalid source trim.');
+      if (clip.hits.some(hit => hit <= edit.in + 0.05 || hit >= edit.out - 0.02)) throw new Error('The requested trim removes a marked kill from a streak. Choose another clip or revise the trim.');
+      clip.in = edit.in;
+      clip.out = Math.min(edit.out, clip.durationSec);
+    }
+    return clip;
+  });
+  if (!clips.length) throw new Error('The edit plan contains no clips.');
+  const project = createProject({name:idea.title, format:idea.format, styleId:idea.styleId});
+  project.clips = clips;
+  project.targetSeconds = idea.targetSeconds;
+  project.caption = idea.postCaption;
+  const track = tracks.find(t => t.id === idea.music?.trackId);
+  if (track) {
+    const start = idea.music.start ?? 'auto';
+    if (typeof start === 'number' && (!Number.isFinite(start) || start < 0 || (track.analysis && start >= track.analysis.durationSec))) throw new Error('The music start is outside the imported song.');
+    project.music = {trackId:track.id, file:track.file, title:track.title, start};
+  }
+  return sanitizeProject(project);
 }
 
 /** Hook text: up to 4 lines of up to 80 characters each. */
@@ -91,6 +152,7 @@ function sanitizeClip(c: any): ReelClip | null {
     clipId: String(c.clipId ?? '').slice(0, 200),
     videoFile: c.videoFile,
     hero: typeof c.hero === 'string' ? c.hero.slice(0, 60) : undefined,
+    sourceFingerprint: typeof c.sourceFingerprint === 'string' ? c.sourceFingerprint.slice(0,64) : undefined,
     map: typeof c.map === 'string' ? c.map.slice(0, 80) : undefined,
     kills: num(c.kills, 0, 99, 0),
     score: num(c.score, -1e6, 1e6, 0),
@@ -151,6 +213,8 @@ export function sanitizeProject(p: any): ReelProject {
     format,
     fps: f.fpsOptions.includes(Number(p.fps)) ? Number(p.fps) : f.fps,
     style,
+    targetSeconds: Number.isFinite(p.targetSeconds) && p.targetSeconds >= 1 ? Math.min(f.maxSeconds, Number(p.targetSeconds)) : undefined,
+    sourceWarnings: Array.isArray(p.sourceWarnings) ? p.sourceWarnings.filter((x:unknown):x is string=>typeof x==='string').slice(0,80).map((x:string)=>x.slice(0,500)) : [],
     clips: (Array.isArray(p.clips) ? p.clips : []).map(sanitizeClip).filter((c: ReelClip | null): c is ReelClip => !!c).slice(0, 80),
     music,
     mix: sanitizeMix(p.mix, style.mix),
