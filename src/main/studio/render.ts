@@ -178,14 +178,17 @@ export function feedPanel(box: { width: number; height: number }): { x: number; 
  * Keep the rows that are on screen when the feed last changes until the clip ends, so the feed never
  * empties mid-clip. Rows that end because newer rows push them down are left as they are.
  */
-export function holdLastRows(rows: FeedRow[], span: number): FeedRow[] {
+export function holdLastRows(rows: FeedRow[], span: number): Array<FeedRow & { freezeAt?: number }> {
   // A row whose end is followed within half a second by any row starting was pushed down (or replaced):
   // leave it. A row that simply stops (expired, or the clip's footage ends) is held to the end.
+  // A held row shows its last good picture, frozen: the slot itself may already show scenery or
+  // someone else's row by then.
+  const freeze = (r: FeedRow, to: number) => ({ ...r, to, freezeAt: Math.max(r.from, r.to - 0.15) });
   return rows.map((r) => {
     // Sliding down a slot: keep it in its old slot until it shows up in the next one, so it never blinks out.
     const next = rows.find((o) => o.slot === r.slot + 1 && o.from > r.to && o.from <= r.to + 0.5);
-    if (next) return { ...r, to: next.from };
-    return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : { ...r, to: span };
+    if (next) return freeze(r, next.from);
+    return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : freeze(r, span);
   });
 }
 
@@ -228,7 +231,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 18, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 19, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -282,7 +285,8 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
         const h = Math.max(2, yEnd - y);
         const py = Math.max(0, y - pad / 2);
         const ph = Math.min(box.height - py, h + (y - py) + pad / 2);
-        lines.push(`[fr${i}]crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${w + pad}:h=${ph}:x=${pad}:y=${y - py}:color=black[frc${i}]`);
+        const hold = r.freezeAt !== undefined ? `trim=end=${r6(r.freezeAt)},tpad=stop_mode=clone:stop_duration=${r6(span)},` : '';
+        lines.push(`[fr${i}]${hold}crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${w + pad}:h=${ph}:x=${pad}:y=${y - py}:color=black[frc${i}]`);
         const next = `fo${i}`;
         lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
         cur = next;

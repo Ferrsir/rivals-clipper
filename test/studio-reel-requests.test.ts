@@ -299,3 +299,23 @@ test('song start and end times in a prompt are read, and not taken as the reel l
   const c = readIntent('song from 48 seconds');
   assert.deepEqual([c.seconds, c.songStart], [undefined, 48]);
 });
+
+test('a held feed row keeps its own picture after the game replaces it', { skip: !available }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-held-row-'));
+  try {
+    const source = path.join(dir, 's.mp4');
+    // A white "own" row in slot 0 until 1 s, then an orange "teammate" row in the same place.
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=0x3070c0:s=1000x500:r=30:d=3', '-vf', "drawbox=x=800:y=14:w=180:h=12:c=white:t=fill:enable='lt(t,1)',drawbox=x=800:y=14:w=180:h=12:c=orange:t=fill:enable='gte(t,1)'", '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
+    const clip = { uid: 'h', clipId: 'h', videoFile: source, durationSec: 3, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.3], in: 0, out: 3, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
+      feedRows: [{ slot: 0, from: 0.2, to: 0.9, x0: 0.15 }] };
+    const size = { width: 320, height: 320 };
+    const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'h', clipIndex: 0, kind: 'lead', src: [0.1, 2.5], out: [0, 2.4], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
+    const rgb = execFileSync(ffmpeg, ['-v', 'error', '-ss', '1.8', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
+    const box = feedBox(size);
+    const fx = (900 - (1000 - 500 * 0.49)) / (500 * 0.454), fy = (20 - 12.5) / 55;
+    const i = (Math.round(box.y + fy * box.height) * 320 + Math.round(box.x + fx * box.width)) * 3;
+    const px = [...rgb.subarray(i, i + 3)];
+    assert.ok(px.every((v) => v > 200), `held row still shows your white row, not the teammate's: ${px}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
