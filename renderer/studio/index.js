@@ -401,8 +401,9 @@ async function removeReels(ids) {
   const names = S.projects.filter((x) => ids.includes(x.id)).map((x) => `"${x.name}"`);
   const what = ids.length === 1 ? names[0] ?? 'this reel' : `${ids.length} reels`;
   if (!confirm(`Delete ${what}? Your clips and exported videos are kept.`)) return false;
-  const current = ids.includes(S.project?.id);
-  if (current) saveSoon.cancel();
+  const current = S.project?.id;
+  const unsaved = ids.includes(current) && saveSoon.pending();
+  if (ids.includes(current)) saveSoon.cancel();
   else if (saveSoon.pending()) saveSoon.flush();
   for (const id of ids) {
     try {
@@ -412,8 +413,12 @@ async function removeReels(ids) {
       toast(root, `Couldn't delete a reel: ${err.message}`, 'error', 7000);
     }
   }
-  if (current) await openProject(S.projects[0]?.id);
-  else renderTop();
+  // Only leave the open reel if it really went; otherwise keep it and its unsaved edits.
+  if (ids.includes(current) && !S.projects.some((x) => x.id === current)) await openProject(S.projects[0]?.id);
+  else {
+    if (unsaved) saveSoon();
+    renderTop();
+  }
   return true;
 }
 
