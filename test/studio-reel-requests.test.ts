@@ -320,3 +320,12 @@ test('a held feed row keeps its own picture after the game replaces it', { skip:
     assert.ok(px.every((v) => v > 200), `held row still shows your white row, not the teammate's: ${px}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the live kill-feed box has no border unless it is turned on', () => {
+  const clip = { uid: 'b', clipId: 'b', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
+  const opts = { clip, audioCount: 0, segments: [{ clipUid: 'b', clipIndex: 0, kind: 'lead' as const, src: [0.5, 2.5] as [number, number], out: [0, 2] as [number, number], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() };
+  assert.doesNotMatch(buildClipJob(opts).filter, /color=black@0\.8/);
+  assert.match(buildClipJob({ ...opts, feedBorder: true }).filter, /color=black@0\.8/);
+  assert.equal(sanitizeProject({ ...createProject(), feedBorder: true }).feedBorder, true);
+  assert.equal(sanitizeProject(createProject()).feedBorder, undefined);
+});

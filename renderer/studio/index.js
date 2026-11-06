@@ -1382,6 +1382,7 @@ function stylePanel() {
     toggle({ label: 'Colour split on kills', checked: st.rgbSplit.on, onChange: (v) => setR((s) => (s.rgbSplit.on = v)) }),
     toggle({ label: 'Motion blur on speed-ups', checked: st.motionBlur.on, onChange: (v) => setR((s) => (s.motionBlur.on = v)) }),
     h('h3', {}, 'Look'),
+    toggle({ label: 'Border around the kill feed', checked: !!S.project.feedBorder, onChange: (v) => change((pr) => (pr.feedBorder = v)), hint: 'A thin dark frame around the kill-feed box. Off shows the game\'s feed corner as it is.' }),
     select({ label: 'Between clips', value: st.transition, options: [['cut', 'Hard cut'], ['flash', 'White flash'], ['dip', 'Dip to black'], ['whip', 'Whip (zoom + shake)']], onChange: (v) => setR((s) => (s.transition = v)) }),
     slider({ label: 'Contrast', min: 0.8, max: 1.4, step: 0.01, value: st.grade.contrast, format: (v) => v.toFixed(2), onInput: (v) => set((s) => (s.grade.contrast = v)) }),
     slider({ label: 'Saturation', min: 0.5, max: 1.6, step: 0.01, value: st.grade.saturation, format: (v) => v.toFixed(2), onInput: (v) => set((s) => (s.grade.saturation = v)) }),

@@ -110,7 +110,8 @@ export function feedCropFilter(): string {
  * game draws it, every row included, pinned top right for the whole reel. Source-height units from the
  * right edge; a little taller and wider than the rows so they sit in their own space.
  */
-export const INSET_REGION = { right: 0.012, width: 0.48, y0: 0, y1: 0.17 };
+// y0 skips the dark strip along the very top of the game's frame.
+export const INSET_REGION = { right: 0.012, width: 0.48, y0: 0.02, y1: 0.17 };
 
 export function insetCropFilter(): string {
   const r = INSET_REGION;
@@ -244,6 +245,7 @@ export function hashOf(v: unknown): string {
 interface ClipJobOpts {
   overlays?: ImageOverlay[];
   feedStyle?: 'live' | 'own';
+  feedBorder?: boolean;
   audioCount?: number;
   clip: ReelClip;
   segments: TimelineSegment[];
@@ -259,7 +261,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 23, fs: o.feedStyle, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 24, fs: o.feedStyle, fb: !!o.feedBorder, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -293,7 +295,8 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     if (o.feedStyle !== 'own') {
       const inset = insetBox(size);
       lines.push(`${src}split=2[gameSrc][feedSrc]`);
-      lines.push(`[feedSrc]${insetCropFilter()},scale=${inset.width}:${inset.height}:flags=bicubic,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.8:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
+      const frame = o.feedBorder ? `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.8:t=${Math.max(2, Math.round(size.width / 360))},` : '';
+      lines.push(`[feedSrc]${insetCropFilter()},scale=${inset.width}:${inset.height}:flags=bicubic,${frame}setsar=1[feed]`);
       lines.push(`[gameSrc]${gameplay}[gamePicture]`);
       lines.push(`[gamePicture][feed]overlay=x=${inset.x}:y=${inset.y}:eval=init,${split}`);
     } else if (rows) {

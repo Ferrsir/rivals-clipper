@@ -242,6 +242,8 @@ export interface ReelProject {
   targetSeconds?: number;
   /** Kill feed box: 'live' shows the game's own feed area as it is (default, like the reference edits); 'own' shows only your rows. */
   feedStyle?: 'live' | 'own';
+  /** A thin dark frame around the live kill-feed box (off by default). */
+  feedBorder?: boolean;
   clips: ReelClip[];
   music: ReelMusic | null;
   mix: Mix;

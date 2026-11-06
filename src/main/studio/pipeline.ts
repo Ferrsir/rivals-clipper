@@ -272,7 +272,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
-      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedStyle: project.feedStyle, overlays: project.overlays, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
+      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedStyle: project.feedStyle, feedBorder: project.feedBorder, overlays: project.overlays, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
     });
 
     const clipShare = 0.6;
