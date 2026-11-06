@@ -165,6 +165,23 @@ export function ownRowWindows(rows: FeedRow[] | undefined, offset: number, span:
     .slice(0, 24);
 }
 
+/** The always-on panel behind the top row: the width of a typical row, one plate tall, flush right. */
+export const FEED_PANEL = { left: 0.3, opacity: 0.5 };
+export function feedPanel(box: { width: number; height: number }): { x: number; y: number; w: number; h: number } {
+  const x = Math.floor((box.width * FEED_PANEL.left) / 2) * 2;
+  const y = Math.max(0, Math.floor(((FEED_ROW.first - FEED_ROW.margin) * box.height) / 2) * 2);
+  const h = Math.ceil(((FEED_ROW.height + 2 * FEED_ROW.margin) * box.height) / 2) * 2;
+  return { x, y, w: box.width - x, h };
+}
+
+/**
+ * Keep the rows that are on screen when the feed last changes until the clip ends, so the feed never
+ * empties mid-clip. Rows that end because newer rows push them down are left as they are.
+ */
+export function holdLastRows(rows: FeedRow[], span: number): FeedRow[] {
+  return rows.map((r) => (rows.some((o) => o.from > r.to - 1e-6) ? r : { ...r, to: span }));
+}
+
 /** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
 export function feedAlphaExpr(windows: [number, number][]): string {
   if (!windows.length) return '0';
@@ -204,7 +221,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 15, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 16, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -228,22 +245,24 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   if (size.height >= size.width && clip.preserveKillFeed !== false) {
     // The whole source kill feed, cropped as one box (rows and the darkened scenery behind them),
     // pinned to the top-right corner for the entire clip, like the reference edits.
-    // It shows only while the game's feed has rows (from just before a kill until its row leaves),
-    // fading in and out, so the reel never opens on an empty black plate.
+    // Unscanned clips (no feedRows) fall back to showing the darkened feed around each kill.
     const box = feedBox(size);
     const span = s1 - s0 + 0.3;
     const rows = ownRowWindows(clip.feedRows, s0, span);
     const windows = rows ? mergeWindows(rows.map((r) => [r.from, r.to])) : feedWindows(clip.hits ?? [], s0, span);
     const border = `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))}`;
     const fade = `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`;
-    if (rows?.length) {
+    if (rows) {
       // Only your rows, cut out at their plate edges, each on its own black backing: no scenery, no
-      // other players' rows, no empty plate. The rest of the box is transparent.
+      // other players' rows. The feed stays on screen the whole reel: a dark panel where the top row
+      // sits, and your latest rows held to the end of the clip instead of popping in and out.
+      const held = holdLastRows(rows, span);
       lines.push(`${src}split=2[gameSrc][feedSrc]`);
-      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${rows.length + 1}[fbg]${rows.map((_, i) => `[fr${i}]`).join('')}`);
+      lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${held.length + 1}[fbg]${held.map((_, i) => `[fr${i}]`).join('')}`);
       let cur = 'fbase';
-      lines.push(`[fbg]colorchannelmixer=aa=0[${cur}]`);
-      rows.forEach((r, i) => {
+      const panel = feedPanel(box);
+      lines.push(`[fbg]colorchannelmixer=aa=0,drawbox=x=${panel.x}:y=${panel.y}:w=${panel.w}:h=${panel.h}:color=black@${FEED_PANEL.opacity}:t=fill,setsar=1[${cur}]`);
+      held.forEach((r, i) => {
         // Each plate's fixed place in its slot (measured), with a thin black frame so its edges are clean.
         const top = FEED_ROW.first + r.slot * FEED_ROW.pitch - FEED_ROW.margin;
         const y = Math.max(0, Math.floor((top * box.height) / 2) * 2);
@@ -259,7 +278,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
         lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
         cur = next;
       });
-      lines.push(`[${cur}]geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${feedAlphaExpr(windows).replace(/^255\*/, '')}',setsar=1[feed]`);
+      lines.push(`[${cur}]setsar=1[feed]`);
       lines.push(`[gameSrc]${gameplay}[gamePicture]`);
       lines.push(`[gamePicture][feed]overlay=x=${box.x}:y=${box.y}:eval=init,${split}`);
     } else if (!rows && windows.length) {

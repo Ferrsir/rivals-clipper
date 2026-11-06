@@ -271,3 +271,29 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     assert.ok(!at(770, 20).every((v) => v < 40), `left of your row the game shows through: ${at(770, 20)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the kill feed stays on screen: your latest rows are held, and a panel is always there', async () => {
+  const { holdLastRows, buildClipJob } = await import('../src/main/studio/render');
+  const rows = [
+    { slot: 0, from: 1.9, to: 3.6, x0: 0.38 },
+    { slot: 1, from: 3.6, to: 6.1, x0: 0.38 },
+    { slot: 0, from: 3.9, to: 6.4, x0: 0.3 },
+  ];
+  const held = holdLastRows(rows, 9);
+  assert.equal(held[0].to, 3.6, 'a row pushed down by a newer one is not held');
+  assert.deepEqual([held[1].to, held[2].to], [9, 9], 'the last rows stay until the clip ends');
+  const clip = { uid: 'p', clipId: 'p', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [], feedRows: [] };
+  const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
+  assert.match(job.filter, /drawbox=[^;]*color=black@0\.5:t=fill/, 'panel drawn even before any row of yours');
+  assert.doesNotMatch(job.filter, /enable='between/, 'and nothing switches on or off');
+});
+
+test('song start and end times in a prompt are read, and not taken as the reel length', async () => {
+  const { readIntent } = await import('../src/main/studio/intent');
+  const a = readIntent('make it 20 seconds and start the song at 0:56');
+  assert.deepEqual([a.seconds, a.songStart, a.songEnd], [20, 56, undefined]);
+  const b = readIntent('20s reel, end the song at 1:12.5 where the hey hey hey part ends');
+  assert.deepEqual([b.seconds, b.songStart, b.songEnd], [20, undefined, 72.5]);
+  const c = readIntent('song from 48 seconds');
+  assert.deepEqual([c.seconds, c.songStart], [undefined, 48]);
+});

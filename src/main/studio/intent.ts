@@ -14,6 +14,32 @@ export interface PromptIntent {
   voices: boolean;
   /** A picture should go over someone's face. */
   faceOverlay: boolean;
+  /** "start the song at 0:56": seconds into the song where the reel starts. */
+  songStart?: number;
+  /** "end the song at 1:12": seconds into the song where the reel ends. */
+  songEnd?: number;
+}
+
+const TIME = String.raw`(\d{1,2}:\d{2}(?:\.\d+)?|\d{1,3}(?:\.\d+)?\s*(?:s|secs?|seconds?)\b)`;
+const START_RE = new RegExp(String.raw`\b(?:(?:start|begin)\w*\s+(?:the\s+)?(?:song|music|track|audio)\s+(?:at|from)|(?:song|music|track|audio)\s+(?:from|starting at|starts at))\s+` + TIME, 'i');
+const END_RE = new RegExp(String.raw`\b(?:(?:end|stop|finish)\w*\s+(?:the\s+)?(?:song|music|track|audio|reel|video|it)\s+(?:at|on)|(?:song|music|track|audio)\s+(?:until|till|to|ending at|ends at))\s+` + TIME, 'i');
+
+const toSeconds = (v: string) => {
+  const m = v.match(/^(\d+):(\d{2}(?:\.\d+)?)$/);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : parseFloat(v);
+};
+
+/** Song times named in a prompt, and the prompt with them removed (so "at 56 seconds" isn't read as the reel length). */
+export function songTimes(text: string): { start?: number; end?: number; rest: string } {
+  let rest = text;
+  let start: number | undefined;
+  let end: number | undefined;
+  const a = rest.match(START_RE);
+  if (a) { start = toSeconds(a[1].trim()); rest = rest.replace(a[0], ' '); }
+  const b = rest.match(END_RE);
+  if (b) { end = toSeconds(b[1].trim()); rest = rest.replace(b[0], ' '); }
+  const ok = (v?: number) => (v !== undefined && Number.isFinite(v) && v >= 0 && v < 3600 ? v : undefined);
+  return { start: ok(start), end: ok(end), rest };
 }
 
 const clean = (s: string) => s.replace(/^["'“”‘’\s]+|["'“”‘’\s.,!?;:]+$/g, '').trim();
@@ -37,9 +63,12 @@ export function songFromPrompt(text: string): string | undefined {
 }
 
 export function readIntent(text: string): PromptIntent {
-  const t = text.toLowerCase();
+  const times = songTimes(text);
+  const t = times.rest.toLowerCase();
   return {
-    seconds: requestedSeconds(text),
+    seconds: requestedSeconds(times.rest),
+    songStart: times.start,
+    songEnd: times.end,
     song: songFromPrompt(text),
     subtitles: /\b(subtitles?|subs|captions?|closed captions)\b/.test(t),
     voices: /\b(ai voices?|voice ?overs?|voiced|tts|text to speech|dub(bed|bing)?|narrat\w*)\b|\bvoices? for\b|\b(have|make|let) (them|him|her|both|the characters?) (talk|speak|say|argue|trash talk)|\bthem talking\b/.test(t),
