@@ -314,11 +314,15 @@ function renderTop() {
           const created = await api.projects.create({ format: p.format, styleId: p.style.id });
           S.projects.unshift({ id: created.id, name: created.name, updatedAt: created.updatedAt, clips: 0 });
           await openProject(created.id);
+        } else if (e.target.value === '__manage') {
+          e.target.value = p.id;
+          openManageReels();
         } else await openProject(e.target.value);
       },
     },
-    S.projects.map((x) => h('option', { value: x.id, selected: x.id === p.id }, x.name)),
+    S.projects.map((x) => h('option', { value: x.id, selected: x.id === p.id }, reelLabel(x))),
     h('option', { value: '__new' }, '+ New reel'),
+    S.projects.length > 1 ? h('option', { value: '__manage' }, 'Remove old reels…') : null,
   );
   const name = h('input', {
     class: 'st-name',
@@ -378,17 +382,87 @@ function renderTop() {
         S.projects.unshift({ id: d.id, name: d.name, updatedAt: d.updatedAt, clips: d.clips.length });
         await openProject(d.id);
       } }, 'Duplicate'),
-      h('button', { title: 'Delete this reel (your clips and exports stay)', onclick: async () => {
-        if (!confirm(`Delete "${p.name}"? Your clips and exported videos are kept.`)) return;
-        saveSoon.cancel();
-        await api.projects.remove(p.id);
-        S.projects = S.projects.filter((x) => x.id !== p.id);
-        await openProject(S.projects[0]?.id);
-      } }, 'Delete'),
+      h('button', { title: 'Delete this reel (your clips and exports stay)', onclick: () => removeReels([p.id]) }, 'Delete'),
     ),
     h('button', { class: 'st-btn', disabled: rendering || !p.clips.length || !S.init.ffmpeg.ok, onclick: () => startRender({ preview: true }) }, 'Preview'),
     h('button', { class: 'st-btn primary', disabled: rendering || !p.clips.length || !S.init.ffmpeg.ok, onclick: openExport }, 'Export'),
   );
+}
+
+/** A reel's name in the picker, with its date when another reel has the same name. */
+function reelLabel(x) {
+  const twin = S.projects.some((y) => y.id !== x.id && y.name.trim() === x.name.trim());
+  return twin ? `${x.name} (${new Date(x.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })})` : x.name;
+}
+
+/** Delete reel projects after one confirm. Clips and exported videos are never touched. */
+async function removeReels(ids) {
+  if (!ids.length) return false;
+  const names = S.projects.filter((x) => ids.includes(x.id)).map((x) => `"${x.name}"`);
+  const what = ids.length === 1 ? names[0] ?? 'this reel' : `${ids.length} reels`;
+  if (!confirm(`Delete ${what}? Your clips and exported videos are kept.`)) return false;
+  const current = S.project?.id;
+  const unsaved = ids.includes(current) && saveSoon.pending();
+  if (ids.includes(current)) saveSoon.cancel();
+  else if (saveSoon.pending()) saveSoon.flush();
+  for (const id of ids) {
+    try {
+      await api.projects.remove(id);
+      S.projects = S.projects.filter((x) => x.id !== id);
+    } catch (err) {
+      toast(root, `Couldn't delete a reel: ${err.message}`, 'error', 7000);
+    }
+  }
+  // Only leave the open reel if it really went; otherwise keep it and its unsaved edits.
+  if (ids.includes(current) && !S.projects.some((x) => x.id === current)) await openProject(S.projects[0]?.id);
+  else {
+    if (unsaved) saveSoon();
+    renderTop();
+  }
+  return true;
+}
+
+/** A list of every reel with checkboxes, to clear out old ones in one go. */
+function openManageReels() {
+  const picked = new Set();
+  const close = () => wrap.remove();
+  const count = h('span', { class: 'st-note' });
+  const del = h('button', { class: 'st-btn danger', disabled: true }, 'Delete selected');
+  const sync = () => {
+    del.disabled = !picked.size;
+    del.textContent = picked.size ? `Delete ${picked.size} selected` : 'Delete selected';
+    count.textContent = `${S.projects.length} reels`;
+  };
+  const list = h(
+    'div',
+    { class: 'st-reel-list' },
+    S.projects.map((x) =>
+      h(
+        'label',
+        { class: 'st-reel-row' },
+        h('input', { type: 'checkbox', onchange: (e) => (e.target.checked ? picked.add(x.id) : picked.delete(x.id), sync()) }),
+        h('span', { class: 'st-reel-name' }, x.name, x.id === S.project?.id ? h('em', {}, ' (open now)') : null),
+        h('span', { class: 'st-note' }, `${x.clips} clip${x.clips === 1 ? '' : 's'} · ${new Date(x.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`),
+      ),
+    ),
+  );
+  del.onclick = async () => {
+    if (await removeReels([...picked])) close();
+  };
+  const wrap = h(
+    'div',
+    { class: 'st-modal', onclick: (e) => e.target === wrap && close() },
+    h(
+      'div',
+      { class: 'st-dialog' },
+      h('div', { class: 'st-row' }, h('h2', {}, 'Remove old reels'), h('div', { class: 'st-spacer' }), h('button', { class: 'st-x', title: 'Close', onclick: close }, '×')),
+      h('p', { class: 'st-note' }, 'Only the reel projects are deleted. Your clips and exported videos stay where they are.'),
+      list,
+      h('div', { class: 'st-row' }, count, h('div', { class: 'st-spacer' }), h('button', { class: 'st-btn', onclick: close }, 'Cancel'), del),
+    ),
+  );
+  sync();
+  root.append(wrap);
 }
 
 // ---------- left: clips and music ----------

@@ -1,7 +1,7 @@
 {
   "name": "rivals-clipper",
   "productName": "Rivals Clipper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Auto-clips Marvel Rivals kills and streaks, stores and ranks highlights, and (soon) turns them into reels.",
   "author": {
     "name": "Ferris"

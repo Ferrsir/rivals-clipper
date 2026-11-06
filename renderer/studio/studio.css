@@ -188,6 +188,11 @@
 .st-modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 20; }
 .st-dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; width: min(440px, 92%); max-height: 90%; overflow: auto; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
 .st-dialog h2 { margin: 0; }
+.st-reel-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.st-reel-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.st-reel-row:hover { background: rgba(255, 255, 255, 0.05); }
+.st-reel-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-reel-name em { color: var(--muted); font-style: normal; }
 .st-dialog .st-field { margin-top: 4px; }
 
 /* Toasts */
