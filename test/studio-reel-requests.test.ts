@@ -257,7 +257,7 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     const clip = { uid: 'r', clipId: 'r', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
       feedRows: [{ slot: 0, from: 0, to: 2, x0: 0.15 }] };
     const size = { width: 320, height: 320 };
-    const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ff, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
     const rgb = execFileSync(ff, ['-v', 'error', '-ss', '0.5', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
     const box = feedBox(size);
@@ -286,7 +286,7 @@ test('the kill feed stays on screen: your latest rows are held, and a panel is a
   assert.ok(Math.abs(slid[0].to - 2.37) < 1e-9, 'a row sliding down stays in its old slot until just before it has settled in the next');
   assert.equal(slid[1].from, 2.4);
   const clip = { uid: 'p', clipId: 'p', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [], feedRows: [] };
-  const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
+  const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
   assert.match(job.filter, /geq=r='0':g='0':b='0':a='128\*between/, 'panel drawn even before any row of yours');
   assert.doesNotMatch(job.filter, /enable='/, 'and nothing switches on or off');
 });
@@ -310,7 +310,7 @@ test('a held feed row keeps its own picture after the game replaces it', { skip:
     const clip = { uid: 'h', clipId: 'h', videoFile: source, durationSec: 3, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.3], in: 0, out: 3, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
       feedRows: [{ slot: 0, from: 0.2, to: 0.9, x0: 0.15 }] };
     const size = { width: 320, height: 320 };
-    const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'h', clipIndex: 0, kind: 'lead', src: [0.1, 2.5], out: [0, 2.4], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'h', clipIndex: 0, kind: 'lead', src: [0.1, 2.5], out: [0, 2.4], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
     const rgb = execFileSync(ffmpeg, ['-v', 'error', '-ss', '1.8', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
     const box = feedBox(size);

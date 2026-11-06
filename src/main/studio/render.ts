@@ -105,6 +105,28 @@ export function feedCropFilter(): string {
   return `crop=w=trunc(ih*${r6(r.width)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc((iw-ih*${r6(r.right + r.width)})/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
 }
 
+/**
+ * The live kill-feed inset (how the reference edits do it): the game's own feed corner, exactly as the
+ * game draws it, every row included, pinned top right for the whole reel. Source-height units from the
+ * right edge; a little taller and wider than the rows so they sit in their own space.
+ */
+export const INSET_REGION = { right: 0.012, width: 0.48, y0: 0, y1: 0.2 };
+
+export function insetCropFilter(): string {
+  const r = INSET_REGION;
+  return `crop=w=trunc(ih*${r6(r.width)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc((iw-ih*${r6(r.right + r.width)})/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
+}
+
+/** Size and place of the live inset: about a third of the width on square, flush top right. */
+export function insetBox(size: Size): { width: number; height: number; x: number; y: number } {
+  const r = INSET_REGION;
+  const portrait = size.height > size.width * 1.2;
+  const width = Math.round((size.width * (portrait ? 0.55 : 0.36)) / 2) * 2;
+  const height = Math.round((width * (r.y1 - r.y0)) / r.width / 2) * 2;
+  const y = portrait ? Math.round(size.height * 0.07) : 0;
+  return { width, height, x: size.width - width, y };
+}
+
 /** Size and place of the kill-feed box: flush with the top-right corner, big enough to read on a phone. */
 export function feedBox(size: Size): { width: number; height: number; x: number; y: number } {
   const r = FEED_REGION;
@@ -221,6 +243,7 @@ export function hashOf(v: unknown): string {
 
 interface ClipJobOpts {
   overlays?: ImageOverlay[];
+  feedStyle?: 'live' | 'own';
   audioCount?: number;
   clip: ReelClip;
   segments: TimelineSegment[];
@@ -236,7 +259,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 21, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 22, fs: o.feedStyle, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -267,7 +290,13 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     const windows = rows ? mergeWindows(rows.map((r) => [r.from, r.to])) : feedWindows(clip.hits ?? [], s0, span);
     const border = `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.55:t=${Math.max(2, Math.round(size.width / 360))}`;
     const fade = `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${feedAlphaExpr(windows)}',setsar=1[feed]`;
-    if (rows) {
+    if (o.feedStyle !== 'own') {
+      const inset = insetBox(size);
+      lines.push(`${src}split=2[gameSrc][feedSrc]`);
+      lines.push(`[feedSrc]${insetCropFilter()},scale=${inset.width}:${inset.height}:flags=bicubic,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.8:t=${Math.max(2, Math.round(size.width / 360))},setsar=1[feed]`);
+      lines.push(`[gameSrc]${gameplay}[gamePicture]`);
+      lines.push(`[gamePicture][feed]overlay=x=${inset.x}:y=${inset.y}:eval=init,${split}`);
+    } else if (rows) {
       // Only your rows, cut out at their plate edges, each on its own black backing: no scenery, no
       // other players' rows. The feed stays on screen the whole reel: a dark panel where the top row
       // sits, and your latest rows held to the end of the clip instead of popping in and out.

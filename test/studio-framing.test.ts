@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { semanticAnchors, trackClip } from '../src/main/studio/tracking';
-import { FEED_REGION, buildClipJob, feedBox } from '../src/main/studio/render';
+import { INSET_REGION as FEED_REGION, buildClipJob, insetBox as feedBox } from '../src/main/studio/render';
 import { getStyle } from '../src/main/studio/styles';
 import type { ReelClip } from '../src/shared/studio';
 

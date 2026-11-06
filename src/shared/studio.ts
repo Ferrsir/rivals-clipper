@@ -240,6 +240,8 @@ export interface ReelProject {
   style: StyleRecipe;
   /** Requested upper duration budget. A render must not silently discard kills to fit it. */
   targetSeconds?: number;
+  /** Kill feed box: 'live' shows the game's own feed area as it is (default, like the reference edits); 'own' shows only your rows. */
+  feedStyle?: 'live' | 'own';
   clips: ReelClip[];
   music: ReelMusic | null;
   mix: Mix;
