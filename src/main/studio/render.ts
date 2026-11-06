@@ -179,7 +179,9 @@ export function feedPanel(box: { width: number; height: number }): { x: number; 
  * empties mid-clip. Rows that end because newer rows push them down are left as they are.
  */
 export function holdLastRows(rows: FeedRow[], span: number): FeedRow[] {
-  return rows.map((r) => (rows.some((o) => o.from > r.to - 1e-6) ? r : { ...r, to: span }));
+  // A row whose end is followed within half a second by any row starting was pushed down (or replaced):
+  // leave it. A row that simply stops (expired, or the clip's footage ends) is held to the end.
+  return rows.map((r) => (rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : { ...r, to: span }));
 }
 
 /** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
@@ -221,7 +223,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 16, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 17, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -261,7 +263,9 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
       lines.push(`[feedSrc]${feedCropFilter()},scale=${box.width}:${box.height}:flags=bicubic,format=rgba,split=${held.length + 1}[fbg]${held.map((_, i) => `[fr${i}]`).join('')}`);
       let cur = 'fbase';
       const panel = feedPanel(box);
-      lines.push(`[fbg]colorchannelmixer=aa=0,drawbox=x=${panel.x}:y=${panel.y}:w=${panel.w}:h=${panel.h}:color=black@${FEED_PANEL.opacity}:t=fill,setsar=1[${cur}]`);
+      // geq sets alpha itself: drawbox on a transparent frame colours it but leaves it see-through.
+      const inPanel = `between(X,${panel.x},${panel.x + panel.w - 1})*between(Y,${panel.y},${panel.y + panel.h - 1})`;
+      lines.push(`[fbg]geq=r='0':g='0':b='0':a='${Math.round(255 * FEED_PANEL.opacity)}*${inPanel}',setsar=1[${cur}]`);
       held.forEach((r, i) => {
         // Each plate's fixed place in its slot (measured), with a thin black frame so its edges are clean.
         const top = FEED_ROW.first + r.slot * FEED_ROW.pitch - FEED_ROW.margin;

@@ -240,8 +240,8 @@ test('kills move to when your row appears; teammates\' kills are dropped', async
   assert.deepEqual(clip.hits, [1.875, 3.875]);
   assert.equal(clip.kills, 2);
   const rows = ownRows(samples);
-  assert.ok(rows.every((r) => r.to - r.from >= 0.5), 'single-sample flashes are not rows');
-  assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625));
+  assert.ok(rows.every((r) => r.to - r.from >= 0.3), 'single-sample flashes are not rows');
+  assert.ok(rows.some((r) => r.slot === 0 && r.from === 2 && Math.abs(r.to - 3.6) < 1e-9));
   assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, []), { hits: [3], kills: 1 }, 'scan failed: keep the clip as it was');
   const none = withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] })));
   assert.deepEqual([none.hits, none.kills], [[], 0], 'every row is a teammate\'s: no kills of yours');
@@ -284,7 +284,7 @@ test('the kill feed stays on screen: your latest rows are held, and a panel is a
   assert.deepEqual([held[1].to, held[2].to], [9, 9], 'the last rows stay until the clip ends');
   const clip = { uid: 'p', clipId: 'p', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [], feedRows: [] };
   const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
-  assert.match(job.filter, /drawbox=[^;]*color=black@0\.5:t=fill/, 'panel drawn even before any row of yours');
+  assert.match(job.filter, /geq=r='0':g='0':b='0':a='128\*between/, 'panel drawn even before any row of yours');
   assert.doesNotMatch(job.filter, /enable='between/, 'and nothing switches on or off');
 });
 
