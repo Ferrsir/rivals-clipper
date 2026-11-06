@@ -69,23 +69,30 @@ export function isOwnRow(s: SlotStats): boolean {
 
 /** Time spans (clip seconds) when each slot shows your row, with the leftmost edge it reached. */
 export function ownRows(samples: FeedSample[], fps = FEED_SAMPLE.fps): FeedRow[] {
-  const half = 0.5 / fps;
+  // A row shows from the first sample it is seen in until just after the last: between samples it may
+  // already be sliding to the next slot, and the fixed slot would then show scenery.
+  const step = 1 / fps;
   const rows: FeedRow[] = [];
   const slots = samples[0]?.own.length ?? 0;
   const edges = new Map<FeedRow, number[]>();
+  const seen = new Map<FeedRow, number>();
   for (let s = 0; s < slots; s++) {
     let cur: FeedRow | null = null;
+    let last = -Infinity;
     for (const smp of samples) {
       const x = smp.own[s];
       if (x != null) {
-        if (cur && smp.t - half <= cur.to + 1e-6) {
-          cur.to = smp.t + half;
+        if (cur && smp.t - last <= step + 1e-6) {
+          cur.to = smp.t + 0.4 * step;
         } else {
-          cur = { slot: s, from: Math.max(0, smp.t - half), to: smp.t + half, x0: x };
+          cur = { slot: s, from: smp.t, to: smp.t + 0.4 * step, x0: x };
           rows.push(cur);
           edges.set(cur, []);
+          seen.set(cur, 0);
         }
+        last = smp.t;
         edges.get(cur)!.push(x);
+        seen.set(cur, seen.get(cur)! + 1);
       } else cur = null;
     }
   }
@@ -95,7 +102,7 @@ export function ownRows(samples: FeedSample[], fps = FEED_SAMPLE.fps): FeedRow[]
     const xs = edges.get(r)!.sort((a, b) => a - b);
     r.x0 = xs[Math.floor(xs.length / 2)];
   }
-  return rows.filter((r) => r.to - r.from > 1.5 / fps).sort((a, b) => a.from - b.from || a.slot - b.slot);
+  return rows.filter((r) => seen.get(r)! >= 2).sort((a, b) => a.from - b.from || a.slot - b.slot);
 }
 
 /**

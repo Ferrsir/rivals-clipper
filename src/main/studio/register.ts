@@ -19,7 +19,7 @@ import { FORMATS, FORMAT_LIST, getFormat } from './formats';
 import { MusicLibrary } from './music-library';
 import { findFont, planFor, renderProject } from './pipeline';
 import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
-import { describeFit, fitToTarget, requestedSeconds } from './fit';
+import { describeFit, duration as reelSeconds, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
 import { scanClip, trimAround, type ClipScan } from './clip-filter';
 import { withFeedRows } from './feed-rows';
@@ -445,6 +445,22 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     project = fit.project;
     const fitNote = describeFit(fit, target);
     if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));
+    // "start the song at 0:56" / "end the song at 1:12": put the reel on the part of the song you want.
+    if (project.music && (intent.songStart !== undefined || intent.songEnd !== undefined)) {
+      // A new start moves the beat grid, which can change the reel's length: settle the end by replanning.
+      let length = fit.seconds;
+      let start = intent.songStart ?? Math.max(0, intent.songEnd! - length);
+      for (let i = 0; i < 4; i++) {
+        project.music = { ...project.music, start };
+        length = reelSeconds(project, analysisFor(project));
+        if (intent.songStart !== undefined) break;
+        const next = Math.max(0, intent.songEnd! - length);
+        if (Math.abs(next - start) < 0.02) break;
+        start = next;
+      }
+      const at = (v: number) => `${Math.floor(v / 60)}:${(v % 60).toFixed(1).padStart(4, '0')}`;
+      notes.push(`The song plays from ${at(start)} to ${at(start + length)}.`);
+    }
     if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
     const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
     if (faces.length && ctx.ai) {

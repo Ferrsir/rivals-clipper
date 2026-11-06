@@ -240,8 +240,8 @@ test('kills move to when your row appears; teammates\' kills are dropped', async
   assert.deepEqual(clip.hits, [1.875, 3.875]);
   assert.equal(clip.kills, 2);
   const rows = ownRows(samples);
-  assert.ok(rows.every((r) => r.to - r.from >= 0.5), 'single-sample flashes are not rows');
-  assert.ok(rows.some((r) => r.slot === 0 && r.from === 1.875 && r.to === 3.625));
+  assert.ok(rows.every((r) => r.to - r.from >= 0.3), 'single-sample flashes are not rows');
+  assert.ok(rows.some((r) => r.slot === 0 && r.from === 2 && Math.abs(r.to - 3.6) < 1e-9));
   assert.deepEqual(withFeedRows({ hits: [3], kills: 1 }, []), { hits: [3], kills: 1 }, 'scan failed: keep the clip as it was');
   const none = withFeedRows({ hits: [3], kills: 1 }, samples.map((s) => ({ ...s, own: [null, null, null] })));
   assert.deepEqual([none.hits, none.kills], [[], 0], 'every row is a teammate\'s: no kills of yours');
@@ -257,7 +257,7 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     const clip = { uid: 'r', clipId: 'r', videoFile: source, durationSec: 2, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.5], in: 0, out: 2, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
       feedRows: [{ slot: 0, from: 0, to: 2, x0: 0.15 }] };
     const size = { width: 320, height: 320 };
-    const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'r', clipIndex: 0, kind: 'lead', src: [0.4, 1.4], out: [0, 1], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
     execFileSync(ff, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
     const rgb = execFileSync(ff, ['-v', 'error', '-ss', '0.5', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
     const box = feedBox(size);
@@ -270,4 +270,62 @@ test('the feed box shows only your rows, on black', { skip: !available }, () => 
     assert.ok(other[2] > 90, `no black slab where you have no row (the game shows through): ${other}`);
     assert.ok(!at(770, 20).every((v) => v < 40), `left of your row the game shows through: ${at(770, 20)}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the kill feed stays on screen: your latest rows are held, and a panel is always there', async () => {
+  const { holdLastRows, buildClipJob } = await import('../src/main/studio/render');
+  const rows = [
+    { slot: 0, from: 1.9, to: 3.6, x0: 0.38 },
+    { slot: 1, from: 3.6, to: 6.1, x0: 0.38 },
+    { slot: 0, from: 3.9, to: 6.4, x0: 0.3 },
+  ];
+  const held = holdLastRows(rows, 9);
+  assert.equal(held[0].to, 3.6, 'a row pushed down by a newer one is not held');
+  assert.deepEqual([held[1].to, held[2].to], [9, 9], 'the last rows stay until the clip ends');
+  const slid = holdLastRows([{ slot: 0, from: 1, to: 2.1, x0: 0.4 }, { slot: 1, from: 2.3, to: 4, x0: 0.4 }], 6);
+  assert.ok(Math.abs(slid[0].to - 2.37) < 1e-9, 'a row sliding down stays in its old slot until just before it has settled in the next');
+  assert.equal(slid[1].from, 2.4);
+  const clip = { uid: 'p', clipId: 'p', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [], feedRows: [] };
+  const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
+  assert.match(job.filter, /geq=r='0':g='0':b='0':a='128\*between/, 'panel drawn even before any row of yours');
+  assert.doesNotMatch(job.filter, /enable='/, 'and nothing switches on or off');
+});
+
+test('song start and end times in a prompt are read, and not taken as the reel length', async () => {
+  const { readIntent } = await import('../src/main/studio/intent');
+  const a = readIntent('make it 20 seconds and start the song at 0:56');
+  assert.deepEqual([a.seconds, a.songStart, a.songEnd], [20, 56, undefined]);
+  const b = readIntent('20s reel, end the song at 1:12.5 where the hey hey hey part ends');
+  assert.deepEqual([b.seconds, b.songStart, b.songEnd], [20, undefined, 72.5]);
+  const c = readIntent('song from 48 seconds');
+  assert.deepEqual([c.seconds, c.songStart], [undefined, 48]);
+});
+
+test('a held feed row keeps its own picture after the game replaces it', { skip: !available }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-held-row-'));
+  try {
+    const source = path.join(dir, 's.mp4');
+    // A white "own" row in slot 0 until 1 s, then an orange "teammate" row in the same place.
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=0x3070c0:s=1000x500:r=30:d=3', '-vf', "drawbox=x=800:y=14:w=180:h=12:c=white:t=fill:enable='lt(t,1)',drawbox=x=800:y=14:w=180:h=12:c=orange:t=fill:enable='gte(t,1)'", '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
+    const clip = { uid: 'h', clipId: 'h', videoFile: source, durationSec: 3, width: 1000, height: 500, fps: 30, hasMic: false, hits: [0.3], in: 0, out: 3, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [],
+      feedRows: [{ slot: 0, from: 0.2, to: 0.9, x0: 0.15 }] };
+    const size = { width: 320, height: 320 };
+    const job = buildClipJob({ clip, feedStyle: 'own', audioCount: 0, segments: [{ clipUid: 'h', clipIndex: 0, kind: 'lead', src: [0.1, 2.5], out: [0, 2.4], speed: 1 }], size, fps: 30, style: getStyle('raw'), preview: true, workDir: dir });
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-filter_complex', job.filter, ...job.args]);
+    const rgb = execFileSync(ffmpeg, ['-v', 'error', '-ss', '1.8', '-i', job.output, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
+    const box = feedBox(size);
+    const fx = (900 - (1000 - 500 * 0.49)) / (500 * 0.454), fy = (20 - 12.5) / 55;
+    const i = (Math.round(box.y + fy * box.height) * 320 + Math.round(box.x + fx * box.width)) * 3;
+    const px = [...rgb.subarray(i, i + 3)];
+    assert.ok(px.every((v) => v > 200), `held row still shows your white row, not the teammate's: ${px}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the live kill-feed box has no border unless it is turned on', () => {
+  const clip = { uid: 'b', clipId: 'b', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [] };
+  const opts = { clip, audioCount: 0, segments: [{ clipUid: 'b', clipIndex: 0, kind: 'lead' as const, src: [0.5, 2.5] as [number, number], out: [0, 2] as [number, number], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() };
+  assert.doesNotMatch(buildClipJob(opts).filter, /color=black@0\.8/);
+  assert.match(buildClipJob({ ...opts, feedBorder: true }).filter, /color=black@0\.8/);
+  assert.equal(sanitizeProject({ ...createProject(), feedBorder: true }).feedBorder, true);
+  assert.equal(sanitizeProject(createProject()).feedBorder, undefined);
 });

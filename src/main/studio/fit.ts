@@ -30,7 +30,7 @@ function clampSeconds(v: number): number | undefined {
 
 const killCount = (c: ClipSidecar) => c.events.filter((e) => e.type === 'kill').length;
 
-function duration(project: ReelProject, analysis: MusicAnalysis | null): number {
+export function duration(project: ReelProject, analysis: MusicAnalysis | null): number {
   const fmt = getFormat(project.format);
   return plan({
     clips: orderClips(project.clips, project.order),
