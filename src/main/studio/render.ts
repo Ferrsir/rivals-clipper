@@ -110,18 +110,18 @@ export function feedCropFilter(): string {
  * game draws it, every row included, pinned top right for the whole reel. Source-height units from the
  * right edge; a little taller and wider than the rows so they sit in their own space.
  */
-export const INSET_REGION = { right: 0.012, width: 0.48, y0: 0, y1: 0.2 };
+export const INSET_REGION = { right: 0.012, width: 0.48, y0: 0, y1: 0.17 };
 
 export function insetCropFilter(): string {
   const r = INSET_REGION;
   return `crop=w=trunc(ih*${r6(r.width)}/2)*2:h=trunc(ih*${r6(r.y1 - r.y0)}/2)*2:x=trunc((iw-ih*${r6(r.right + r.width)})/2)*2:y=trunc(ih*${r6(r.y0)}/2)*2`;
 }
 
-/** Size and place of the live inset: about a third of the width on square, flush top right. */
+/** Size and place of the live inset: about 0.42 of the width on square, flush top right. */
 export function insetBox(size: Size): { width: number; height: number; x: number; y: number } {
   const r = INSET_REGION;
   const portrait = size.height > size.width * 1.2;
-  const width = Math.round((size.width * (portrait ? 0.55 : 0.36)) / 2) * 2;
+  const width = Math.round((size.width * (portrait ? 0.62 : 0.42)) / 2) * 2;
   const height = Math.round((width * (r.y1 - r.y0)) / r.width / 2) * 2;
   const y = portrait ? Math.round(size.height * 0.07) : 0;
   return { width, height, x: size.width - width, y };
@@ -259,7 +259,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 22, fs: o.feedStyle, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 23, fs: o.feedStyle, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
