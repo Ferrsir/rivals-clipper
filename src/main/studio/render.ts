@@ -191,7 +191,8 @@ export function holdLastRows(rows: FeedRow[], span: number): Array<FeedRow & { f
     // Sliding down a slot: keep it in its old slot until it has settled in the next one, so it never blinks out.
     const next = rows.find((o) => o.slot === r.slot + 1 && o.from > r.to && o.from <= r.to + 0.5);
     const own = slidIn.has(r) ? { ...r, from: Math.min(r.to, r.from + SETTLE) } : r;
-    if (next) return freeze(own, next.from + SETTLE);
+    // Hand over exclusively: the old slot ends just before the settled row starts (enable is half-open).
+    if (next) return freeze(own, Math.min(next.to, next.from + SETTLE) - 0.03);
     return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? own : freeze(own, span);
   });
 }
@@ -235,7 +236,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 20, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 21, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -292,7 +293,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
         const hold = r.freezeAt !== undefined ? `trim=end=${r6(r.freezeAt)},tpad=stop_mode=clone:stop_duration=${r6(span)},` : '';
         lines.push(`[fr${i}]${hold}crop=w=${w}:h=${h}:x=${x}:y=${y},pad=w=${w + pad}:h=${ph}:x=${pad}:y=${y - py}:color=black[frc${i}]`);
         const next = `fo${i}`;
-        lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='between(t,${r6(r.from)},${r6(r.to)})',format=rgba[${next}]`);
+        lines.push(`[${cur}][frc${i}]overlay=x=${x - pad}:y=${py}:format=auto:enable='gte(t,${r6(r.from)})*lt(t,${r6(r.to)})',format=rgba[${next}]`);
         cur = next;
       });
       lines.push(`[${cur}]setsar=1[feed]`);

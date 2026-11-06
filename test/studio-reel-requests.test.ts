@@ -283,12 +283,12 @@ test('the kill feed stays on screen: your latest rows are held, and a panel is a
   assert.equal(held[0].to, 3.6, 'a row pushed down by a newer one is not held');
   assert.deepEqual([held[1].to, held[2].to], [9, 9], 'the last rows stay until the clip ends');
   const slid = holdLastRows([{ slot: 0, from: 1, to: 2.1, x0: 0.4 }, { slot: 1, from: 2.3, to: 4, x0: 0.4 }], 6);
-  assert.equal(slid[0].to, 2.4, 'a row sliding down stays in its old slot until it has settled in the next');
+  assert.ok(Math.abs(slid[0].to - 2.37) < 1e-9, 'a row sliding down stays in its old slot until just before it has settled in the next');
   assert.equal(slid[1].from, 2.4);
   const clip = { uid: 'p', clipId: 'p', videoFile: 'x.mp4', durationSec: 5, width: 1920, height: 1080, fps: 60, hasMic: false, hits: [2], in: 0, out: 5, useMic: false, cropX: .5, cropY: .5, cropZoom: 1, kills: 1, score: 1, tags: [], feedRows: [] };
   const job = buildClipJob({ clip, audioCount: 0, segments: [{ clipUid: 'p', clipIndex: 0, kind: 'lead', src: [0.5, 2.5], out: [0, 2], speed: 1 }], size: { width: 1080, height: 1080 }, fps: 30, style: getStyle('raw'), preview: true, workDir: os.tmpdir() });
   assert.match(job.filter, /geq=r='0':g='0':b='0':a='128\*between/, 'panel drawn even before any row of yours');
-  assert.doesNotMatch(job.filter, /enable='between/, 'and nothing switches on or off');
+  assert.doesNotMatch(job.filter, /enable='/, 'and nothing switches on or off');
 });
 
 test('song start and end times in a prompt are read, and not taken as the reel length', async () => {
