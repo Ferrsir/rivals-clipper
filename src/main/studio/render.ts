@@ -181,7 +181,12 @@ export function feedPanel(box: { width: number; height: number }): { x: number; 
 export function holdLastRows(rows: FeedRow[], span: number): FeedRow[] {
   // A row whose end is followed within half a second by any row starting was pushed down (or replaced):
   // leave it. A row that simply stops (expired, or the clip's footage ends) is held to the end.
-  return rows.map((r) => (rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : { ...r, to: span }));
+  return rows.map((r) => {
+    // Sliding down a slot: keep it in its old slot until it shows up in the next one, so it never blinks out.
+    const next = rows.find((o) => o.slot === r.slot + 1 && o.from > r.to && o.from <= r.to + 0.5);
+    if (next) return { ...r, to: next.from };
+    return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : { ...r, to: span };
+  });
 }
 
 /** geq alpha expression (0..255 over time T) that fades the feed box in and out with its windows. */
@@ -223,7 +228,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 17, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 18, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
