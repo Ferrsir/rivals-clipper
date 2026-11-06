@@ -184,11 +184,15 @@ export function holdLastRows(rows: FeedRow[], span: number): Array<FeedRow & { f
   // A held row shows its last good picture, frozen: the slot itself may already show scenery or
   // someone else's row by then.
   const freeze = (r: FeedRow, to: number) => ({ ...r, to, freezeAt: Math.max(r.from, r.to - 0.15) });
+  // A row that arrived by sliding down shows a little late: its first frames are still mid-slide.
+  const SETTLE = 0.1;
+  const slidIn = new Set(rows.filter((o) => rows.some((r) => o.slot === r.slot + 1 && o.from > r.to && o.from <= r.to + 0.5)));
   return rows.map((r) => {
-    // Sliding down a slot: keep it in its old slot until it shows up in the next one, so it never blinks out.
+    // Sliding down a slot: keep it in its old slot until it has settled in the next one, so it never blinks out.
     const next = rows.find((o) => o.slot === r.slot + 1 && o.from > r.to && o.from <= r.to + 0.5);
-    if (next) return freeze(r, next.from);
-    return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? r : freeze(r, span);
+    const own = slidIn.has(r) ? { ...r, from: Math.min(r.to, r.from + SETTLE) } : r;
+    if (next) return freeze(own, next.from + SETTLE);
+    return rows.some((o) => o !== r && o.from >= r.to - 0.35 && o.from <= r.to + 0.5) ? own : freeze(own, span);
   });
 }
 
@@ -231,7 +235,7 @@ interface ClipJobOpts {
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 19, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 20, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
