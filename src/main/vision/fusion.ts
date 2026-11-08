@@ -484,7 +484,8 @@ export class ScreenFusion {
 
   /** A KO with your own name on it: you're clearly playing again (respawned, back from spectating). */
   private playing(t: number): void {
-    if (t > this.deadAt) this.deadAt = -Infinity;
+    // A KO right as you die (a projectile landing after) is yours too, but it doesn't mean you've respawned.
+    if (t > this.deadAt + DEATH_GRACE_MS) this.deadAt = -Infinity;
     if (t >= this.watchingUntil - WATCH_MS) this.watchingUntil = -Infinity;
   }
 

@@ -542,3 +542,22 @@ test('the Practice Range label wins over anything that looks like a match bar', 
   for (let t = 60_100; t < 61_000; t += 100) h.hud(t, true);
   assert.equal(h.fusion.inMatch, true);
 });
+
+test('a KO landing just after your death does not end the death window', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.feed(2000, 1);
+  h.fusion.onOcr('feed', 1, words(['Valka', 10], ['Leithl', 300]), 2100);
+  // Your projectile finishes someone half a second later: yours, with your name on the row.
+  h.ko(2500, 2);
+  h.feed(2600, 3);
+  h.fusion.onOcr('ko', 2, words(['Mokka', 10]), 2700);
+  h.fusion.onOcr('feed', 3, words(['Leithl', 10], ['Mokka', 300]), 2800);
+  h.fusion.tick(5000);
+  assert.equal(h.kills().length, 1);
+  // Then a watched teammate's assist: still not yours.
+  h.ko(6000, 4, true);
+  h.fusion.onOcr('ko', 4, words(['Pyro', 10]), 6100);
+  h.fusion.tick(9000);
+  assert.equal(h.events.filter((e) => e.key === 'assist').length, 0);
+});
