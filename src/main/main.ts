@@ -218,7 +218,7 @@ async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number
   try {
     // A kill seen on screen is reported a moment after it happened, so reach back that much further.
     await recorder.startClip(fileName, pastMs + lateBy(now, Date.now()), (video) => onClipSaved(video, clip));
-    status(trigger === 'manual' ? 'Saving manual clip' : 'Kill! Clipping');
+    status(trigger === 'manual' ? 'Saving manual clip' : 'Got one! Clipping');
   } catch (err) {
     status(`Could not start clip: ${(err as Error).message}`);
     if (pending === clip) finishCapture();
@@ -249,6 +249,7 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     return;
   }
   const kills = clip.events.filter((e) => e.type === 'kill').length;
+  const assists = clip.events.filter((e) => e.type === 'assist').length;
   const info = clip.bufferInfo;
   // The local recorder says which tracks it wrote; Overwolf clips follow the buffer settings.
   const tracks = video.audioTracks ?? (info.micRecorded ? ['game', 'mic'] : ['game']);
@@ -269,7 +270,7 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
   if (clip.matchSource === state.context) matchClips.push(saved.videoFile);
-  status(`Saved ${kills}-kill clip (score ${saved.score})`);
+  status(`Saved ${kills}-kill${assists ? `, ${assists}-assist` : ''} clip (score ${saved.score})`);
   pushClip(saved);
   tagger.enqueue(saved.videoFile);
 }
@@ -277,6 +278,22 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
 let practiceNoticeShown = false;
 
 function handleKill(now: number, total?: number) {
+  handleMoment('kill', now, total);
+}
+
+/** One of your final hits or (when clipAssists is on) assists: starts or extends a clip. */
+function handleMoment(type: 'kill' | 'assist', now: number, total?: number, victim?: string) {
+  const notPlaying = state.notPlaying(now);
+  if (notPlaying) {
+    // Dead and watching a teammate, spectating or a replay: that KO isn't yours.
+    log.write('skip', { reason: notPlaying, type, at: now });
+    return;
+  }
+  const autoClip = type === 'kill' || settings.clipAssists;
+  if (!autoClip) {
+    pending?.events.push({ type: 'assist', at: now, victim, myHero: state.myHero });
+    return;
+  }
   if (!settings.clipPractice && isPracticeMode(state.context)) {
     log.write('skip', { reason: 'practice', context: state.context });
     if (!practiceNoticeShown) status('Practice Range: auto-clips are off here (manual hotkey still works)');
@@ -289,7 +306,8 @@ function handleKill(now: number, total?: number) {
   // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
   const clip = pending;
-  if (clip) {
+  if (clip && type === 'assist') clip.events.push({ type: 'assist', at: now, victim, myHero: state.myHero });
+  else if (clip) {
     const event = state.describeKill(total, now);
     clip.events.push(event);
     setTimeout(() => Object.assign(event, state.describeKill(total, now)), 400);
@@ -319,10 +337,13 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     case 'kill':
       handleKill(now, Number(parseMaybeJson(value)) || undefined);
       break;
-    case 'assist':
-      pending?.events.push({ type: 'assist', at: now, myHero: state.myHero });
+    case 'assist': {
+      const v = parseMaybeJson<{ victim?: string }>(value);
+      handleMoment('assist', now, undefined, v && typeof v === 'object' && typeof v.victim === 'string' ? v.victim : undefined);
       break;
+    }
     case 'death':
+      state.onDeath(now);
       pending?.events.push({ type: 'death', at: now, myHero: state.myHero });
       break;
     case 'kill_feed':

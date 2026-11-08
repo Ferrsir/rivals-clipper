@@ -10,8 +10,14 @@
 //
 // Match state: the round/timer bar with blue and red team colours only shows in a real match.
 // It appearing = match start; gone for a while or a VICTORY/DEFEAT screen = match end.
-// Practice Range = kills with no match bar, once the bar has been seen working on this PC, or the
-// map label saying Practice Range.
+// Practice Range = kills with no match bar showing, or the map label saying Practice Range.
+//
+// Only YOUR finals and assists count, and only while YOU are the one playing:
+//   - after your death the camera follows a teammate, and their KO list / kill-feed row would look like
+//     yours, so for a while after you die only KOs with your own name in the feed row count;
+//   - a light kill-feed row with two names and neither is yours means the game is showing someone
+//     else's view (spectating, a replay): the same rule applies for a while;
+//   - SPECTATING / REPLAY / RESPAWN text on screen means the same.
 // Pure logic: time comes in with the observations, so it is unit-tested with recorded sequences.
 
 import type { Observation } from './detectors';
@@ -22,6 +28,8 @@ export interface EventSink {
   gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end', value: unknown, at: number): void;
   infoUpdate(feature: 'game_info' | 'match_info', key: string, value: unknown): void;
 }
+
+export type OcrKind = 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle' | 'status';
 
 export interface OcrWord {
   text: string;
@@ -43,6 +51,7 @@ export interface FusionOptions {
   strictKills?: boolean;
   pairWindowMs?: number;
   decideAfterMs?: number;
+  /** No longer used: a KO with no match bar is the Practice Range straight away. */
   practiceAfterMs?: number;
   matchEndAfterMs?: number;
   /** The match bar has been recognised on this PC before (remembered across sessions). */
@@ -51,7 +60,7 @@ export interface FusionOptions {
 
 export interface FusionCallbacks {
   /** Text recognition wanted for an observation or a region crop. */
-  requestOcr?: (req: { id: number; kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle' }) => void;
+  requestOcr?: (req: { id: number; kind: OcrKind }) => void;
   /** Ask the analyzer for a crop of a region with the next frame. */
   wantCrop?: (region: RegionId) => void;
   onHudVerified?: () => void;
@@ -71,6 +80,14 @@ interface KoItem {
 
 /** A KO stays in the list for a few seconds; the same name again that soon is the same KO seen twice (nobody respawns and dies to you again that fast). */
 const SAME_VICTIM_MS = 5000;
+/** A KO this soon after your death is still yours (a projectile or a trade). */
+const DEATH_GRACE_MS = 1500;
+/** After your death, KOs are someone else's (the camera follows a teammate) unless your name is on them. Respawns take about 10 s. */
+const DEAD_MS = 10_000;
+/** How long one sign of watching someone else (their feed row) holds. */
+const WATCH_MS = 8000;
+/** Text the game shows when you are not the one playing. */
+const NOT_PLAYING_WORDS = /\b(SPECTATING|SPECTATOR|SPECTATE|OBSERVING|OBSERVER|REPLAY|RESPAWNING|RESPAWN\s+IN)\b/i;
 
 interface FeedItem {
   id: number;
@@ -157,6 +174,16 @@ export class ScreenFusion {
   private startedAt?: number;
   /** Words seen in your feed rows, to learn your name. */
   private nameVotes = new Map<string, number>();
+  /** When you last died (your name on the right of a feed row). */
+  private deadAt = -Infinity;
+  /** Until when the screen is showing someone else's view. */
+  private watchingUntil = -Infinity;
+  private nextStatusAt = 0;
+  private nextMapPollAt = 0;
+  /** The map label said Practice Range: stay in practice even if something looks like a match bar. */
+  private practiceByLabel = false;
+  /** KOs and assists that were seen but not counted because you weren't the one playing. */
+  ignored = 0;
   private feedRowsRead = 0;
   private o: Required<Omit<FusionOptions, 'playerName' | 'hudVerified'>>;
 
@@ -211,12 +238,12 @@ export class ScreenFusion {
         this.onHud(o.t, o.matchHud);
         break;
       case 'crop':
-        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome' || o.region === 'subtitle')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
+        if (this.o.ocr && (o.region === 'map' || o.region === 'outcome' || o.region === 'subtitle' || o.region === 'status')) this.cb.requestOcr?.({ id: o.t, kind: o.region });
         break;
     }
   }
 
-  onOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number, r: OcrResult | undefined, now: number): void {
+  onOcr(kind: OcrKind, id: number, r: OcrResult | undefined, now: number): void {
     switch (kind) {
       case 'ko': {
         const k = this.kos.find((x) => x.id === id);
@@ -232,6 +259,7 @@ export class ScreenFusion {
         f.ocrDone = true;
         f.ocr = r;
         if (r) this.learnName(r);
+        if (r && this.foreignRow(r)) this.markWatching(f.t, WATCH_MS, 'someone else\'s kill-feed row');
         // A KO may have settled before its paired row was read. Preserve the
         // already-counted kill, but still account for a trade revealed by OCR.
         if (f.done && f.ko?.done && !f.ko.assist && r && this.sidesOf(r)?.mine === 'victim') {
@@ -253,8 +281,13 @@ export class ScreenFusion {
       }
       case 'map': {
         const text = r?.text ?? '';
-        if (PRACTICE_WORDS.test(text)) this.enterPractice(now, 'map label');
+        if (PRACTICE_WORDS.test(text)) {
+          this.practiceByLabel = true;
+          this.enterPractice(now, 'map label');
+        }
         const best = bestMap(text);
+        // A real map name: whatever said Practice Range before is over.
+        if (best) this.practiceByLabel = false;
         if (best && !this.mapKnown) {
           this.mapKnown = true;
           this.sink.infoUpdate('match_info', 'map', best);
@@ -271,6 +304,10 @@ export class ScreenFusion {
           this.subtitleHero = hero;
           this.sink.infoUpdate('game_info', 'local_hero', hero);
         }
+        break;
+      }
+      case 'status': {
+        if (r && NOT_PLAYING_WORDS.test(r.text)) this.markWatching(now - 1000, 4000, 'spectating text');
         break;
       }
       case 'outcome': {
@@ -293,13 +330,26 @@ export class ScreenFusion {
       this.nextSubtitleAt = now + 1000;
       this.cb.wantCrop?.('subtitle');
     }
+    if (this.o.ocr && this.inMatch && now >= this.nextStatusAt) {
+      this.nextStatusAt = now + 1000;
+      this.cb.wantCrop?.('status');
+    }
+    // Outside a match, read the map label every few seconds, so the Practice Range is known before the first KO.
+    if (this.o.ocr && !this.inMatch && now >= this.nextMapPollAt) {
+      this.nextMapPollAt = now + (this.practice ? 5000 : 2500);
+      this.cb.wantCrop?.('map');
+    }
     for (const k of this.kos) {
       if (k.done) continue;
-      const ready = (k.ocrDone && (!k.feed || k.feed.ocrDone)) || now - k.t >= this.o.decideAfterMs;
+      // When it may not be you playing, the feed row is what proves the KO is yours: give it time to show and be read.
+      const doubt = this.notPlaying(k.t) && !k.assist;
+      const waitMs = doubt ? (k.feed ? 2500 : this.o.pairWindowMs + 100) : k.feed && !k.feed.ocrDone ? 2000 : this.o.decideAfterMs;
+      const ready = (k.ocrDone && (!k.feed || k.feed.ocrDone) && !(doubt && !k.feed && now - k.t < this.o.pairWindowMs + 100)) || now - k.t >= waitMs;
       if (!ready) continue;
       k.done = true;
       if (k.assist) {
-        this.emitAssist(k.t, k.victim);
+        if (this.notPlaying(k.t)) this.ignore(k.t, 'assist', k.victim);
+        else this.emitAssist(k.t, k.victim);
         continue;
       }
       // A trade: the feed row paired with this KO is actually your death. Count both.
@@ -313,7 +363,20 @@ export class ScreenFusion {
         if (other) this.pair(k, other);
       }
       if (k.feed) k.feed.done = true;
-      const victim = k.victim ?? (k.feed?.ocr ? this.sidesOf(k.feed.ocr)?.victim : undefined);
+      const row = k.feed?.ocr;
+      if (row && this.foreignRow(row)) {
+        // The row next to this KO has someone else's name: it is their KO, shown because you're watching them.
+        this.markWatching(k.t, WATCH_MS, 'someone else\'s kill-feed row');
+        this.ignore(k.t, 'kill', k.victim);
+        continue;
+      }
+      const mine = !!row && this.sidesOf(row)?.mine === 'attacker';
+      if (mine) this.playing(k.t);
+      else if (this.notPlaying(k.t)) {
+        this.ignore(k.t, 'kill', k.victim);
+        continue;
+      }
+      const victim = k.victim ?? (row ? this.sidesOf(row)?.victim : undefined);
       this.emitKill(k.t, victim);
     }
     for (const f of this.feed) {
@@ -326,7 +389,10 @@ export class ScreenFusion {
         // Same KO as a KO-list name that had no row of its own (e.g. it was paired with a death).
         const k = this.kos.find((x) => !x.feed && !x.assist && Math.abs(x.t - f.t) <= this.o.pairWindowMs);
         if (k) this.pair(k, f);
-        else this.emitKill(f.t, sides.victim);
+        else {
+          this.playing(f.t);
+          this.emitKill(f.t, sides.victim);
+        }
       } else if (sides?.mine === 'victim') {
         this.emitDeath(f.t, sides.attacker);
       }
@@ -339,6 +405,7 @@ export class ScreenFusion {
         continue;
       }
       b.done = true;
+      if (this.notPlaying(b.t)) continue;
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
       if (b.t - this.lastKillAt > 2500 && !this.kos.some((k) => !k.done && Math.abs(k.t - b.t) < 2500)) this.emitKill(b.t, undefined);
     }
@@ -391,14 +458,54 @@ export class ScreenFusion {
   }
 
   private emitAssist(at: number, victim: string | undefined): void {
+    this.checkPractice(at);
     this.assists++;
     this.sink.gameEvent('assist', { victim: victim || undefined }, at);
   }
 
   private emitDeath(at: number, attacker: string | undefined): void {
+    this.deadAt = Math.max(this.deadAt, at);
     this.deaths++;
     this.sink.gameEvent('kill_feed', { attacker: attacker || undefined, victim: this.me, attacker_is_teammate: false, victim_is_teammate: true }, at);
     this.sink.gameEvent('death', this.deaths, at);
+  }
+
+  /** True when the screen at `t` is probably not your own view: you're dead, spectating or watching a replay. */
+  notPlaying(t: number): boolean {
+    if (t > this.deadAt + DEATH_GRACE_MS && t < this.deadAt + DEAD_MS) return true;
+    return t < this.watchingUntil;
+  }
+
+  private markWatching(t: number, ms: number, why: string): void {
+    if (t + ms <= this.watchingUntil) return;
+    if (this.watchingUntil < t) this.sink.infoUpdate('match_info', 'not_playing', why);
+    this.watchingUntil = t + ms;
+  }
+
+  /** A KO with your own name on it: you're clearly playing again (respawned, back from spectating). */
+  private playing(t: number): void {
+    // A KO right as you die (a projectile landing after) is yours too, but it doesn't mean you've respawned.
+    if (t > this.deadAt + DEATH_GRACE_MS) this.deadAt = -Infinity;
+    if (t >= this.watchingUntil - WATCH_MS) this.watchingUntil = -Infinity;
+  }
+
+  private ignore(t: number, what: 'kill' | 'assist', victim: string | undefined): void {
+    this.ignored++;
+    this.sink.infoUpdate('match_info', 'ignored_ko', { what, victim, at: t, reason: 'not your view (dead, spectating or a replay)' });
+  }
+
+  /** A feed row with two names and neither of them yours: someone else's row, highlighted because the game is showing their view. */
+  private foreignRow(r: OcrResult): boolean {
+    const name = this.playerName;
+    if (!name) return false;
+    const words = nameWords(r.words).filter((w) => w.conf >= 60);
+    if (words.length < 2) return false;
+    const all = nameWords(r.words);
+    const parts = name.split(/\s+/).filter((p) => normalizeName(p).length >= 3);
+    // Lenient here: anything a bit like your name means it may be your row, misread.
+    if (all.some((w) => nameSimilarity(w.text, name) >= 0.5 || parts.some((p) => nameSimilarity(w.text, p) >= 0.6))) return false;
+    const xs = words.map((w) => (w.x0 + w.x1) / 2);
+    return Math.max(...xs) - Math.min(...xs) >= 60;
   }
 
   /** Which side of a feed row is you, from the OCR words and your (known or learned) name. */
@@ -451,7 +558,9 @@ export class ScreenFusion {
         this.hudVerified = true;
         this.cb.onHudVerified?.();
       }
-      if (!this.inMatch) this.startMatch(t);
+      // The label said Practice Range: something that looks like a match bar there doesn't make it a match.
+      // A real map name on the label (read every few seconds outside a match) ends that.
+      if (!this.inMatch && !this.practiceByLabel) this.startMatch(t);
     } else if (this.inMatch && this.hudLostAt < this.hudSeenAt) {
       // The bar just went away: the match may be over. Check for the result screen for a while.
       this.hudLostAt = t;
@@ -475,15 +584,16 @@ export class ScreenFusion {
     this.sink.gameEvent('match_end', undefined, t);
   }
 
+  /** A KO with no match bar on screen is not a real match: the Practice Range (or another mode with no score). */
   private checkPractice(t: number): void {
-    if (this.inMatch || this.practice || !this.hudVerified) return;
-    const since = Math.max(this.hudSeenAt, this.startedAt ?? t);
-    if (t - since >= this.o.practiceAfterMs) this.enterPractice(t, 'no match bar');
+    if (this.inMatch || this.practice) return;
+    this.enterPractice(t, 'no match bar');
   }
 
-  private enterPractice(t: number, _why: string): void {
+  private enterPractice(t: number, why: string): void {
     if (this.practice) return;
-    if (this.inMatch && this.hudSeenAt > t - 10_000) return; // the match bar is right there
+    // The label is the strongest sign; without it, a match bar on screen means a real match.
+    if (why !== 'map label' && this.inMatch && this.hudSeenAt > t - 10_000) return;
     this.inMatch = false;
     this.practice = true;
     this.kills = 0;

@@ -44,9 +44,9 @@ test('HUD scale moves the regions with it', () => {
 
 test('ffmpeg graph crops every region and stacks them', () => {
   const g = hudFilterGraph(layoutFor(2560, 1440), { gpuFrames: true, fps: 10 });
-  assert.match(g, /^\[0:v\]hwdownload,format=bgra,split=8/);
+  assert.match(g, /^\[0:v\]hwdownload,format=bgra,split=9/);
   assert.equal((g.match(/crop=/g) ?? []).length, DEFAULT_REGIONS.length);
-  assert.match(g, /vstack=inputs=8\[hud\]$/);
+  assert.match(g, /vstack=inputs=9\[hud\]$/);
 });
 
 // ---------- synthetic HUD frames ----------
@@ -437,4 +437,127 @@ test('harness scoring pairs detections with labels within the tolerance', () => 
   assert.equal(s.falsePositives, 1);
   assert.deepEqual(s.missedAt, [20]);
   assert.equal(s.meanLatencyMs, 350);
+});
+
+// ---------- only your own KOs, only while you play ----------
+
+test('after you die, KOs in the KO list belong to the teammate you are watching', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.feed(2000, 1);
+  h.fusion.onOcr('feed', 1, words(['Valka', 10], ['Leithl', 300]), 2100);
+  h.fusion.tick(6000);
+  assert.equal(h.deaths().length, 1);
+  // The camera follows a teammate: their KO shows next to the crosshair, with no row of yours.
+  h.ko(6500, 2);
+  h.fusion.onOcr('ko', 2, words(['Mokka', 10]), 6600);
+  h.ko(8000, 3, true);
+  h.fusion.onOcr('ko', 3, words(['Pyro', 10]), 8100);
+  h.fusion.tick(12_000);
+  assert.equal(h.kills().length, 0);
+  assert.equal(h.events.filter((e) => e.key === 'assist').length, 0);
+  assert.equal(h.fusion.ignored, 2);
+});
+
+test('a KO with your own name in the feed row counts even right after a death', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.feed(2000, 1);
+  h.fusion.onOcr('feed', 1, words(['Valka', 10], ['Leithl', 300]), 2100);
+  h.fusion.tick(6000);
+  h.ko(7000, 2);
+  h.feed(7100, 3);
+  h.fusion.onOcr('ko', 2, words(['Mokka', 10]), 7200);
+  h.fusion.onOcr('feed', 3, words(['Leithl', 10], ['Mokka', 300]), 7900);
+  h.fusion.tick(12_000);
+  assert.equal(h.kills().length, 1);
+});
+
+test('KOs count again once you have respawned', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.feed(2000, 1);
+  h.fusion.onOcr('feed', 1, words(['Valka', 10], ['Leithl', 300]), 2100);
+  h.fusion.tick(6000);
+  h.ko(14_000, 2);
+  h.fusion.onOcr('ko', 2, words(['Mokka', 10]), 14_100);
+  h.fusion.tick(17_000);
+  assert.equal(h.kills().length, 1);
+});
+
+test('a light feed row with someone else\'s names means you are watching them', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.ko(3000, 1);
+  h.feed(3100, 2);
+  h.fusion.onOcr('ko', 1, words(['Mokka', 10]), 3200);
+  h.fusion.onOcr('feed', 2, words(['Zedd', 10], ['Mokka', 300]), 3300);
+  h.fusion.tick(6000);
+  // A later KO with no row at all, still while watching, isn't yours either.
+  h.ko(7000, 3, true);
+  h.fusion.onOcr('ko', 3, words(['Pyro', 10]), 7100);
+  h.fusion.tick(10_000);
+  assert.equal(h.kills().length, 0);
+  assert.equal(h.events.filter((e) => e.key === 'assist').length, 0);
+});
+
+test('SPECTATING or REPLAY on screen stops KOs counting', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.fusion.onOcr('status', 1, { text: 'SPECTATING  ZEDD', words: [] }, 4000);
+  h.ko(4200, 1);
+  h.fusion.onOcr('ko', 1, words(['Mokka', 10]), 4300);
+  h.fusion.tick(8000);
+  assert.equal(h.kills().length, 0);
+});
+
+test('your own assist (no row of yours) still counts while playing', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.ko(3000, 1, true);
+  h.fusion.onOcr('ko', 1, words(['Mokka', 10]), 3100);
+  h.fusion.tick(5000);
+  assert.equal(h.events.filter((e) => e.key === 'assist').length, 1);
+});
+
+test('a KO with no match bar is the Practice Range straight away, even on a new PC', () => {
+  const h = harness({ name: 'Leithl', ocr: false });
+  h.hud(0, false);
+  h.ko(5000, 1);
+  h.fusion.tick(6000);
+  const types = h.events.map((e) => e.key);
+  assert.ok(h.info.some(([k, v]) => k === 'game_type' && v === 'Practice'));
+  assert.ok(types.indexOf('match_start') < types.indexOf('kill'));
+});
+
+test('the Practice Range label wins over anything that looks like a match bar', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.fusion.onOcr('map', 1, { text: 'PRACTICE RANGE', words: [] }, 1000);
+  assert.equal(h.fusion.practice, true);
+  for (let t = 1100; t < 3000; t += 100) h.hud(t, true);
+  assert.equal(h.fusion.inMatch, false);
+  // A real map name later: the next match bar is a match again.
+  h.fusion.onOcr('map', 2, { text: 'Hall of Djalia', words: [] }, 60_000);
+  for (let t = 60_100; t < 61_000; t += 100) h.hud(t, true);
+  assert.equal(h.fusion.inMatch, true);
+});
+
+test('a KO landing just after your death does not end the death window', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.feed(2000, 1);
+  h.fusion.onOcr('feed', 1, words(['Valka', 10], ['Leithl', 300]), 2100);
+  // Your projectile finishes someone half a second later: yours, with your name on the row.
+  h.ko(2500, 2);
+  h.feed(2600, 3);
+  h.fusion.onOcr('ko', 2, words(['Mokka', 10]), 2700);
+  h.fusion.onOcr('feed', 3, words(['Leithl', 10], ['Mokka', 300]), 2800);
+  h.fusion.tick(5000);
+  assert.equal(h.kills().length, 1);
+  // Then a watched teammate's assist: still not yours.
+  h.ko(6000, 4, true);
+  h.fusion.onOcr('ko', 4, words(['Pyro', 10]), 6100);
+  h.fusion.tick(9000);
+  assert.equal(h.events.filter((e) => e.key === 'assist').length, 0);
 });

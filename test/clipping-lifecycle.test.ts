@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { StreakTracker } from '../src/main/streak';
 import { DEFAULT_SETTINGS } from '../src/main/settings';
-import { MatchState, isPracticeMode } from '../src/main/match-state';
+import { MatchState, isPracticeMode, parseMaybeJson } from '../src/main/match-state';
 
 // Exercise the real Electron event handlers without launching Electron or the game.
 function harness() {
@@ -24,14 +24,14 @@ function harness() {
     },
     stopClip() { active = false; },
   };
-  const ctx = vm.createContext({ recorder, state, settings: { ...DEFAULT_SETTINGS, assistsExtendClip: true },
+  const ctx = vm.createContext({ recorder, state, settings: { ...DEFAULT_SETTINGS },
     quitting: false, pending: undefined, stopTimer: undefined,
     streak: new StreakTracker({ preRollMs: 12000, postRollMs: 5000, maxClipMs: 90000 }),
     Date: class extends Date { static now() { return now; } }, path,
     lateBy: (at: number, n: number) => Math.max(0, n - at), clipFileName: () => `clip-${now}`,
     setTimeout: (fn: () => void, ms: number) => { const t = { fn, due: now + ms, cancelled: false }; timers.push(t); return t; },
     clearTimeout: (t: typeof timers[number]) => { t.cancelled = true; },
-    isPracticeMode, log: { write() {} }, status() {}, writeSidecar: (c: any) => { saved.push(c); return { ...c, score: 0 }; },
+    isPracticeMode, parseMaybeJson, log: { write() {} }, status() {}, writeSidecar: (c: any) => { saved.push(c); return { ...c, score: 0 }; },
     matchClips: [], pushClip() {}, tagger: { enqueue() {}, kick() {} }, inMatch: false,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/main/main.ts'), 'utf8');
@@ -112,4 +112,33 @@ test('failed old startup cannot clear a newer clip', async () => {
   const current = h.ctx.pending;
   reject(new Error('old start failed')); await Promise.resolve();
   assert.equal(h.ctx.pending, current);
+});
+
+test('an assist starts a clip on its own', async () => {
+  const h = harness();
+  h.ctx.onGameEvent('screen', 'assist', { victim: 'Mokka' }, 100000); await Promise.resolve();
+  assert.equal(h.starts.length, 1);
+  assert.equal(JSON.stringify(h.ctx.pending.events.map((e: any) => [e.type, e.victim])), JSON.stringify([['assist', 'Mokka']]));
+});
+
+test('Overwolf: kills while you are dead or spectating do not clip', async () => {
+  const h = harness();
+  h.ctx.state.onInfoUpdate('match_info', 'roster_0', { name: 'Me', is_local: true, is_alive: false }, 99000);
+  h.ctx.state.onInfoUpdate('match_info', 'roster_1', { name: 'Mate', is_local: false, is_alive: true }, 99000);
+  h.ctx.onGameEvent('gep', 'death', 1, 95000);
+  h.ctx.onGameEvent('gep', 'kill', 1, 100000); await Promise.resolve();
+  assert.equal(h.starts.length, 0);
+  // A KO right as you die still counts.
+  h.ctx.onGameEvent('gep', 'death', 2, 100500);
+  h.ctx.onGameEvent('gep', 'kill', 2, 101000); await Promise.resolve();
+  assert.equal(h.starts.length, 1);
+});
+
+test('Overwolf: a roster with nobody marked as you is spectating', () => {
+  const s = new MatchState();
+  s.onInfoUpdate('match_info', 'roster_0', { name: 'A', is_local: false }, 0);
+  s.onInfoUpdate('match_info', 'roster_1', { name: 'B', is_local: false }, 0);
+  assert.equal(s.notPlaying(1000), 'spectating');
+  s.onInfoUpdate('match_info', 'roster_2', { name: 'Me', is_local: true, is_alive: true }, 0);
+  assert.equal(s.notPlaying(1000), undefined);
 });
