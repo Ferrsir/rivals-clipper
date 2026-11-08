@@ -8,7 +8,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { gameWindowSource } from '../capture/encoder';
 import { HudAnalyzer, type Observation } from './detectors';
-import { ScreenFusion, type EventSink, type FusionCallbacks, type FusionOptions, type OcrResult } from './fusion';
+import { ScreenFusion, type EventSink, type FusionCallbacks, type FusionOptions, type OcrKind, type OcrResult } from './fusion';
 import type { Crop } from './image';
 import { hudFilterGraph, type HudLayout, type RegionId } from './layout';
 import type { OcrMode, ScreenOcr } from './ocr';
@@ -95,7 +95,8 @@ export class FrameSource extends EventEmitter {
   }
 }
 
-const OCR_MODE: Record<'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', OcrMode> = {
+const OCR_MODE: Record<OcrKind, OcrMode> = {
+  status: 'light-text',
   subtitle: 'big-text',
   feed: 'dark-text',
   ko: 'light-text',
@@ -174,7 +175,7 @@ export class DetectionPipeline {
     this.fusion.tick(t + 10_000);
   }
 
-  private runOcr(kind: 'feed' | 'ko' | 'banner' | 'map' | 'outcome' | 'subtitle', id: number): void {
+  private runOcr(kind: OcrKind, id: number): void {
     const key = `${kind}:${id}`;
     const crop = this.crops.get(key);
     this.crops.delete(key);

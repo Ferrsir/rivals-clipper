@@ -44,9 +44,21 @@ on screen, and the clip reaches back by however long detection took, so clips st
 Text reading uses Tesseract (WebAssembly, bundled, runs on your PC, nothing is uploaded). If it can't start,
 kills still come from the KO list and streak banners.
 
-**Practice Range:** once the app has seen the match bar on your PC, kills with no match bar on screen for 90 s are
-treated as the Practice Range and not auto-clipped (the manual hotkey still works). Until it has seen one real match
-on your PC it can't tell the Practice Range apart, so play one match first.
+**Practice Range:** a KO with no match bar on screen is treated as the Practice Range straight away and not
+auto-clipped (the manual hotkey still works). Outside a match the map label is also read every few seconds, and
+"Practice Range" there wins even over something that looks like a match bar.
+
+**Only you, only while you play:** clips start on your own final hits (the KO list) and your assists (Settings,
+on by default). They don't start while the screen shows someone else's view:
+
+- for 10 s after your death (the camera follows a teammate, whose KOs show like yours), unless the kill-feed row
+  next to the KO has your name on the left;
+- for 8 s after a light kill-feed row with two names that aren't yours (the game highlights the watched player's
+  rows when spectating or in a replay);
+- while SPECTATING, REPLAY, OBSERVER or a respawn countdown is read in the lower middle of the screen.
+
+Skipped KOs are written to the event log as `ignored_ko`. In Overwolf mode the same rule uses the roster: a kill
+while you're dead (more than 1.5 s after your death) or with nobody in the roster marked as you is skipped.
 
 ## How it records
 

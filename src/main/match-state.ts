@@ -97,6 +97,8 @@ export class MatchState {
   private ultHistory: Array<[number, number]> = [];
   /** Recent kill-feed lines so a `kill` event can be matched to its victim. */
   private recentFeed: Array<{ at: number; entry: KillFeedEntry }> = [];
+  /** When you last died (GEP `death`). */
+  private lastDeathAt = -Infinity;
 
   constructor(heroRoles: Record<string, HeroRole> = {}) {
     this.heroRoles = { ...DEFAULT_HERO_ROLES, ...heroRoles };
@@ -179,7 +181,25 @@ export class MatchState {
     return false;
   }
 
+  onDeath(now: number): void {
+    this.lastDeathAt = now;
+  }
+
+  /**
+   * Why a kill/assist at `now` can't be yours, from what Overwolf says about the players, or undefined.
+   * The screen detector does its own check (fusion.ts), and sends no roster, so this never blocks it.
+   */
+  notPlaying(now: number): string | undefined {
+    const players = [...this.roster.values()];
+    // The roster marks who you are. A full roster with nobody marked as you: spectating or a replay.
+    if (players.length >= 2 && players.some((r) => r.is_local !== undefined) && !players.some((r) => r.is_local)) return 'spectating';
+    // Dead for more than a moment: the camera is following someone else. (A KO right as you die still counts.)
+    if (this.local?.is_alive === false && now - this.lastDeathAt > 1500) return 'dead';
+    return undefined;
+  }
+
   onMatchStart(): void {
+    this.lastDeathAt = -Infinity;
     this.context = { round: 0 };
     this.ultHistory = [];
     this.recentFeed = [];

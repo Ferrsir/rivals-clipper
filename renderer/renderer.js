@@ -4,7 +4,7 @@ let clips = [];
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 const aiReady = () => !!(ai && ai.provider !== 'none' && ai[ai.provider]?.loggedIn);
 
-const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipPractice', 'aiTagging', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
+const fields = ['resolution', 'fps', 'gameAudio', 'recordMic', 'micDeviceId', 'useMicInReelsByDefault', 'clipAssists', 'clipPractice', 'aiTagging', 'preRollSeconds', 'postRollSeconds', 'manualClipHotkey'];
 // Kill detection panel (built-in mode).
 fields.push('engine', 'playerName', 'hudScale', 'hudAspect', 'readScreenText', 'detectionFps', 'localEncoder');
 

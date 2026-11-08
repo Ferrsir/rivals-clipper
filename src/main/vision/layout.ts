@@ -9,7 +9,7 @@
 // They were measured from gameplay footage at default HUD settings and can be tuned per player with
 // a calibration file (see docs/local-mode.md).
 
-export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome' | 'subtitle' | 'portrait';
+export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome' | 'subtitle' | 'portrait' | 'status';
 export type Anchor = 'left' | 'center' | 'right';
 
 export interface RegionSpec {
@@ -37,6 +37,9 @@ export const DEFAULT_REGIONS: RegionSpec[] = [
   { id: 'top', anchor: 'center', x: -720, y: 0, w: 1440, h: 210, scale: 0.4 },
   // Map / objective label, top left.
   { id: 'map', anchor: 'left', x: 10, y: 20, w: 720, h: 150, scale: 0.6 },
+  // Lower middle of the screen, where text like SPECTATING, REPLAY or the respawn countdown shows when
+  // the view isn't yours. Read once a second during a match; only those words are looked for.
+  { id: 'status', anchor: 'center', x: -700, y: 960, w: 1400, h: 340, scale: 0.4 },
   // VICTORY / DEFEAT.
   { id: 'outcome', anchor: 'center', x: -800, y: 380, w: 1600, h: 520, scale: 0.3 },
 ];

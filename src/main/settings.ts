@@ -26,8 +26,8 @@ export interface Settings {
   /** New clips start with their mic track switched on for reels. You can flip it per clip. */
   useMicInReelsByDefault: boolean;
   manualClipHotkey: string;
-  /** Also count assists as keeping a streak clip alive. */
-  assistsExtendClip: boolean;
+  /** Your assists start (and keep alive) a clip too, not just your final hits. */
+  clipAssists: boolean;
   /** Auto-clip kills in the Practice Range too. Off by default; the manual hotkey always works. */
   clipPractice: boolean;
   /** After a match, show a few frames of each new clip to your signed-in AI for style tags and a summary. */
@@ -71,7 +71,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gameAudio: 'game-only',
   useMicInReelsByDefault: false,
   manualClipHotkey: 'F9',
-  assistsExtendClip: false,
+  clipAssists: true,
   clipPractice: false,
   aiTagging: true,
   aiProvider: 'none',
@@ -139,7 +139,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     gameAudio: oneOf(r.gameAudio, ['game-only', 'desktop'] as const, base.gameAudio),
     useMicInReelsByDefault: bool(r.useMicInReelsByDefault, base.useMicInReelsByDefault),
     manualClipHotkey: typeof r.manualClipHotkey === 'string' ? r.manualClipHotkey.trim().slice(0, 40) : base.manualClipHotkey,
-    assistsExtendClip: bool(r.assistsExtendClip, base.assistsExtendClip),
+    clipAssists: bool(r.clipAssists, base.clipAssists),
     clipPractice: bool(r.clipPractice, base.clipPractice),
     aiTagging: bool(r.aiTagging, base.aiTagging),
     aiProvider: oneOf(r.aiProvider, ['claude', 'codex', 'none'] as const, base.aiProvider),
