@@ -219,11 +219,12 @@ export class LocalRecorder implements ClipRecorder {
     this.active = { fileName, folder: this.lastStart.clipsFolder, handle, onDone, releaseAudio };
   }
 
-  stopClip(): void {
+  stopClip(untilEpoch?: number): void {
     const clip = this.active;
     if (!clip) return;
     this.active = undefined;
-    const until = Date.now();
+    // The streak waits a few seconds past its last kill for another one; trim that wait back off.
+    const until = untilEpoch !== undefined && untilEpoch < Date.now() ? untilEpoch : Date.now();
     const p = this.saveClip(clip, until).finally(() => this.saving.delete(p));
     this.saving.add(p);
   }

@@ -12,6 +12,8 @@ export interface Settings {
   preRollSeconds: number;
   postRollSeconds: number;
   maxClipSeconds: number;
+  /** Kills at most this many seconds apart land in one clip (a double/triple), even with a short post-roll. */
+  chainSeconds: number;
   /** 'native' = your monitor's resolution, which is what Marvel Rivals renders at. */
   resolution: 'native' | '1080p' | '1440p' | '2160p';
   fps: 60 | 120;
@@ -63,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   preRollSeconds: 3,
   postRollSeconds: 4,
   maxClipSeconds: 20,
+  chainSeconds: 8,
   resolution: 'native',
   fps: 60,
   bitrateKbps: 0,
@@ -129,6 +132,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     preRollSeconds,
     postRollSeconds,
     maxClipSeconds,
+    chainSeconds: clampInt(r.chainSeconds, 4, 15, base.chainSeconds),
     // The buffer has to hold the whole pre-roll plus a margin, or clips come out short.
     bufferSeconds: Math.max(clampInt(r.bufferSeconds, 20, 300, base.bufferSeconds), preRollSeconds + 10),
     resolution: oneOf(r.resolution, ['native', '1080p', '1440p', '2160p'] as const, base.resolution),
