@@ -50,7 +50,8 @@ const EPS = 1e-6;
 
 function makeGrid(an: MusicAnalysis, M: number): Grid {
   const down = new Set(an.downbeats.map((d) => Math.round(d * 1000)));
-  const drop = an.drops[0];
+  // The song's big drop inside the part that plays: with the song started at 0:46, a drop at 0:11 is long gone.
+  const drop = firstDrop(an, M);
   const downList = an.downbeats;
   const dropBar = drop !== undefined ? downList.findIndex((d) => Math.abs(d - drop) < 0.005) : -1;
   const t: number[] = [];
@@ -68,7 +69,7 @@ function makeGrid(an: MusicAnalysis, M: number): Grid {
       if (((rel % 4) + 4) % 4 === 0) s = 3;
     }
     if (drop !== undefined && Math.abs(b - drop) < 0.005) s = 6;
-    else if (an.drops.slice(1).some((d) => Math.abs(b - d) < 0.005)) s = 4;
+    else if (an.drops.some((d) => d !== drop && Math.abs(b - d) < 0.005)) s = 4;
     t.push(Math.max(0, o));
     strength.push(s);
     downbeat.push(isDown);
@@ -114,9 +115,12 @@ function layoutPlain(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout 
   let score = 0;
   if (ctx.grid) {
     let best = -Infinity;
+    // Your own footage (a hook, an anime scene) was trimmed on purpose, so keep nearly all of it:
+    // only a game clip with no kill marked may be cut down hard to reach a stronger beat.
+    const keep = c.external ? 8 : 0.6;
     for (const i of beatsIn(ctx.grid, T + Math.min(L, 1), T + L)) {
       const used = ctx.grid.t[i] - T;
-      const sc = ctx.grid.strength[i] - (0.6 * (L - used)) / L;
+      const sc = ctx.grid.strength[i] - (keep * (L - used)) / L;
       if (sc > best) {
         best = sc;
         C = ctx.grid.t[i];
@@ -177,7 +181,13 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   let beat0 = false;
   if (g) {
     let best = -Infinity;
-    for (const i of beatsIn(g, T + leadMin, T + leadMax)) {
+    // The clip that should hit the drop may run up for longer than the style's usual lead-in,
+    // as far as its own footage allows, so a short hook before it still lands its first kill on the drop.
+    const leadBeats = beatsIn(g, T + leadMin, T + leadMax);
+    if (ctx.dropOut !== null && ctx.dropOut > T + leadMax && ctx.dropOut <= T + Math.max(leadMax, avail / Math.max(vmin, 0.1) + slowIn0)) {
+      leadBeats.push(...beatsIn(g, ctx.dropOut, ctx.dropOut));
+    }
+    for (const i of leadBeats) {
       const K = g.t[i];
       const r = tryLead(K);
       if (!r.ok) continue;
@@ -404,13 +414,13 @@ function planUnfitted(input: PlanInput): Timeline {
   let M = typeof input.musicStart === 'number' ? Math.max(0, input.musicStart) : 0;
   let layout: Layout;
   if (sync && an) {
-    const drop = an.drops[0];
     const candidates = typeof input.musicStart === 'number' ? [M] : [0, ...an.beats.filter((b) => b < an.durationSec - 4)];
     const downs = new Set(an.downbeats.map((d) => Math.round(d * 1000)));
     let best: Layout | undefined;
     let bestScore = -Infinity;
     let bestM = M;
     for (const m of candidates) {
+      const drop = firstDrop(an, m);
       const grid = makeGrid(an, m);
       const dropOut = drop !== undefined && drop - m >= 0 ? drop - m : null;
       const l = layoutAll(input, grid, dropOut, heroIdx);
@@ -481,7 +491,7 @@ function planUnfitted(input: PlanInput): Timeline {
   if (an) {
     beats = an.beats.map((b) => round4(b - M)).filter((b) => b >= 0 && b <= duration);
     downbeats = an.downbeats.map((b) => round4(b - M)).filter((b) => b >= 0 && b <= duration);
-    const d = an.drops[0];
+    const d = firstDrop(an, M);
     if (d !== undefined && d - M >= 0 && d - M <= duration) drop = round4(d - M);
     musicShort = an.durationSec - M < duration - 0.05;
     if (sync && d !== undefined && tClips.length) {
@@ -563,3 +573,8 @@ export function orderClips(clips: ReelClip[], order: 'manual' | 'build-up'): Ree
 }
 
 const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
+/** The first drop at or after where the song starts playing (the song's first drop when none is left). */
+export function firstDrop(an: MusicAnalysis, start: number): number | undefined {
+  return an.drops.find((d) => d >= start - 1e-3) ?? (start <= 0 ? an.drops[0] : undefined);
+}
