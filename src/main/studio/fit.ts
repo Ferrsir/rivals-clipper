@@ -75,10 +75,14 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
       .filter((c) => killCount(c) > 0 && !used.has(c.videoFile) && fs.existsSync(c.videoFile))
       .sort((a, b) => (heroes.get(b.hero ?? '') ?? 0) - (heroes.get(a.hero ?? '') ?? 0) || (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score);
     const maxAdd = opts.maxAdd ?? 20;
-    for (const source of pool) {
+    // Prepare first, then go best-first by what each clip really holds (its own kills, its trim),
+    // keeping your star ratings and the reel's heroes ahead.
+    const ready = pool
+      .map((source) => ({ source, clip: opts.prepare ? opts.prepare(reelClipFromSidecar(source)) : reelClipFromSidecar(source) }))
+      .filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip)
+      .sort((a, b) => (heroes.get(b.clip.hero ?? '') ?? 0) - (heroes.get(a.clip.hero ?? '') ?? 0) || (b.source.rating ?? 0) - (a.source.rating ?? 0) || b.clip.score - a.clip.score);
+    for (const { source, clip } of ready) {
       if (added.length >= maxAdd || seconds >= target - under) break;
-      const clip = opts.prepare ? opts.prepare(reelClipFromSidecar(source)) : reelClipFromSidecar(source);
-      if (!clip) continue;
       // Keep the closing clip (the best play, on the drop) last.
       const clips = [...p.clips];
       clips.splice(Math.max(0, clips.length - 1), 0, clip);

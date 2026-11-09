@@ -9,7 +9,8 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { AiClient } from '../ai-auth';
 import type { ClipSidecar } from '../../shared/types';
-import type { ExportFormat, FormatId, MediaAsset, MusicTrack, ReelIdea } from '../../shared/studio';
+import type { ClipRules, ExportFormat, FormatId, MediaAsset, MusicTrack, ReelIdea } from '../../shared/studio';
+import { describeRules } from './clip-rules';
 import { STYLES } from './styles';
 import { hookText } from './projects';
 import { requestedSeconds } from './fit';
@@ -256,7 +257,7 @@ export function sanitizeIdeas(raw: unknown, clips: ClipSidecar[], tracks: MusicT
   return out;
 }
 
-export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; assets?: MediaAsset[] }): string {
+export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; assets?: MediaAsset[]; rules?: ClipRules }): string {
   const clipRows = byScore(o.clips)
     .slice(0, 80)
     .map((c) => ({ id: c.id, hero: c.hero, kills: kills(c), killSeconds: c.events.filter(e => e.type === 'kill').map(e => Math.round(e.at - c.startTimeEpoch) / 1000), tags: plainTags(c).slice(0, 6), score: c.score, rating: c.rating, map: c.match?.map, seconds: c.durationMs / 1000 }));
@@ -295,7 +296,8 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     `Edit styles to choose from: ${STYLES.map((s) => `${s.id} (${s.description})`).join('; ')}.`,
     songs.length ? `My songs (use a trackId only if it really fits): ${JSON.stringify(songs)}` : 'I have no songs yet, so describe the music to search for.',
     'For music.search, give 2 to 4 words to search royalty-free music with (genre and mood, no artist names). In addition to the JSON fields below, include targetSeconds, clipEdits:[{clipId,in,out}], and music.start (a number or auto). Do not add an imageSearch unless a picture is requested.',
-    o.request ? `My own idea or request: "${o.request}"` : '',
+    o.rules ? `Hard rules from the creator: ${describeRules(o.rules)}. The clip list below already follows them; every idea must use only those clips. Never suggest a "versus" or "variety" idea that would need other heroes.` : '',
+    o.request ? `My own idea or request: "${o.request}". Follow every instruction in it exactly; it outranks the style notes above.` : '',
     `Clips: ${JSON.stringify(clipRows)}`,
     'Reply as JSON: {"ideas":[{"title":"","game":"what the footage is from","concept":"one sentence","hook":"hook card text: one line, or 2 to 4 very short lines separated by \\n that show one after another","endText":"big text over the last seconds (optional)","imageIdea":"what the hook picture shows","imageSearch":"","captions":["",""],"styleId":"","clipIds":[""],"music":{"trackId":"optional","mood":"","bpm":[120,140],"search":""},"postCaption":"post text with 4 to 6 hashtags","why":"why it would do well"}]}',
   ]
@@ -303,7 +305,7 @@ export function ideasPrompt(o: { clips: ClipSidecar[]; tracks: MusicTrack[]; for
     .join('\n\n');
 }
 
-export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; ffmpeg?:string; assets?: MediaAsset[] }): Promise<ReelIdea[]> {
+export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[]; tracks: MusicTrack[]; format: ExportFormat; request: string; count: number; ffmpeg?:string; assets?: MediaAsset[]; rules?: ClipRules }): Promise<ReelIdea[]> {
   if (o.request.length > 20000) throw new Error('Keep your reel prompt under 20,000 characters.');
   if (!ai) throw new Error('Sign in with Claude or ChatGPT under Settings to get AI ideas.');
   const ownVideos = (o.assets ?? []).filter((a) => a.kind === 'video' && fs.existsSync(a.file));
@@ -314,8 +316,8 @@ export async function aiIdeas(ai: AiClient | undefined, o: { clips: ClipSidecar[
     let clips=ownVideos.length && !/\b(rivals|library|my (recorded |saved )?clips|kills?)\b/i.test(o.request) ? [] : o.clips;
     const images:string[]=[];
     if(o.ffmpeg && dir) {
-      const requestedHeroes=[...new Set(clips.map(c=>c.hero).filter((hero):hero is string=>!!hero))].filter(hero=>o.request.toLowerCase().includes(hero.toLowerCase()));
-      clips=byScore(requestedHeroes.length ? clips.filter(c=>requestedHeroes.includes(c.hero || '')) : clips).slice(0,24);
+      // The clips arrive already limited to the prompt's rules (see clip-rules.ts); keep the best 24 for frames.
+      clips=byScore(clips.filter(c=>kills(c)>0)).slice(0,24);
       for(const [index,clip] of clips.entries()) {
         const image=path.join(dir,`clip-${index}.jpg`);
         await new Promise<void>((resolve,reject)=>execFile(o.ffmpeg!,['-v','error','-i',clip.videoFile,'-vf',`fps=3/${Math.max(.1,clip.durationMs/1000)},scale=960:-2,tile=1x3:padding=4:color=black`,'-frames:v','1','-y',image],{windowsHide:true,timeout:30000},error=>error?reject(error):resolve()));

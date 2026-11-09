@@ -5,6 +5,8 @@ import type { ClipSidecar } from '../shared/types';
 
 export const DEFAULT_WEIGHTS = {
   perKill: 10,
+  /** Assists start clips too; they count for a little so a kill with assists around it beats a lone kill. */
+  perAssist: 3,
   multiKill: { 2: 10, 3: 30, 4: 60, 5: 100, 6: 150 } as Record<number, number>,
   /** Average gap between kills under this many ms counts as "fast". */
   fastGapMs: 2500,
@@ -33,6 +35,7 @@ type Scorable = Pick<ClipSidecar, 'events' | 'match' | 'trigger' | 'ultUsedBefor
 export function scoreClip(clip: Scorable, w: Weights = DEFAULT_WEIGHTS): { score: number; tags: string[]; breakdown: Record<string, number> } {
   const kills = clip.events.filter((e) => e.type === 'kill').sort((a, b) => a.at - b.at);
   const deaths = clip.events.filter((e) => e.type === 'death');
+  const assists = clip.events.filter((e) => e.type === 'assist').length;
   const breakdown: Record<string, number> = {};
   const tags = new Set<string>();
   const add = (k: string, v: number) => {
@@ -45,6 +48,8 @@ export function scoreClip(clip: Scorable, w: Weights = DEFAULT_WEIGHTS): { score
   if (clip.match.gameType) tags.add(`mode:${clip.match.gameType}`);
 
   add('kills', kills.length * w.perKill);
+  add('assists', assists * w.perAssist);
+  if (assists) tags.add('assists');
   if (kills.length >= 1) tags.add(`${kills.length}k`);
 
   const tier = Math.min(kills.length, 6);

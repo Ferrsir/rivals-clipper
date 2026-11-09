@@ -7,6 +7,7 @@ import type { ClipSidecar } from '../../shared/types';
 import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject, VoiceRole, VoiceSettings } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
+import { sanitizeRules } from './clip-rules';
 
 export function newId(): string {
   return crypto.randomBytes(6).toString('hex');
@@ -297,6 +298,7 @@ export function sanitizeProject(p: any): ReelProject {
     feedStyle: p.feedStyle === 'own' ? 'own' : undefined,
     feedBorder: p.feedBorder === true || undefined,
     targetSeconds: Number.isFinite(p.targetSeconds) && p.targetSeconds >= 1 ? Math.min(f.maxSeconds, Number(p.targetSeconds)) : undefined,
+    clipRules: sanitizeRules(p.clipRules),
     sourceWarnings: Array.isArray(p.sourceWarnings) ? p.sourceWarnings.filter((x:unknown):x is string=>typeof x==='string').slice(0,80).map((x:string)=>x.slice(0,500)) : [],
     clips: (Array.isArray(p.clips) ? p.clips : []).map(sanitizeClip).filter((c: ReelClip | null): c is ReelClip => !!c).slice(0, 80),
     music,

@@ -19,7 +19,7 @@ export const api = {
   clips: () => call('studio:clips'),
   clipQuery: (q) => call('studio:clips:query', q),
   clipFacets: () => call('studio:clips:facets'),
-  autoFill: (project, seconds) => call('studio:autoFill', project, seconds),
+  autoFill: (project, seconds, visibleIds) => call('studio:autoFill', project, seconds, visibleIds),
   projects: {
     list: () => call('studio:projects:list'),
     get: (id) => call('studio:projects:get', id),
@@ -49,7 +49,7 @@ export const api = {
     tweakStyle: (project, request) => call('studio:ai:tweakStyle', project, request),
     captions: (project, request, lines) => call('studio:ai:captions', project, request, lines),
     postCaption: (project) => call('studio:ai:postCaption', project),
-    pickClips: (project, seconds) => call('studio:ai:pickClips', project, seconds),
+    pickClips: (project, seconds, visibleIds) => call('studio:ai:pickClips', project, seconds, visibleIds),
   },
   ideas: {
     quick: (format) => call('studio:ideas:quick', format),

@@ -226,8 +226,22 @@ export interface ReelMusic {
   start: number | 'auto';
 }
 
+/** Which library clips a prompt allows ("only Deadpool clips", "no Magik", "3+ kills"). Hard limits, kept with the project. */
+export interface ClipRules {
+  /** Only these heroes. Empty means any hero. */
+  heroes: string[];
+  /** Never these heroes. */
+  notHeroes: string[];
+  /** Every clip needs at least this many of your kills. */
+  minKills?: number;
+  /** Every clip needs one of these tags (e.g. "team-wipe"). */
+  needTags?: string[];
+}
+
 export interface ReelProject {
   sourceWarnings?: string[];
+  /** Rules from the prompt that every clip must follow, so later changes ("add more clips") keep them. */
+  clipRules?: ClipRules;
   version: 1;
   /** What the footage is from ("Marvel Rivals", "Jujutsu Kaisen"...). Empty means Marvel Rivals library clips. */
   game?: string;
