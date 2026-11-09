@@ -168,3 +168,13 @@ test('the "DEFEATED BY" card is recognised from its title strip', () => {
   for (let i = 0; i < sunset.length; i += 3) sunset.set([230, 190, 70], i);
   assert.ok(deathScore(sunset) < DEATH_MIN);
 });
+
+test('a clip trimmed by hand on the timeline is used from where you set it, not the style lead-in', () => {
+  const c = clip('t', [5], { in: 1, out: 8 });
+  const auto = plan({ clips: [c], style, fps: 60, analysis: grid(), musicStart: 0 });
+  const hand = plan({ clips: [{ ...c, manualTrim: true }], style, fps: 60, analysis: grid(), musicStart: 0 });
+  assert.ok(auto.segments[0].src[0] > 2, 'the style runs up for about a second');
+  assert.ok(Math.abs(hand.segments[0].src[0] - 1) < 0.05, `starts at ${hand.segments[0].src[0]}`);
+  assert.ok(Math.abs(hand.segments.at(-1)!.src[1] - 8) < 0.6, `ends at ${hand.segments.at(-1)!.src[1]}`);
+  assert.ok(hand.segments.every((s) => s.speed >= style.speedRange[0] - 1e-3 && s.speed <= style.speedRange[1] + 1e-3));
+});

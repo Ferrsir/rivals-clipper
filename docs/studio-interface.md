@@ -98,3 +98,17 @@ Ferris's feedback on the first prompt-made reels, and what changed:
 - **Revisions add clips.** "Request changes" sends the AI the library list too, so "make it longer, add more clips" really pulls new clips.
 - **Your own media.** Drop videos or pictures on the Create panel (or "+ Add files"). The AI can put your videos in the edit (`asset:<id>` clip ids), lay a picture over a clip (`overlays`, positions in source-frame fractions, times in clip seconds), and add subtitles you wrote (`subtitles`, mapped through retiming in `subtitleTimes`). A face-anchored overlay is located by your signed-in AI on 3–12 frames and follows those keyframes (`overlay.ts`). Speech-to-text is not built in: subtitles use words from your prompt.
 - **Make reel steps.** The Create panel shows four steps (plan, length + music, render, review) with notes such as which song was picked and how many clips were added. If no song was chosen and your library has analysed songs, the best match is picked automatically.
+
+## Timeline and hand edits
+
+The bottom panel is laid out like Premiere Pro's sequence panel: a timecode ruler with the song's beats and drop, then V2 (subtitles, captions, picture overlays), V1 (clips with head thumbnails, kill markers, held frames and jump cuts), A1 (each clip's own sound) and A2 (the song, its volume line, audio jumps and the end fade).
+
+- Selection tool (V): click to select, drag a clip's edge to trim it (sets `manualTrim`, so the planner keeps that trim and only flexes speed to stay on the beat), drag a clip to reorder.
+- Razor (C): click a clip to split it in two; kill markers, overlays and subtitles follow their half.
+- Audio jump (J): the song drops out for one beat at the playhead (`project.musicCuts`); drag it to move, Delete removes it.
+- Snap (S) snaps edits to beats. Ctrl+wheel or +/- zooms, \ fits, arrows step a frame.
+- Without a fresh preview, scrubbing shows the source frame at the playhead in the program monitor.
+
+Per-clip controls (Clip tab, "Edit"): music under this clip (`musicLevel`), clip volume (`gain`), level the sound up (`normalize`), hold the last frame (`holdBeats`), fade in/out, jump cuts between kills (`jumpCut`), keep my trim. Audio tab: the ending (`ending.mode` cut or play-out, with its fade) and the audio jumps list.
+
+A prompt with a hook clip before gameplay gets the hook defaults (song at 16% under it, sound levelled, one-beat hold) and ends the hook just after the word named in "till gojo goes 'exactly'". "Let the last clip play out" sets the play-out ending.

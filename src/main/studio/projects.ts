@@ -258,7 +258,7 @@ function sanitizeClip(c: any): ReelClip | null {
 }
 
 /** The hand edits on a clip (music bed, gain, hold, fades, jump cuts); unset fields stay unset. */
-export function clipEdits(c: any): Pick<ReelClip, 'musicLevel' | 'gain' | 'normalize' | 'holdBeats' | 'fadeIn' | 'fadeOut' | 'jumpCut'> {
+export function clipEdits(c: any): Pick<ReelClip, 'musicLevel' | 'gain' | 'normalize' | 'holdBeats' | 'fadeIn' | 'fadeOut' | 'jumpCut' | 'manualTrim'> {
   const opt = (v: unknown, lo: number, hi: number) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? undefined : num(v, lo, hi, lo));
   const out: ReturnType<typeof clipEdits> = {};
   const musicLevel = opt(c.musicLevel, 0, 1);
@@ -273,6 +273,7 @@ export function clipEdits(c: any): Pick<ReelClip, 'musicLevel' | 'gain' | 'norma
   const fadeOut = opt(c.fadeOut, 0, 5);
   if (fadeOut) out.fadeOut = fadeOut;
   if (c.jumpCut === false) out.jumpCut = false;
+  if (c.manualTrim === true) out.manualTrim = true;
   return out;
 }
 

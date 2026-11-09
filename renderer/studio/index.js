@@ -3,7 +3,7 @@
 
 import { api } from './api.js';
 import { clear, debounce, fileUrl, fmtTime, h, select, slider, toast, toggle } from './dom.js';
-import { TIMELINE_HEIGHT, clipHue, drawTimeline } from './timeline.js';
+import { clipHue, createTimeline } from './timeline.js';
 import { PLATFORM_OF_FORMAT, formatOfFile, openAccounts, openFreeSearch, platformLabel, uploadRequest } from './share.js';
 
 const S = {
@@ -34,7 +34,6 @@ const S = {
 };
 let root;
 const E = {};
-let hit = { timeAt: () => 0, clipAt: () => null };
 const audio = new Audio();
 let playingTrack = null;
 
@@ -62,7 +61,7 @@ const vertical = () => fmt().height >= fmt().width;
 const trackOf = (id) => S.tracks.find((t) => t.id === id);
 const currentTrack = () => (S.project?.music ? trackOf(S.project.music.trackId) : undefined);
 const clipByUid = (uid) => S.project.clips.find((c) => c.uid === uid);
-const planKey = () => JSON.stringify(S.project?.clips) + JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + JSON.stringify(S.project?.music) + JSON.stringify([S.project?.fps,S.project?.format,S.project?.targetSeconds,S.project?.order,S.project?.heroUid]) + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null);
+const planKey = () => JSON.stringify(S.project?.clips) + JSON.stringify(S.timeline?.segments?.map((s) => [s.src, s.out]) ?? []) + JSON.stringify(S.project?.style) + JSON.stringify(S.project?.mix) + JSON.stringify(S.project?.music) + JSON.stringify([S.project?.fps,S.project?.format,S.project?.targetSeconds,S.project?.order,S.project?.heroUid]) + JSON.stringify(S.project?.captions) + JSON.stringify(S.project?.intro) + JSON.stringify(S.project?.outro ?? null) + JSON.stringify([S.project?.musicCuts ?? null, S.project?.ending ?? null, S.project?.overlays ?? null, S.project?.subtitles ?? null]);
 const pct = (v) => `${Math.round(v * 100)}%`;
 const x100 = (v) => `${Math.round(v * 100)}`;
 
@@ -265,15 +264,34 @@ function build() {
   E.left = h('aside', { class: 'st-left' });
   E.center = h('section', { class: 'st-center' });
   E.right = h('aside', { class: 'st-right' });
-  E.canvas = h('canvas', { class: 'st-canvas', style: { height: `${TIMELINE_HEIGHT}px` } });
-  E.canvas.addEventListener('click', (e) => {
-    const rect = E.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const uid = hit.clipAt(x);
-    if (uid) selectClip(uid);
-    const v = E.center.querySelector('video.st-preview');
-    if (v && S.preview) v.currentTime = hit.timeAt(x);
+  E.tl = createTimeline({
+    fileUrl,
+    onSelect: (uid) => (uid ? selectClip(uid) : ((S.sel = null), renderRight(), renderStrip(), drawTL())),
+    onSeek: (t, at) => seekProgram(t, at),
+    onTrim: trimClip,
+    onMove: (from, to) => change((p) => {
+      const [m] = p.clips.splice(from, 1);
+      p.clips.splice(to, 0, m);
+      p.order = 'manual';
+    }, [renderStrip, renderRight]),
+    onSplit: splitClip,
+    onSelectJump: () => {
+      S.rightTab = 'audio';
+      renderRight();
+    },
+    onMoveJump: (i, at) => change((p) => {
+      p.musicCuts[i].at = Math.round(at * 1000) / 1000;
+      p.musicCuts.sort((a, b) => a.at - b.at);
+    }, [renderRight]),
+    onAddJump: (at, length) => change((p) => {
+      p.musicCuts = [...(p.musicCuts ?? []).filter((c) => Math.abs(c.at - at) > 0.01), { at: Math.round(at * 1000) / 1000, length }].sort((a, b) => a.at - b.at);
+    }, [renderRight]),
+    onDelete: (what) => {
+      if (what.uid) removeClip(what.uid);
+      else if (what.jump !== undefined) change((p) => p.musicCuts.splice(what.jump, 1), [renderRight]);
+    },
   });
+  E.scrub = h('video', { class: 'st-scrubview hidden', muted: true, preload: 'auto', playsInline: true });
   E.strip = h('div', { class: 'st-strip' });
   E.banner = h('div', { class: 'st-banner hidden' });
   clear(
@@ -281,7 +299,7 @@ function build() {
     E.banner,
     E.top,
     h('div', { class: 'st-main' }, E.left, E.center, E.right),
-    h('div', { class: 'st-bottom' }, E.canvas, E.strip),
+    h('div', { class: 'st-bottom' }, E.tl.el, E.strip),
   );
   if (!S.init.ffmpeg.ok) {
     E.banner.classList.remove('hidden');
@@ -1035,6 +1053,7 @@ function renderCenter() {
     S.preview.autoplay = false;
     v.addEventListener('timeupdate', () => drawTL(v.currentTime));
     stage.append(v);
+    if (S.preview.key !== planKey()) stage.append(E.scrub);
   } else {
     stage.append(
       h(
@@ -1042,8 +1061,9 @@ function renderCenter() {
         { class: 'st-stage-empty' },
         !S.project.clips.length
           ? [h('h3', {}, 'Start a reel'), h('p', {}, 'Add clips from the left. Pick music under Music. The studio lines up every kill with the beat for you.')]
-          : [h('h3', {}, 'Ready to preview'), h('p', {}, 'Renders a quick, low-res version so you can watch the edit.'), h('button', { class: 'st-btn primary', disabled: !S.init.ffmpeg.ok, onclick: () => startRender({ preview: true }) }, 'Render preview')],
+          : [h('h3', {}, 'Ready to preview'), h('p', {}, 'Renders a quick, low-res version so you can watch the edit. Scrub the timeline below to see each moment now.'), h('button', { class: 'st-btn primary', disabled: !S.init.ffmpeg.ok, onclick: () => startRender({ preview: true }) }, 'Render preview')],
       ),
+      E.scrub,
     );
   }
   if (S.safeZones && vertical()) {
@@ -1346,6 +1366,7 @@ function clipInspector() {
       : h('p', { class: 'st-note' }, 'This clip has no mic track.'),
     toggle({ label: 'Mute game sound', checked: !!c.muteGame, onChange: (on) => setNum('muteGame', on) }),
     toggle({ label: 'Land this clip on the drop', checked: S.project.heroUid === c.uid || (!S.project.heroUid && isTopScore(c)), onChange: (on) => change((p) => (p.heroUid = on ? c.uid : undefined)), hint: 'Its first kill hits the song\'s drop. By default that is your highest-scoring clip.' }),
+    editControls(c),
     h(
       'div',
       { class: 'st-row' },
@@ -1353,6 +1374,25 @@ function clipInspector() {
       h('button', { class: 'st-btn small ghost', disabled: idx === S.project.clips.length - 1, onclick: () => moveClip(idx, 1) }, 'Later →'),
       h('button', { class: 'st-btn small danger', onclick: () => removeClip(c.uid) }, 'Remove'),
     ),
+  );
+}
+
+/** Premiere-style "Effect Controls" for one clip: what Claude set, and what you can change by hand. */
+function editControls(c) {
+  const set = (fn, parts = [renderRight]) => change((p) => fn(p.clips.find((x) => x.uid === c.uid)), parts);
+  const opt = (v, d) => (v === undefined ? d : v);
+  return h(
+    'div',
+    { class: 'st-effects' },
+    h('h3', {}, 'Edit'),
+    slider({ label: 'Music under this clip', min: 0, max: 1, step: 0.02, value: opt(c.musicLevel, 1), format: pct, onInput: (v) => set((x) => (v >= 0.999 ? delete x.musicLevel : (x.musicLevel = v)), []), hint: 'Keep the song as a quiet bed under a hook (16% is a good start). It comes back to full when the next clip starts.' }),
+    slider({ label: 'Clip volume', min: 0, max: 2.5, step: 0.05, value: opt(c.gain, 1), format: pct, onInput: (v) => set((x) => (Math.abs(v - 1) < 1e-3 ? delete x.gain : (x.gain = v)), []) }),
+    toggle({ label: 'Level the sound up (TikTok loudness)', checked: !!c.normalize, onChange: (on) => set((x) => (on ? (x.normalize = true) : delete x.normalize)), hint: 'For a quiet anime hook or voice line' }),
+    select({ label: 'Hold the last frame', value: String(opt(c.holdBeats, 0)), options: [['0', 'Off'], ['0.5', '½ beat'], ['1', '1 beat'], ['2', '2 beats']], onChange: (v) => set((x) => (Number(v) ? (x.holdBeats = Number(v)) : delete x.holdBeats)), hint: 'Freeze on the last frame so a line finishes before the next cut, then cut on the beat' }),
+    slider({ label: 'Fade in', min: 0, max: 1.5, step: 0.05, value: opt(c.fadeIn, 0), format: (v) => (v ? `${v.toFixed(2)} s` : 'off'), onInput: (v) => set((x) => (v ? (x.fadeIn = v) : delete x.fadeIn), []) }),
+    slider({ label: 'Fade out', min: 0, max: 1.5, step: 0.05, value: opt(c.fadeOut, 0), format: (v) => (v ? `${v.toFixed(2)} s` : 'off'), onInput: (v) => set((x) => (v ? (x.fadeOut = v) : delete x.fadeOut), []) }),
+    toggle({ label: 'Cut out the wait between kills', checked: c.jumpCut !== false, onChange: (on) => set((x) => (on ? delete x.jumpCut : (x.jumpCut = false))), hint: 'A slow double becomes two quick cuts instead of speeding through the walk between them' }),
+    toggle({ label: 'Keep my trim exactly', checked: !!c.manualTrim, onChange: (on) => set((x) => (on ? (x.manualTrim = true) : delete x.manualTrim)), hint: 'On after you drag an edge on the timeline. Off lets the style pick the lead-in and tail.' }),
   );
 }
 
@@ -1589,6 +1629,16 @@ function audioPanel() {
             : h('p', { class: 'st-note' }, `Starts at ${fmtTime(S.timeline?.musicStart ?? 0, true)}.`),
         ]
       : h('p', { class: 'st-note' }, 'Pick a song under Music on the left.'),
+    h('h3', {}, 'Ending'),
+    select({ label: 'How the reel ends', value: p.ending?.mode ?? 'cut', options: [['cut', 'Cut on the beat after the last kill'], ['play-out', 'Let the last clip play out and fade']], onChange: (v) => change((pr) => (pr.ending = { mode: v, fade: pr.ending?.fade ?? (v === 'play-out' ? 1.8 : 0.3) }), [renderRight]) }),
+    p.ending ? slider({ label: 'Fade at the end', min: 0, max: 4, step: 0.1, value: p.ending.fade, format: (v) => `${v.toFixed(1)} s`, onInput: (v) => change((pr) => (pr.ending.fade = v)) }) : null,
+    h('h3', {}, 'Audio jumps'),
+    h('p', { class: 'st-note' }, 'The song drops out for a moment and slams back in. Put the playhead where you want one and press Audio jump (J) on the timeline.'),
+    (p.musicCuts ?? []).map((cut, i) => h('div', { class: 'st-kill' },
+      h('span', {}, `At ${fmtTime(cut.at, true)}`),
+      select({ value: String(cut.length), options: [...new Set([cut.length, ...[0.5, 1, 2].map((k) => Math.round(k * 60000 / (currentTrack()?.analysis?.bpm || 120)) / 1000)])].map((v) => [String(v), `${v.toFixed(2)} s`]), onChange: (v) => change((pr) => (pr.musicCuts[i].length = Number(v)), [renderRight]) }),
+      h('button', { class: 'st-x', title: 'Remove', onclick: () => change((pr) => pr.musicCuts.splice(i, 1), [renderRight]) }, '×'),
+    )),
     h('h3', {}, 'Mic per clip'),
     micClips.length
       ? micClips.map((c) => toggle({ label: `Clip ${p.clips.indexOf(c) + 1} · ${c.hero ?? ''} ${c.kills}k`, checked: c.useMic, onChange: (on) => change((pr) => (pr.clips.find((x) => x.uid === c.uid).useMic = on), [renderStrip]) }))
@@ -1641,8 +1691,81 @@ function renderStrip() {
 }
 
 function drawTL(playhead) {
-  if (!E.canvas || !S.project) return;
-  hit = drawTimeline(E.canvas, { timeline: S.timeline, track: currentTrack(), selectedUid: S.sel, playhead: Number.isFinite(playhead) ? playhead : undefined });
+  if (!E.tl || !S.project) return;
+  E.tl.update({ timeline: S.timeline, project: S.project, track: currentTrack(), sel: S.sel });
+  if (Number.isFinite(playhead)) E.tl.setPlayhead(playhead);
+}
+
+/**
+ * The program monitor: a fresh preview jumps to the playhead; without one (or after edits) the clip's own
+ * frame at that moment shows, framed roughly like the export, so you can see what's there without rendering.
+ */
+function seekProgram(t, at) {
+  const v = E.center?.querySelector('video.st-preview');
+  const fresh = S.preview && S.preview.key === planKey();
+  if (v && fresh) {
+    v.currentTime = t;
+    E.scrub.classList.add('hidden');
+    return;
+  }
+  const c = at && clipByUid(at.uid);
+  if (!c) {
+    E.scrub.classList.add('hidden');
+    return;
+  }
+  const url = fileUrl(c.videoFile);
+  if (E.scrub.dataset.src !== url) {
+    E.scrub.dataset.src = url;
+    E.scrub.src = url;
+  }
+  const go = () => (E.scrub.currentTime = Math.max(0, at.src));
+  E.scrub.readyState >= 1 ? go() : E.scrub.addEventListener('loadedmetadata', go, { once: true });
+  E.scrub.style.objectFit = c.external ? 'contain' : 'cover';
+  E.scrub.style.objectPosition = `${Math.round((c.cropX ?? 0.5) * 100)}% 50%`;
+  E.scrub.classList.remove('hidden');
+}
+
+/** Dragging a clip's edge on the timeline: the edit then uses the clip from exactly there. */
+function trimClip(uid, edge, src) {
+  change((p) => {
+    const c = p.clips.find((x) => x.uid === uid);
+    if (!c) return;
+    if (edge === 'in') c.in = Math.round(Math.max(0, Math.min(src, c.out - 0.3)) * 1000) / 1000;
+    else c.out = Math.round(Math.min(c.durationSec, Math.max(src, c.in + 0.3)) * 1000) / 1000;
+    c.manualTrim = true;
+  }, [renderRight, renderStrip]);
+}
+
+/** Razor: one clip becomes two at `src` (clip seconds). Kill markers, pictures and lines go with their half. */
+function splitClip(uid, src) {
+  const c = clipByUid(uid);
+  if (!c || src <= c.in + 0.1 || src >= c.out - 0.1) {
+    toast(root, 'Too close to the clip\'s edge to split there.', 'info', 2000);
+    return;
+  }
+  const newUid = (crypto.randomUUID?.() ?? String(Math.random()).slice(2)).replace(/-/g, '').slice(0, 12);
+  change((p) => {
+    const i = p.clips.findIndex((x) => x.uid === uid);
+    const a = p.clips[i];
+    const b = structuredClone(a);
+    b.uid = newUid;
+    a.out = src;
+    b.in = src;
+    a.hits = a.hits.filter((t) => t < src);
+    b.hits = b.hits.filter((t) => t >= src);
+    a.kills = a.hits.length;
+    b.kills = b.hits.length;
+    a.manualTrim = b.manualTrim = true;
+    // The first half keeps the fade in, the second the hold and fade out.
+    delete a.holdBeats;
+    delete a.fadeOut;
+    delete b.fadeIn;
+    p.clips.splice(i + 1, 0, b);
+    p.order = 'manual';
+    p.overlays = [...(p.overlays ?? []), ...(p.overlays ?? []).filter((o) => o.clipUid === uid && o.to > src).map((o) => ({ ...structuredClone(o), clipUid: newUid }))];
+    p.subtitles = [...(p.subtitles ?? []), ...(p.subtitles ?? []).filter((t) => t.clipUid === uid && t.to > src).map((t) => ({ ...t, clipUid: newUid }))];
+  }, [renderRight, renderStrip]);
+  toast(root, 'Split the clip in two.', 'info', 1500);
 }
 
 // ---------- rendering ----------

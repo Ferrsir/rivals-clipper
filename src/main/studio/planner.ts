@@ -145,7 +145,7 @@ function layoutPlain(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout 
     let best = -Infinity;
     // Your own footage (a hook, an anime scene) was trimmed on purpose, so keep nearly all of it:
     // only a game clip with no kill marked may be cut down hard to reach a stronger beat.
-    const keep = c.external ? 8 : 0.6;
+    const keep = c.external || c.manualTrim ? 8 : 0.6;
     for (const i of beatsIn(ctx.grid, T + Math.min(L, 1), T + L)) {
       const used = ctx.grid.t[i] - T;
       const sc = ctx.grid.strength[i] - (keep * (L - used)) / L;
@@ -197,7 +197,9 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
 
   // --- run-up to the first kill ---
   const avail = hits[0] - pre[0] - c.in;
-  const [leadMin, leadMax] = st.leadIn;
+  // Trimmed by hand: run up from where you set the start, not the style's usual lead-in.
+  const handLead = Math.max(0.1, avail / cruise);
+  const [leadMin, leadMax] = c.manualTrim ? [handLead * 0.85, handLead * 1.15] : st.leadIn;
   const leadPref = leadMin + 0.35 * (leadMax - leadMin);
   const slowIn0 = pre[0] / sp;
   const tryLead = (K: number): { v: number; ok: boolean } => {
@@ -337,7 +339,8 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   const slowOutL = post[n - 1] / sp;
   pieces.push({ kind: 'slow-out', clip: idx, src0: hl, src1: hl + post[n - 1], out0: Kl, out1: Kl + slowOutL });
   const R = Math.max(0, c.out - hl - post[n - 1]);
-  const [tailMin, tailMax] = st.tail;
+  const handTail = Math.max(0.1, R / cruise);
+  const [tailMin, tailMax] = c.manualTrim ? [handTail * 0.85, handTail * 1.15] : st.tail;
   let C = NaN;
   let vt = cruise;
   if (ctx.playOut) {

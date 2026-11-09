@@ -221,6 +221,8 @@ export interface ReelClip {
   fadeOut?: number;
   /** Cut out dead time between this clip's kills instead of speeding through it (default on). */
   jumpCut?: boolean;
+  /** Trimmed by hand on the timeline: the edit uses the clip from `in` to `out` (speeds still flex a little to keep the beat). */
+  manualTrim?: boolean;
 }
 
 /** One of your rows in the game's kill feed: its slot (0 = top), clip seconds, and plate left edge (0..1 of the feed box). */
