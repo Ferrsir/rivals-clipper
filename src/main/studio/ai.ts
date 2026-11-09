@@ -7,6 +7,7 @@ import type { AiClient } from '../ai-auth';
 import type { AiMusicIdea, ExportFormat, ReelClip, ReelProject, StyleRecipe } from '../../shared/studio';
 import type { ClipSidecar } from '../../shared/types';
 import { sanitizeStyle } from './styles';
+import { describeRules } from './clip-rules';
 
 const SYSTEM = 'You help edit short gameplay and fan-edit videos (Marvel Rivals or any other game, anime, show or film). Be concise. Follow the requested JSON shape exactly.';
 
@@ -131,6 +132,7 @@ export async function reviseReel(ai: AiClient | undefined, project: ReelProject,
     'Every clip should end right after its last kill and cut to the next one on the beat. Keep the character centred (cropX 0.5) unless asked otherwise. Keep the kill feed box (preserveKillFeed true) on game clips.',
     'Return JSON {clips:[{uid,in,out,cropX,cropY,cropZoom,preserveKillFeed} for kept clips | {clipId} to add a library clip | {clipId:"asset:..."} to add one of their videos], targetSeconds:number, musicStart:number|"auto", style:<complete style>, mix:<complete mix>, overlays:[{assetId,onClip (a uid, library clipId or asset id),from,to (seconds inside that clip),anchor:"face"|"fixed",x,y,size,shape:"circle"|"square"}], subtitles:[{onClip,from,to,text}], summary:string}. List every clip in the order it should play. Keep unchanged values.',
     'Do not add captions, intro cards, subtitles or text unless the request asks for them. Subtitles use only words the creator gave you.',
+    project.clipRules ? `Hard rules from the creator: ${describeRules(project.clipRules)}. The library list below already follows them. Remove any clip in the current edit that breaks them and never add one that does; a shorter reel is better than breaking a rule.` : '',
     `Current edit: ${JSON.stringify(current)}`,
     `Library clips you can add: ${JSON.stringify(candidates)}`,
     assets.length ? `Their own media: ${JSON.stringify(assets)}` : '',

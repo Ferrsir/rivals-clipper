@@ -561,13 +561,13 @@ function clipsPanel() {
   const actions = h(
     'div',
     { class: 'st-row' },
-    h('button', { class: 'st-btn small', disabled: S.busy.fill, title: `Adds your best unused clips until the reel is about ${target} s`, onclick: () => guarded('fill', async () => {
-      const add = await api.autoFill(S.project, target);
+    h('button', { class: 'st-btn small', disabled: S.busy.fill, title: `Adds your best unused clips${active ? ' from the filtered list' : ''} until the reel is about ${target} s`, onclick: () => guarded('fill', async () => {
+      const add = await api.autoFill(S.project, target, active ? list.map((c) => c.id) : undefined);
       if (!add.length) throw new Error('No more clips to add.');
       change((p) => p.clips.push(...add), [renderLeft, renderStrip]);
     }, null) }, S.busy.fill ? 'Adding…' : `Fill ~${target}s with best`),
     h('button', { class: 'st-btn small', disabled: !ai || S.busy.pick, title: ai ? 'Claude/ChatGPT picks and orders clips for a story' : 'Sign in under Settings, Account to use AI', onclick: () => guarded('pick', async () => {
-      const add = await api.ai.pickClips(S.project, target);
+      const add = await api.ai.pickClips(S.project, target, active ? list.map((c) => c.id) : undefined);
       if (!add.length) throw new Error('The AI did not pick any clips.');
       change((p) => (p.clips = add), [renderLeft, renderStrip]);
     }, 'AI picked your clips') }, S.busy.pick ? 'Thinking…' : 'AI pick'),
@@ -1076,6 +1076,7 @@ function renderCenter() {
     tl ? h('span', {}, `${fmtTime(tl.duration, true)} · ${S.project.clips.length} clip${S.project.clips.length === 1 ? '' : 's'} · ${killsTotal} kill${killsTotal === 1 ? '' : 's'}${S.project.music && S.project.style.beatSync ? ` · ${onBeat}/${killsTotal} on the beat` : ''}`) : null,
     tl && tl.duration > f.idealSeconds[1] && tl.duration <= f.maxSeconds ? h('span', { class: 'st-warn' }, ` · ${f.label} edits do best under ${f.idealSeconds[1]} s`) : null,
     stale ? h('span', { class: 'st-warn' }, ' · changed since this preview') : null,
+    rulesText(S.project.clipRules) ? h('span', { title: 'From your prompt. Every clip in this reel has to follow it, including clips added later. Say "any hero" in Request changes to lift it.' }, ` · Rules: ${rulesText(S.project.clipRules)}`) : null,
     vertical() ? toggle({ label: 'Safe zones', checked: S.safeZones, onChange: (v) => ((S.safeZones = v), renderCenter()), hint: 'Shows where TikTok/Instagram/YouTube put their buttons and captions' }) : null,
   );
   const warn = tl?.warnings?.length ? h('ul', { class: 'st-warnings' }, tl.warnings.map((w) => h('li', {}, w))) : null;
@@ -1849,4 +1850,15 @@ function onKey(e) {
     }
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && S.sel) removeClip(S.sel);
+}
+
+/** "only Deadpool clips, no Magik clips, 3+ kills" for the reel's rule line. */
+function rulesText(r) {
+  if (!r) return '';
+  const parts = [];
+  if (r.heroes?.length) parts.push(`only ${r.heroes.join(' / ')}`);
+  if (r.notHeroes?.length) parts.push(`no ${r.notHeroes.join(' / ')}`);
+  if (r.minKills) parts.push(`${r.minKills}+ kills`);
+  if (r.needTags?.includes('team-wipe')) parts.push('team wipes');
+  return parts.join(', ');
 }

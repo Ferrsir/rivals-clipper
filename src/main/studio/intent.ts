@@ -3,7 +3,7 @@
 // a reel thats about 20-30 seconds ... to the song aizo".
 
 import path from 'node:path';
-import type { MusicTrack } from '../../shared/studio';
+import type { MusicTrack, StyleRecipe } from '../../shared/studio';
 import { requestedSeconds } from './fit';
 
 export interface PromptIntent {
@@ -117,4 +117,60 @@ export function findSong(tracks: MusicTrack[], name: string | undefined): MusicT
     }
   }
   return score >= 0.6 ? best : undefined;
+}
+
+/**
+ * Effect rules a prompt states plainly ("no slow-mo", "no shake", "slow-mo on every kill", "just hard cuts",
+ * "clean, no effects"). Applied to the style after the AI's plan, so they hold whatever it picked.
+ */
+export function styleFromPrompt(text: string, style: StyleRecipe): { style: StyleRecipe; changes: string[] } {
+  const t = ` ${text.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, ' ')} `;
+  const s: StyleRecipe = JSON.parse(JSON.stringify(style));
+  const changes: string[] = [];
+  const NO = String.raw`(?:no|without|zero|remove|drop|turn off|don'?t (?:add|use|want)|dont (?:add|use|want)|get rid of|less)\s+(?:any\s+|the\s+)?`;
+  const no = (what: string) => new RegExp(NO + what).test(t);
+  const SLOW = String.raw`(?:slow[- ]?mo(?:tion)?s?|slow motion|slowdowns?)`;
+  const clean = no(String.raw`(?:effects?|fx|edits? on it|extra stuff)`) || /\b(clean|raw|plain|simple) (edit|cut|reel|montage)\b|\bjust the (gameplay|clips)\b/.test(t);
+  if (clean) {
+    s.slowmo.on = false;
+    s.zoom.on = false;
+    s.shake.on = false;
+    s.flash.on = false;
+    s.rgbSplit.on = false;
+    s.echo.on = false;
+    s.motionBlur.on = false;
+    s.transition = 'cut';
+    s.speedRange = [Math.max(0.9, Math.min(s.speedRange[0], 1)), Math.min(1.15, Math.max(s.speedRange[1], 1))];
+    s.cruiseSpeed = 1;
+    s.impactSound = 0;
+    changes.push('no effects (plain cuts on the beat)');
+  }
+  if (no(SLOW) && s.slowmo.on) { s.slowmo.on = false; changes.push('no slow-mo'); }
+  else if (new RegExp(SLOW + String.raw`\s+(?:on|for|at)\s+(?:every|all|each)(?: the)? kills?`).test(t) || /\b(every|each|all) kills? (in|with|gets?) slow[- ]?mo/.test(t)) {
+    s.slowmo.on = true; s.slowmo.scope = 'all'; changes.push('slow-mo on every kill');
+  } else if (!clean && new RegExp(String.raw`\b(?:add|with|use|more|some)\s+(?:some\s+)?` + SLOW).test(t) && !s.slowmo.on) {
+    s.slowmo.on = true; changes.push('slow-mo on the big play');
+  }
+  if (no(String.raw`(?:zooms?|zoom[- ]ins?|punch[- ]?ins?)`) && s.zoom.on) { s.zoom.on = false; changes.push('no zoom'); }
+  if (no(String.raw`(?:shakes?|camera shake|screen shake)`) && s.shake.on) { s.shake.on = false; changes.push('no shake'); }
+  if (no(String.raw`(?:flash(?:es)?|white flash(?:es)?)`) && (s.flash.on || s.transition === 'flash')) {
+    s.flash.on = false;
+    if (s.transition === 'flash') s.transition = 'cut';
+    changes.push('no flashes');
+  }
+  if (no(String.raw`(?:rgb|chromatic|glitch)`) && s.rgbSplit.on) { s.rgbSplit.on = false; changes.push('no RGB split'); }
+  if (no(String.raw`(?:trails?|ghosting|afterimages?|echo)`) && s.echo.on) { s.echo.on = false; changes.push('no trails'); }
+  if (no(String.raw`(?:blur|motion blur)`) && s.motionBlur.on) { s.motionBlur.on = false; changes.push('no motion blur'); }
+  if (no(String.raw`(?:transitions?)`) || /\b(hard|straight|just|only) cuts\b/.test(t)) {
+    if (s.transition !== 'cut') { s.transition = 'cut'; changes.push('hard cuts between clips'); }
+  }
+  if (no(String.raw`(?:speed ?ramps?|speed[- ]?ups?|speeding up|sped up|velocity|speed changes?)`) || /\b(real[- ]?time|normal speed)\b/.test(t)) {
+    s.speedRange = [Math.max(0.95, Math.min(s.speedRange[0], 1)), Math.min(1.05, Math.max(s.speedRange[1], 1))];
+    s.cruiseSpeed = 1;
+    s.motionBlur.on = false;
+    changes.push('normal speed');
+  }
+  if (no(String.raw`(?:hit ?sounds?|impact sounds?|sound effects?|sfx)`) && s.impactSound > 0) { s.impactSound = 0; changes.push('no hit sounds'); }
+  if (no(String.raw`(?:fade|fade out|fade to black)`) && s.fadeOut > 0) { s.fadeOut = 0; changes.push('no fade at the end'); }
+  return { style: s, changes };
 }

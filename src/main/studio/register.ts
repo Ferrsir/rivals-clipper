@@ -23,7 +23,10 @@ import { describeFit, duration as reelSeconds, fitToTarget, requestedSeconds } f
 import { locateFace } from './overlay';
 import { scanClip, trimAround, type ClipScan } from './clip-filter';
 import { withFeedRows } from './feed-rows';
-import { findSong, readIntent } from './intent';
+import { findSong, readIntent, styleFromPrompt } from './intent';
+import { checkClip, describeRules, filterLibrary, hasRules, heroOf, mergeRules, readClipRules, type ClipRules } from './clip-rules';
+import { HeroChecks, checkHeroes } from './hero-check';
+import { scoreClip } from '../scoring';
 import { detectMoments, expandOwnFootage } from './moments';
 import { SpeechTools } from './tools';
 import { assignSpeakers, linesToSubtitles, transcribe } from './speech';
@@ -149,11 +152,36 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   });
   handle('studio:clips:facets', () => clipIndex.facets());
 
-  handle('studio:autoFill', (_e, proj: unknown, seconds: number) => {
+  // ---------- clip rules ("only Deadpool clips") ----------
+  let heroChecks: HeroChecks | undefined;
+  const checks = () => {
+    const file = path.join(studioDir(), 'hero-checks.json');
+    if (!heroChecks || (heroChecks as any).file !== file) heroChecks = new HeroChecks(file);
+    return heroChecks;
+  };
+  /**
+   * The library clips a set of rules allows. With a hero rule, clips saved without a hero are first
+   * looked at by your signed-in AI (cached), and any clip whose hero still can't be told is left out.
+   */
+  const allowedLibrary = async (rules: ClipRules | undefined, signal?: AbortSignal): Promise<{ clips: ClipSidecar[]; heroes: Map<string, string | null>; unknown: number }> => {
+    const all = listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile) && (c.rating === undefined || c.rating > 2));
+    if (!hasRules(rules)) return { clips: all, heroes: new Map(), unknown: 0 };
+    let heroes = checks().known(all);
+    if (rules.heroes.length || rules.notHeroes.length) {
+      heroes = await checkHeroes({ ai: ctx.ai, ffmpeg: await ffmpeg().catch(() => undefined), checks: checks(), clips: all, wanted: rules.heroes.length ? rules.heroes : rules.notHeroes, signal });
+    }
+    const unknown = all.filter((c) => !heroOf(c, heroes) && c.events.some((e) => e.type === 'kill')).length;
+    return { clips: filterLibrary(rules, all, heroes), heroes, unknown };
+  };
+  /** Library clips limited to the ones you can see in the clip list (its filters), when the renderer sends them. */
+  const onlyIds = (ids: unknown) => (Array.isArray(ids) && ids.length ? new Set(ids.filter((x): x is string => typeof x === 'string')) : undefined);
+
+  handle('studio:autoFill', async (_e, proj: unknown, seconds: number, visible?: unknown) => {
     const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const used = new Set(project.clips.map((c) => c.videoFile));
-    const pool = listClips(p().clips, 1000)
-      .filter((c) => !used.has(c.videoFile) && fs.existsSync(c.videoFile))
+    const shown = onlyIds(visible);
+    const pool = (await allowedLibrary(project.clipRules)).clips
+      .filter((c) => !used.has(c.videoFile) && (!shown || shown.has(c.id)) && c.events.some((e) => e.type === 'kill'))
       .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score);
     const target = Math.max(5, Math.min(600, Number(seconds) || getFormat(project.format).idealSeconds[1]));
     const fmt = getFormat(project.format);
@@ -297,7 +325,10 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const current = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const extra = sanitizeAssets(assets).filter(a => fs.existsSync(a.file) && !(current.assets ?? []).some(b => b.file === a.file));
     current.assets = [...(current.assets ?? []), ...extra];
-    const revised = await reviseReel(ctx.ai, current, text, libraryClips());
+    const rules = mergeRules(current.clipRules, readClipRules(text), text);
+    current.clipRules = hasRules(rules) ? rules : undefined;
+    const allowed = await allowedLibrary(current.clipRules);
+    const revised = await reviseReel(ctx.ai, current, text, allowed.clips);
     const { project, notes } = await finishPlan(revised.project, text);
     return { project, summary: [revised.summary, ...notes].join(' ') };
   });
@@ -313,10 +344,12 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     return postCaption(ctx.ai, project, getFormat(project.format));
   });
-  handle('studio:ai:pickClips', async (_e, proj: unknown, seconds: number) => {
+  handle('studio:ai:pickClips', async (_e, proj: unknown, seconds: number, visible?: unknown) => {
     const project = reconcileProjectSources(sanitizeProject(proj), listClips(p().clips, 1000));
     const fmt = getFormat(project.format);
-    const all = listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile));
+    const shown = onlyIds(visible);
+    const all = (await allowedLibrary(project.clipRules)).clips.filter((c) => !shown || shown.has(c.id));
+    if (!all.length) throw new Error(project.clipRules ? `No clips follow this reel's rules (${describeRules(project.clipRules)}).` : 'No clips match your filters.');
     const ids = await pickClips(ctx.ai, all, fmt, project.style.name, Number(seconds) || fmt.idealSeconds[1]);
     const byId = new Map<string, ClipSidecar>(all.map((c) => [c.id, c]));
     return ids.map((id) => reelClipFromSidecar(byId.get(id)!));
@@ -330,7 +363,13 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const own = sanitizeAssets(assets).filter(a => fs.existsSync(a.file));
     // Videos added before moment detection existed get their action moments now.
     for (const a of own) if (a.kind === 'video' && a.moments === undefined && a.durationSec) a.moments = await detectMoments(ff, a.file, a.durationSec, a.hasAudio !== false);
-    return aiIdeas(ctx.ai, { clips: libraryClips(), tracks: music().list(), format: getFormat(format), request: String(request ?? ''), count:count===1 ? 1 : 5, ffmpeg:ff, assets: own });
+    const text = String(request ?? '');
+    const rules = readClipRules(text);
+    const allowed = await allowedLibrary(rules);
+    if (hasRules(rules) && !allowed.clips.some((c) => c.events.some((e) => e.type === 'kill')) && !own.some((a) => a.kind === 'video')) {
+      throw new Error(`None of your clips follow "${describeRules(rules)}".${rules.heroes.length && allowed.unknown ? ` ${allowed.unknown} clip${allowed.unknown === 1 ? ' has' : 's have'} no hero saved${ctx.ai ? " and your AI couldn't tell who you were playing" : '; sign in to Claude or ChatGPT so the Studio can check them'}.` : ''}`);
+    }
+    return aiIdeas(ctx.ai, { clips: allowed.clips, rules: hasRules(rules) ? rules : undefined, tracks: music().list(), format: getFormat(format), request: text, count:count===1 ? 1 : 5, ffmpeg:ff, assets: own });
   });
   /**
    * Everything after the AI's plan that makes it a finished edit: a song from your library when none was
@@ -385,6 +424,14 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const intent = readIntent(request);
     const target = intent.seconds ?? project.targetSeconds ?? 30;
     project.targetSeconds = target;
+    // Rules in your words ("only Deadpool clips", "no slow-mo") are hard limits, whatever the AI picked.
+    const rules = mergeRules(project.clipRules, readClipRules(request), request);
+    project.clipRules = hasRules(rules) ? rules : undefined;
+    const looks = styleFromPrompt(request, project.style);
+    if (looks.changes.length) {
+      project.style = looks.style;
+      notes.push(`Following your prompt: ${looks.changes.join(', ')}.`);
+    }
     // "to the song aizo": the song you named, from your music folder, wins over the AI's pick.
     if (intent.song) {
       const named = findSong(music().list(), intent.song);
@@ -414,25 +461,44 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // Never use footage with the Tab scoreboard up: trim around it, or drop the clip.
     const ff0 = await ffmpeg();
     // Never pull Marvel Rivals library clips into an edit of your own footage.
-    const pool = ownOnly ? [] : libraryClips().filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => b.score - a.score).slice(0, 60);
+    const allowed = ownOnly ? { clips: [] as ClipSidecar[], heroes: new Map<string, string | null>(), unknown: 0 } : await allowedLibrary(project.clipRules, signal);
+    const sources = new Map(listClips(p().clips, 1000).map(c => [c.id, c]));
+    const pool = allowed.clips.filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score).slice(0, 60);
     const scans = new Map<string, ClipScan>();
     for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal));
     // Kill times from when your row appears in the feed (dropping teammates' kills), then trim off the scoreboard.
     // If no scanned clip shows a single row of yours, the feed is somewhere this build doesn't look
     // (another HUD scale or layout): keep the clipper's kills rather than throw everything away.
     const feedReadable = [...scans.values()].some(s => s.feed.some(f => f.own.some(x => x != null)));
+    const broke = { hero: 0, kills: 0 };
     const prepare = (c: ReelClip) => {
       if (c.external) return c;
+      const src = sources.get(c.clipId);
+      const hero = src ? heroOf(src, allowed.heroes) : c.hero;
       const scan = scans.get(c.videoFile);
       const own = scan && feedReadable ? withFeedRows(c, scan.feed) : c;
       // Not your kill, or it opens straight on the kill with no build-up: leave it out.
       const first = own.hits.find(h => h > own.in);
       if (first === undefined || first - own.in < 1) return null;
-      return trimAround(own, scan?.scoreboard ?? []);
+      const trimmed = trimAround(own, scan?.scoreboard ?? []);
+      if (!trimmed) return null;
+      // Score what's really in the clip: kills only count when they're yours (feed rows) and inside the trim.
+      const scored = rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);
+      if (project.clipRules) {
+        const check = checkClip(project.clipRules, scored);
+        if (!check.ok) {
+          if (check.reason === 'kills' || check.reason === 'tag') broke.kills++;
+          else broke.hero++;
+          return null;
+        }
+      }
+      return scored;
     };
     const before = project.clips.length;
     project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);
-    const dropped = before - project.clips.length;
+    const ruled = broke.hero + broke.kills;
+    const dropped = before - project.clips.length - ruled;
+    if (ruled) notes.push(`Took out ${ruled} clip${ruled === 1 ? '' : 's'} that broke your rules (${describeRules(project.clipRules!)}).`);
     if (!project.clips.length) {
       // Every pick had the scoreboard open: start from the best usable kill clip so fitting can fill the rest.
       for (const source of pool) {
@@ -461,7 +527,8 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       const at = (v: number) => `${Math.floor(v / 60)}:${(v % 60).toFixed(1).padStart(4, '0')}`;
       notes.push(`The song plays from ${at(start)} to ${at(start + length)}.`);
     }
-    if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
+    if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : project.clipRules ? `You only have enough clips that follow your rules (${describeRules(project.clipRules)}) for about ${Math.round(fit.seconds)} s, so the reel is shorter than ${target} s. It never pads with other clips.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
+    if (project.clipRules?.heroes.length && allowed.unknown) notes.push(`${allowed.unknown} clip${allowed.unknown === 1 ? ' has' : 's have'} no hero saved and ${allowed.unknown === 1 ? 'was' : 'were'} skipped${ctx.ai ? ' (your AI couldn\'t tell who you were playing)' : '; sign in to Claude or ChatGPT so the Studio can check them'}.`);
     const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
     if (faces.length && ctx.ai) {
       const ff = await ffmpeg();
@@ -494,6 +561,8 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
   };
   handle('studio:ideas:apply', async (_e, idea: ReelIdea, request?: string) => {
     const built = projectFromIdea(idea, libraryClips(), music().list());
+    const rules = readClipRules(String(request ?? ''));
+    if (hasRules(rules)) built.clipRules = rules;
     const { project, notes } = await finishPlan(built, String(request ?? ''));
     return { ...store().save(project), buildNotes: notes };
   });
@@ -632,4 +701,22 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
 function guessFormat(file: string, formats: FormatId[]): FormatId {
   const m = path.basename(file).match(/_(tiktok|reels|shorts|youtube1440|youtube)(?:_nomusic)?\.mp4$/);
   return (m?.[1] as FormatId) ?? formats[0];
+}
+
+/**
+ * Score a reel clip by what it really shows: only the kills still marked inside its trim (teammates'
+ * kills are gone once the feed rows are read), with the clip's rating and AI hype kept.
+ */
+export function rescore(c: ReelClip, src: ClipSidecar | undefined): ReelClip {
+  if (!src || c.external) return c;
+  const hits = c.hits.filter((h) => h > c.in + 0.05 && h < c.out - 0.02);
+  const original = src.events.filter((e) => e.type === 'kill');
+  const kills = hits.map((h) => {
+    const at = src.startTimeEpoch + h * 1000;
+    const near = original.reduce<typeof original[number] | undefined>((best, e) => (Math.abs(e.at - at) < 1500 && (!best || Math.abs(e.at - at) < Math.abs(best.at - at)) ? e : best), undefined);
+    return { ...(near ?? { type: 'kill' as const }), at };
+  });
+  const events = [...src.events.filter((e) => e.type !== 'kill'), ...kills];
+  const { score } = scoreClip({ ...src, events });
+  return { ...c, kills: kills.length, score };
 }
