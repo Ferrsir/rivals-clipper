@@ -437,6 +437,12 @@ export class ScreenFusion {
 
   private emitKill(at: number, victim: string | undefined): void {
     if (this.o.strictKills && (!victim || normalizeName(victim).length < 3)) return;
+    // You can't KO yourself: a "kill" whose victim is your own name is your death row read a second time
+    // (seen on every death in the 2026-11-09 log), and it clipped the death and the spectating after it.
+    if (victim && this.isMyName(victim)) {
+      this.ignore(at, 'kill', victim, 'your own death');
+      return;
+    }
     if (victim && this.sameVictimAgain(victim, at)) return;
     this.checkPractice(at);
     this.lastKillAt = at;
@@ -458,6 +464,7 @@ export class ScreenFusion {
   }
 
   private emitAssist(at: number, victim: string | undefined): void {
+    if (victim && this.isMyName(victim)) return this.ignore(at, 'assist', victim, 'your own death');
     this.checkPractice(at);
     this.assists++;
     this.sink.gameEvent('assist', { victim: victim || undefined }, at);
@@ -489,9 +496,18 @@ export class ScreenFusion {
     if (t >= this.watchingUntil - WATCH_MS) this.watchingUntil = -Infinity;
   }
 
-  private ignore(t: number, what: 'kill' | 'assist', victim: string | undefined): void {
+  private ignore(t: number, what: 'kill' | 'assist', victim: string | undefined, reason = 'not your view (dead, spectating or a replay)'): void {
     this.ignored++;
-    this.sink.infoUpdate('match_info', 'ignored_ko', { what, victim, at: t, reason: 'not your view (dead, spectating or a replay)' });
+    this.sink.infoUpdate('match_info', 'ignored_ko', { what, victim, at: t, reason });
+  }
+
+  /** True when `text` reads as your own name (or one of its words), allowing for misreads. */
+  private isMyName(text: string): boolean {
+    const name = this.playerName;
+    if (!name || normalizeName(text).length < 3) return false;
+    if (nameSimilarity(text, name) >= 0.7) return true;
+    const parts = name.split(/\s+/).filter((p) => normalizeName(p).length >= 3);
+    return parts.length > 1 && parts.some((p) => nameSimilarity(text, p) >= 0.85);
   }
 
   /** A feed row with two names and neither of them yours: someone else's row, highlighted because the game is showing their view. */

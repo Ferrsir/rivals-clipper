@@ -324,6 +324,20 @@ test('a trade (you KO them as they KO you) counts the kill and the death', () =>
   assert.equal(h.deaths().length, 1);
 });
 
+// 2026-11-09 log: every death also produced a "kill" of yaomingdiesel by yaomingdiesel, which clipped the death.
+test('a KO line that reads your own name with your death row is only a death', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.ko(3000, 1);
+  h.feed(3100, 2);
+  h.fusion.onOcr('ko', 1, words(['Leithl', 10]), 3200);
+  h.fusion.onOcr('feed', 2, words(['Valka', 10], ['Leithl', 300]), 3300);
+  h.fusion.tick(8000);
+  assert.equal(h.deaths().length, 1);
+  assert.equal(h.kills().length, 0);
+  assert.ok(h.info.some(([k, v]) => k === 'ignored_ko' && (v as { reason: string }).reason === 'your own death'));
+});
+
 test('a KO-list line with the assist icon is an assist, not a kill', () => {
   const h = harness({ name: 'Leithl' });
   inMatch(h);

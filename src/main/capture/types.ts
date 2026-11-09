@@ -47,7 +47,8 @@ export interface ClipRecorder {
   stop(): Promise<void>;
   /** Start saving a clip that includes the last `pastDurationMs`. Keeps recording until stopClip(). */
   startClip(fileName: string, pastDurationMs: number, onDone: (video: SavedVideo) => void): Promise<void>;
-  stopClip(): void;
+  /** Stop the clip. `untilEpoch` trims footage after that time (the streak's end), when the recorder can. */
+  stopClip(untilEpoch?: number): void;
   readonly clipInProgress: boolean;
   listMics(): Promise<MicDevice[]>;
 }

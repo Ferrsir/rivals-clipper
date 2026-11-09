@@ -138,6 +138,9 @@ function makeStreak() {
     preRollMs: settings.preRollSeconds * 1000,
     postRollMs: settings.postRollSeconds * 1000,
     maxClipMs: settings.maxClipSeconds * 1000,
+    chainMs: settings.chainSeconds * 1000,
+    // Screen detection reports kills up to ~2 s late (1.6 s on 2026-11-09); keep listening that much longer.
+    lateMs: 2500,
   });
 }
 
@@ -227,7 +230,7 @@ async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number
 
 function scheduleStop(stopAt: number) {
   if (stopTimer) clearTimeout(stopTimer);
-  stopTimer = setTimeout(stopCapture, Math.max(0, stopAt - Date.now()));
+  stopTimer = setTimeout(endStreak, Math.max(0, stopAt - Date.now()));
 }
 
 function finishCapture() {
@@ -237,9 +240,15 @@ function finishCapture() {
   stopTimer = undefined;
 }
 
-function stopCapture() {
+/** `until`: where the footage should end, when that is earlier than now (the streak's last kill + post-roll). */
+function stopCapture(until?: number) {
   finishCapture();
-  recorder.stopClip();
+  recorder.stopClip(until);
+}
+
+/** The streak's wait is over: save the clip, trimmed to just after its last kill. */
+function endStreak() {
+  stopCapture(streak.isActive ? streak.currentEndAt : undefined);
 }
 
 function onClipSaved(video: SavedVideo, clip: PendingClip) {
@@ -299,7 +308,11 @@ function handleMoment(type: 'kill' | 'assist', now: number, total?: number, vict
     if (!practiceNoticeShown) status('Practice Range: auto-clips are off here (manual hotkey still works)');
     practiceNoticeShown = true;
   } else {
-    const action = streak.onKill(now);
+    let action = streak.onKill(now);
+    if (action.type === 'restart') {
+      endStreak();
+      action = streak.onKill(now);
+    }
     if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
     else if (action.type === 'extend') scheduleStop(action.stopAt);
   }
@@ -319,7 +332,8 @@ function handleManualClip() {
   if (pending) {
     const action = streak.onKill(now);
     if (action.type === 'extend') scheduleStop(action.stopAt);
-    return;
+    else if (action.type === 'restart') stopCapture();
+    if (action.type !== 'restart') return;
   }
   const past = Math.min(30_000, settings.bufferSeconds * 1000 - 2000, Math.max(0, (settings.maxClipSeconds - settings.postRollSeconds) * 1000));
   streak.begin(now, past, now + 2000);
