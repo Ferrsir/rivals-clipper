@@ -1,6 +1,7 @@
 // Rejects clips whose footage isn't gameplay, so the Studio never picks them on its own: the Tab
 // scoreboard (whole screen darkened and grey, measured on Ferris's recordings at mean luma ~46 and
-// saturation ~8 against 84-100 / 15-24 in play). Checked on small frames, cached per file.
+// saturation ~8 against 84-100 / 15-24 in play), and the death screen, where the camera follows a
+// teammate and a "DEFEATED BY" card sits bottom right. Checked on small frames, cached per file.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -59,17 +60,83 @@ const W = FEED_SAMPLE.width;
 const H = 20;
 const FH = FEED_SAMPLE.height;
 
+// ---------- death screen ----------
+
+/**
+ * The "DEFEATED BY" card's title and frame as yellow pixels, 64x12, averaged over 11 death frames from
+ * Ferris's footage. Its box: right edge 0.235 and left edge 0.43 of the frame height in from the
+ * right, 0.685-0.725 of the height down (the HUD scales with the height).
+ */
+export const DEATH_TEMPLATE = [
+  '#############################################...................',
+  '#####...........................................................',
+  '..##............................................................',
+  '..##..................#..........##.............................',
+  '..##...#..#..#...#...#.....##...##..#....#..#....#.##.#.#.......',
+  '..##...#..#.##...#...#......#...#...#....#..#...##.#..##........',
+  '..#...#...#.###..###.###..#.#...#...###.#...#...####...#........',
+  '.##...#..#..#........#...####...#...#...#..#....#..#..#.........',
+  '.##...####..###.#....###.#...#..#..####.###.....###...#.........',
+  '.##.............................................................',
+  '.#..............................................................',
+  '.#..............................................................',
+];
+export const DEATH_BOX = { w: 64, h: 12 };
+export const deathCropFilter = () => `crop=w=trunc(ih*0.195/2)*2:h=trunc(ih*0.04/2)*2:x=iw-trunc(ih*0.43/2)*2:y=trunc(ih*0.685/2)*2`;
+const tmpl = DEATH_TEMPLATE.map((r) => [...r].map((c) => c === '#'));
+
+const isCardYellow = (r: number, g: number, b: number) => r > 140 && g > 110 && r - b > 70;
+
+/**
+ * How well a 64x12 rgb24 crop matches the card (intersection over union of the yellow pixels, best of
+ * small shifts). Measured: death frames 0.63-1.0, gameplay 0-0.26.
+ */
+export function deathScore(rgb: Uint8Array, width = DEATH_BOX.w, height = DEATH_BOX.h): number {
+  const m: boolean[][] = [];
+  for (let y = 0; y < height; y++) {
+    const row: boolean[] = [];
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 3;
+      row.push(isCardYellow(rgb[o], rgb[o + 1], rgb[o + 2]));
+    }
+    m.push(row);
+  }
+  let best = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      let inter = 0;
+      let union = 0;
+      for (let y = 0; y < DEATH_BOX.h; y++) {
+        for (let x = 0; x < DEATH_BOX.w; x++) {
+          const yy = y - dy;
+          const xx = x - dx;
+          const a = yy >= 0 && yy < height && xx >= 0 && xx < width && m[yy][xx];
+          const t = tmpl[y][x];
+          if (a && t) inter++;
+          if (a || t) union++;
+        }
+      }
+      best = Math.max(best, inter / Math.max(1, union));
+    }
+  }
+  return best;
+}
+
+export const DEATH_MIN = 0.45;
+
 export interface ClipScan {
   /** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
   scoreboard: number[];
+  /** Times (seconds) where you're dead and watching a teammate ("DEFEATED BY" on screen). */
+  dead?: number[];
   /** Your rows in the kill feed, sampled at the same times. */
   feed: FeedSample[];
 }
 
 const cache = new Map<string, ClipScan>();
-const EMPTY: ClipScan = { scoreboard: [], feed: [] };
+const EMPTY: ClipScan = { scoreboard: [], feed: [], dead: [] };
 
-/** One small decode per clip: the whole frame (scoreboard check) stacked on the kill-feed crop. */
+/** One small decode per clip: the whole frame (scoreboard check), the kill-feed crop and the death card's box, stacked. */
 export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Promise<ClipScan> {
   let key = file;
   try {
@@ -80,21 +147,30 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
   }
   const hit = cache.get(key);
   if (hit) return Promise.resolve(hit);
-  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=2[a][b];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[full][feed]vstack=inputs=2[out]`;
+  const DW = DEATH_BOX.w;
+  const DH = DEATH_BOX.h;
+  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=3[a][b][c];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter()},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[full][feed][death]vstack=inputs=3[out]`;
   return new Promise((resolve) => {
     execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-filter_complex', graph, '-map', '[out]', '-an', '-f', 'rawvideo', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {
         if (error) return resolve(EMPTY);
         const full = W * H * 3;
-        const size = full + W * FH * 3;
+        const feedBytes = W * FH * 3;
+        const size = full + feedBytes + W * DEATH_BOX.h * 3;
         const flags: boolean[] = [];
+        const deadFlags: boolean[] = [];
         const slots: SlotStats[][] = [];
         for (let f = 0; (f + 1) * size <= out.length; f++) {
           const frame = out.subarray(f * size, (f + 1) * size);
           flags.push(isScoreboard(frameStats(frame.subarray(0, full), W, H)));
-          slots.push(slotStats(frame.subarray(full), W, FH));
+          slots.push(slotStats(frame.subarray(full, full + feedBytes), W, FH));
+          // The card's box sits at the left of a padded strip W wide: take its rows out.
+          const strip = frame.subarray(full + feedBytes);
+          const box = new Uint8Array(DEATH_BOX.w * DEATH_BOX.h * 3);
+          for (let y = 0; y < DEATH_BOX.h; y++) box.set(strip.subarray(y * W * 3, y * W * 3 + DEATH_BOX.w * 3), y * DEATH_BOX.w * 3);
+          deadFlags.push(deathScore(box) >= DEATH_MIN);
         }
-        const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots) };
+        const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots), dead: heldRuns(deadFlags) };
         if (cache.size > 2000) cache.clear();
         cache.set(key, scan);
         resolve(scan);

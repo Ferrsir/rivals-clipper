@@ -208,6 +208,19 @@ export interface ReelClip {
   cropY: number;
   /** 1 = full height. Higher punches in. */
   cropZoom: number;
+  /** Music volume while this clip plays, 0..1 of the mix's music level (a hook keeps the song as a quiet bed). Unset = full. */
+  musicLevel?: number;
+  /** Game/clip audio volume, 1 = as recorded. */
+  gain?: number;
+  /** Level the clip's own audio up to TikTok loudness (a quiet anime hook). */
+  normalize?: boolean;
+  /** Freeze the last frame for this many beats, so a line finishes before the next cut (0 = off). */
+  holdBeats?: number;
+  /** Fade in from black / out to black, seconds (picture and the clip's audio). */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** Cut out dead time between this clip's kills instead of speeding through it (default on). */
+  jumpCut?: boolean;
 }
 
 /** One of your rows in the game's kill feed: its slot (0 = top), clip seconds, and plate left edge (0..1 of the feed box). */
@@ -282,6 +295,24 @@ export interface ReelProject {
   voices?: VoiceSettings | null;
   /** Your own videos and pictures that this project can use. */
   assets?: MediaAsset[];
+  /** How the reel ends: 'cut' on the beat after the last kill, or 'play-out' lets the last clip run and fades it out with the song. */
+  ending?: ReelEnding;
+  /** Audio jumps: the song drops out for a moment and slams back in (output seconds, on the beat). */
+  musicCuts?: MusicCut[];
+}
+
+export interface ReelEnding {
+  mode: 'cut' | 'play-out';
+  /** Seconds of fade at the end (picture and all audio). */
+  fade: number;
+  /** play-out: the last clip runs at most this far past its last kill, seconds. */
+  maxTail?: number;
+}
+
+/** The music goes silent from `at` for `length` seconds of output time. */
+export interface MusicCut {
+  at: number;
+  length: number;
 }
 
 /** A video or picture you dropped into the Studio. */
@@ -389,7 +420,7 @@ export interface IntroCard {
 
 // ---------- the planned edit ----------
 
-export type SegmentKind = 'intro' | 'lead' | 'slow-in' | 'slow-out' | 'gap' | 'tail' | 'plain';
+export type SegmentKind = 'intro' | 'lead' | 'slow-in' | 'slow-out' | 'gap' | 'tail' | 'plain' | 'hold';
 
 export interface TimelineSegment {
   clipUid: string;

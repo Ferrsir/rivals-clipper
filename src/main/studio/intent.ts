@@ -18,6 +18,29 @@ export interface PromptIntent {
   songStart?: number;
   /** "end the song at 1:12": seconds into the song where the reel ends. */
   songEnd?: number;
+  /** "till gojo goes 'exactly'": the word the hook clip ends on. */
+  untilWord?: string;
+  /** "let the last clip play out and fade with the music". */
+  playOut: boolean;
+}
+
+const SAY = String.raw`(?:goes|says|said|say|yells|shouts|screams|is like)`;
+/** "till gojo goes "exactly"", "until he says exactly", "cut it at 'exactly'", "ends on the word exactly". */
+export function untilWord(text: string): string | undefined {
+  const t = text.replace(/\s+/g, ' ');
+  const quoted = String.raw`["“'‘]([^"”'’]{2,40})["”'’]`;
+  const patterns = [
+    new RegExp(String.raw`\b(?:till|until|untill|til|up to)\s+(?:[\w']+\s+){0,3}?${SAY}\s+` + quoted, 'i'),
+    new RegExp(String.raw`\b(?:till|until|untill|til|up to)\s+(?:[\w']+\s+){0,3}?${SAY}\s+([a-z']{2,20})\b`, 'i'),
+    new RegExp(String.raw`\b(?:cut|end|stop)\w*\s+(?:it\s+|the clip\s+|the hook\s+)?(?:at|on|after)\s+(?:the word\s+)?` + quoted, 'i'),
+  ];
+  for (const [k, re] of patterns.entries()) {
+    const m = t.match(re);
+    // "till the music goes quiet" is about the song, not a line someone says.
+    if (m && k < 2 && /\b(?:music|song|track|beat|bass|drop|it)\b/i.test(m[0].slice(0, m[0].length - m[1].length))) continue;
+    if (m && m[1].trim()) return m[1].trim().replace(/[.,!?]+$/, '');
+  }
+  return undefined;
 }
 
 const TIME = String.raw`(\d{1,2}:\d{2}(?:\.\d+)?|\d{1,3}(?:\.\d+)?\s*(?:s|secs?|seconds?)\b)`;
@@ -72,6 +95,8 @@ export function readIntent(text: string): PromptIntent {
     song: songFromPrompt(text),
     subtitles: /\b(subtitles?|subs|captions?|closed captions)\b/.test(t),
     voices: /\b(ai voices?|voice ?overs?|voiced|tts|text to speech|dub(bed|bing)?|narrat\w*)\b|\bvoices? for\b|\b(have|make|let) (them|him|her|both|the characters?) (talk|speak|say|argue|trash talk)|\bthem talking\b/.test(t),
+    untilWord: untilWord(times.rest),
+    playOut: /\b(play(?:s|ing)? (?:it |that |the clip )?out|finish(?:es)? out|let (?:the |that )?(?:last |final )?clip (?:finish|play|run)|(?:last|final) clip (?:fades?|plays? out)|fades? out with the (?:music|song))\b/.test(t),
     faceOverlay: /\b(icon|picture|pic|image|photo|logo|sticker|emoji|face ?swap)\b/.test(t) && /\b(on|over)\s+(?!the song|the track|the music)\w+/.test(t),
   };
 }
