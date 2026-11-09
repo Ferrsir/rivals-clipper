@@ -89,6 +89,8 @@ test('clip fades and loudness become filters on that clip only', () => {
   assert.match(f.v, /fade=t=in:st=0:d=0.3,fade=t=out:st=2.5:d=0.5/);
   assert.match(f.a, /^loudnorm=I=-14/);
   assert.match(f.a, /afade=t=out:st=2.5:d=0.5/);
+  // The mix turns game sound down to 55%; a levelled clip is turned back up so it still lands at -14 LUFS.
+  assert.match(clipPostFilters({ normalize: true }, 3, 0.55).a, /loudnorm=[^,]+,aresample=48000,aformat=[^,]+,volume=1.818/);
 });
 
 test('hand edits survive a save and reload, and junk is dropped', () => {

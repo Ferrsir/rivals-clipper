@@ -255,13 +255,15 @@ interface ClipJobOpts {
   preview: boolean;
   /** Clip uid is the hero (for slow-mo gain etc. nothing changes yet, kept for cache key clarity). */
   workDir: string;
+  /** The mix's game level, so a levelled-up clip still lands at TikTok loudness after it. */
+  gameMix?: number;
 }
 
 /** Stage A for one clip. */
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 24, fs: o.feedStyle, fb: !!o.feedBorder, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, edits: [clip.gain, clip.normalize, clip.fadeIn, clip.fadeOut], preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 24, fs: o.feedStyle, fb: !!o.feedBorder, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, edits: [clip.gain, clip.normalize, clip.fadeIn, clip.fadeOut, clip.normalize ? o.gameMix : 0], preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -393,7 +395,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
   });
   const total = segs.reduce((s, x) => s + Math.max(1, Math.round((x.out[1] - x.out[0]) * fps)) / fps, 0);
   // Hand edits on the whole clip: level its sound up, fade it in from / out to black.
-  const post = clipPostFilters(clip, total);
+  const post = clipPostFilters(clip, total, o.gameMix);
   lines.push(`${segs.map((_, i) => `[v${i}][g${i}][m${i}]`).join('')}concat=n=${n}:v=1:a=2${post.v || post.a ? '[vc][gc][ma]' : '[v][ga][ma]'}`);
   if (post.v || post.a) {
     lines.push(`[vc]${post.v || 'null'}[v]`);
@@ -411,10 +413,15 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
 }
 
 /** Filters for a clip's hand edits after its pieces are joined: loudness, fades. Empty strings when there are none. */
-export function clipPostFilters(clip: Pick<ReelClip, 'normalize' | 'fadeIn' | 'fadeOut'>, total: number): { v: string; a: string } {
+export function clipPostFilters(clip: Pick<ReelClip, 'normalize' | 'fadeIn' | 'fadeOut'>, total: number, gameMix = 1): { v: string; a: string } {
   const v: string[] = [];
   const a: string[] = [];
-  if (clip.normalize) a.push('loudnorm=I=-14:TP=-1.5:LRA=11', 'aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo');
+  if (clip.normalize) {
+    a.push('loudnorm=I=-14:TP=-1.5:LRA=11', 'aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo');
+    // The reel turns all game sound down by the mix's game level; undo that here so the line still hits -14 LUFS.
+    const back = Math.min(3, 1 / Math.max(0.05, gameMix));
+    if (Math.abs(back - 1) > 1e-3) a.push(`volume=${r3(back)}`);
+  }
   const fi = Math.min(clip.fadeIn ?? 0, total / 2);
   const fo = Math.min(clip.fadeOut ?? 0, total / 2);
   if (fi > 0.01) {
