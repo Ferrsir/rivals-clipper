@@ -45,9 +45,10 @@ test('short duration fitting trims padding but retains every marked kill, and im
   assert.equal(short.kills.length,3);
   assert.ok(short.duration < ordinary.duration);
   assert.ok(short.duration <= 5 * 1.03 + 1/30,`Expected duration budget, got ${short.duration}`);
-  const impossible=plan({clips:project.clips,style:project.style,fps:30,targetSeconds:3});
+  // The slow 3.3 -> 6 s gap is a jump cut now, so only a 2 s budget is out of reach.
+  const impossible=plan({clips:project.clips,style:project.style,fps:30,targetSeconds:2});
   assert.equal(impossible.kills.length,3);
-  assert.match(impossible.warnings.join(' '),/Needs review:.*requested 3 s/);
+  assert.match(impossible.warnings.join(' '),/Needs review:.*requested 2 s/);
 });
 
 test('rapid distinct kills share timing context without losing their individual markers',()=>{

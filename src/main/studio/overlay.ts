@@ -51,7 +51,7 @@ export function overlayFilters(o: { overlays: ImageOverlay[]; clip: ReelClip; fi
     // One size for the whole overlay (the largest seen), so the picture never shrinks and uncovers the face.
     const px = Math.max(8, Math.round((Math.max(...keys.map((k) => k.size)) * srcW) / 2) * 2);
     const shape = ov.shape === 'circle'
-      ? `,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),255,0)'`
+      ? `,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-W/2,Y-H/2),W/2-1),alpha(X,Y),0)'`
       : ',format=rgba';
     lines.push(`[${idx}:v]crop='min(iw,ih)':'min(iw,ih)',scale=${px}:${px}${shape},setsar=1[ovimg${i}]`);
     const T = `(t+${r6(o.offset)})`;

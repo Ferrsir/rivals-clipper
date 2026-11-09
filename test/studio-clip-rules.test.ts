@@ -79,6 +79,9 @@ test('a hero rule never lets in a clip of another hero or one whose hero is unkn
 test('hero names from the clipper, the events, the AI tagger and the Studio check all count', () => {
   assert.equal(canonicalHero('MAGIK'), 'Magik');
   assert.equal(canonicalHero('dead pool'), 'Deadpool');
+  // What the clipper's screen reader actually saved on Ferris's PC.
+  for (const raw of ['DERDPOOL', 'DEADPOQOL', 'A            DEADPOOL', 'I                 DEADPOOL', 'GD   DEADPOOL', 'SPIDER-MAN']) assert.ok(['Deadpool', 'Spider-Man'].includes(canonicalHero(raw)!), raw);
+  assert.equal(canonicalHero('Y JAIIS'), undefined);
   const c = lib('x', [3], 10);
   assert.equal(heroOf(c), undefined);
   assert.equal(heroOf({ ...c, events: [{ type: 'kill', at: 1, myHero: 'DEADPOOL' }] }), 'Deadpool');
@@ -142,4 +145,12 @@ test('assists add a little to a clip score', () => {
   const withAssists = scoreClip({ ...c, events: [...c.events, { type: 'assist', at: 2000 }, { type: 'assist', at: 2500 }] });
   assert.equal(withAssists.score, plain + 6);
   assert.ok(withAssists.tags.includes('assists'));
+});
+
+test('a song that starts mid-track syncs to the drop inside the chosen part', async () => {
+  const { firstDrop } = await import('../src/main/studio/planner');
+  const an = { ...grid(134), drops: [11.8, 63.54] };
+  assert.equal(firstDrop(an, 46), 63.54);
+  assert.equal(firstDrop(an, 0), 11.8);
+  assert.equal(firstDrop(an, 70), undefined);
 });

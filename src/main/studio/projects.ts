@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../../shared/types';
-import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicTrack, OverlayKey, ReelClip, ReelIdea, ReelProject, VoiceRole, VoiceSettings } from '../../shared/studio';
+import type { CaptionLine, ClipSubtitle, FormatId, ImageOverlay, IntroCard, MediaAsset, MusicCut, MusicTrack, OverlayKey, ReelClip, ReelEnding, ReelIdea, ReelProject, VoiceRole, VoiceSettings } from '../../shared/studio';
 import { FORMATS, getFormat } from './formats';
 import { clone, getStyle, sanitizeMix, sanitizeStyle } from './styles';
 import { sanitizeRules } from './clip-rules';
@@ -253,7 +253,43 @@ function sanitizeClip(c: any): ReelClip | null {
     cropX: num(c.cropX, 0, 1, 0.5),
     cropY: num(c.cropY, 0, 1, 0.5),
     cropZoom: num(c.cropZoom, 1, 3, 1),
+    ...clipEdits(c),
   };
+}
+
+/** The hand edits on a clip (music bed, gain, hold, fades, jump cuts); unset fields stay unset. */
+export function clipEdits(c: any): Pick<ReelClip, 'musicLevel' | 'gain' | 'normalize' | 'holdBeats' | 'fadeIn' | 'fadeOut' | 'jumpCut' | 'manualTrim'> {
+  const opt = (v: unknown, lo: number, hi: number) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? undefined : num(v, lo, hi, lo));
+  const out: ReturnType<typeof clipEdits> = {};
+  const musicLevel = opt(c.musicLevel, 0, 1);
+  if (musicLevel !== undefined && musicLevel < 0.999) out.musicLevel = musicLevel;
+  const gain = opt(c.gain, 0, 4);
+  if (gain !== undefined && Math.abs(gain - 1) > 1e-3) out.gain = gain;
+  if (c.normalize === true) out.normalize = true;
+  const hold = opt(c.holdBeats, 0, 8);
+  if (hold) out.holdBeats = Math.round(hold * 4) / 4;
+  const fadeIn = opt(c.fadeIn, 0, 5);
+  if (fadeIn) out.fadeIn = fadeIn;
+  const fadeOut = opt(c.fadeOut, 0, 5);
+  if (fadeOut) out.fadeOut = fadeOut;
+  if (c.jumpCut === false) out.jumpCut = false;
+  if (c.manualTrim === true) out.manualTrim = true;
+  return out;
+}
+
+export function sanitizeEnding(e: any): ReelEnding | undefined {
+  if (!e || typeof e !== 'object' || (e.mode !== 'cut' && e.mode !== 'play-out')) return undefined;
+  return { mode: e.mode, fade: num(e.fade, 0, 6, e.mode === 'play-out' ? 1.8 : 0.3), ...(Number.isFinite(e.maxTail) ? { maxTail: num(e.maxTail, 0.5, 30, 6) } : {}) };
+}
+
+export function sanitizeMusicCuts(raw: unknown): MusicCut[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const cuts = raw
+    .filter((m: any) => m && Number.isFinite(m.at) && Number.isFinite(m.length) && m.at >= 0 && m.length > 0.02)
+    .slice(0, 40)
+    .map((m: any) => ({ at: Math.round(Number(m.at) * 1000) / 1000, length: Math.round(Math.min(8, Number(m.length)) * 1000) / 1000 }))
+    .sort((a, b) => a.at - b.at);
+  return cuts.length ? cuts : undefined;
 }
 
 /** Accept a project from the renderer or disk, keeping only valid, clamped fields. */
@@ -317,6 +353,8 @@ export function sanitizeProject(p: any): ReelProject {
     overlays: sanitizeOverlays(p.overlays),
     subtitles: sanitizeSubtitles(p.subtitles),
     voices: sanitizeVoices(p.voices),
+    ending: sanitizeEnding(p.ending),
+    musicCuts: sanitizeMusicCuts(p.musicCuts),
   };
 }
 

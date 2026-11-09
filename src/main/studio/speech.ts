@@ -83,6 +83,75 @@ export function captionChunks(text: string, start: number, end: number, maxWords
   return out;
 }
 
+/** 16-bit PCM samples (mono) from a WAV file's data chunk. */
+export function wavSamples(buf: Buffer): { rate: number; samples: Int16Array } {
+  let rate = 16000;
+  let i = 12;
+  while (i + 8 <= buf.length) {
+    const id = buf.toString('ascii', i, i + 4);
+    const size = buf.readUInt32LE(i + 4);
+    if (id === 'fmt ') rate = buf.readUInt32LE(i + 12);
+    if (id === 'data') {
+      const end = Math.min(buf.length, i + 8 + size);
+      const view = buf.subarray(i + 8, end - ((end - i - 8) % 2));
+      return { rate, samples: new Int16Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.length)) };
+    }
+    i += 8 + size + (size % 2);
+  }
+  return { rate, samples: new Int16Array(0) };
+}
+
+/**
+ * Whisper's word ends are often early (it ended "Exactly" at 14.9 s when the "-ly" ran to 15.15 s).
+ * Move each word's end to where its sound actually dies: the last 20 ms that is still above 12% of the
+ * word's loudest moment, never past the next word's start. Times are seconds into `samples`.
+ */
+export function refineWordEnds(words: Word[], samples: Int16Array, rate: number): Word[] {
+  const win = Math.max(1, Math.round(rate * 0.02));
+  const rms = (t: number) => {
+    const a = Math.max(0, Math.round(t * rate));
+    const b = Math.min(samples.length, a + win);
+    if (b <= a) return 0;
+    let s = 0;
+    for (let k = a; k < b; k++) s += samples[k] * samples[k];
+    return Math.sqrt(s / (b - a));
+  };
+  return words.map((w, i) => {
+    let peak = 0;
+    for (let t = w.t0; t < w.t1; t += 0.01) peak = Math.max(peak, rms(t));
+    if (peak < 200) return w;
+    const limit = Math.min(i + 1 < words.length ? words[i + 1].t0 : Infinity, w.t1 + 0.45, samples.length / rate - 0.02);
+    let end = w.t1;
+    for (let t = Math.max(w.t0, w.t1 - 0.1); t < limit; t += 0.01) if (rms(t) > peak * 0.12) end = t + 0.02;
+    return { ...w, t1: Math.round(Math.min(Math.max(end, w.t1), Math.max(w.t1, limit)) * 1000) / 1000 };
+  });
+}
+
+const bare = (s: string) => s.toLowerCase().replace(/[^a-z0-9']+/g, '');
+
+/**
+ * Where a hook clip should end so its last line finishes: just after the word you named ("till gojo goes
+ * exactly"), or after the word the current end cuts into. Never into the next word. Undefined = leave it.
+ */
+export function hookEnd(words: Word[], clip: Pick<ReelClip, 'in' | 'out' | 'durationSec'>, untilWord?: string): number | undefined {
+  const pad = 0.04;
+  const endAt = (i: number) => {
+    const next = words[i + 1];
+    const t = Math.min(words[i].t1 + pad, next ? Math.max(words[i].t1, next.t0 - 0.02) : Infinity, clip.durationSec);
+    return Math.round(t * 1000) / 1000;
+  };
+  if (untilWord) {
+    const want = untilWord.split(/\s+/).map(bare).filter(Boolean);
+    const last = want[want.length - 1];
+    if (last) {
+      const i = words.findIndex((w, k) => w.t0 >= clip.in - 0.05 && bare(w.text) === last && want.slice(0, -1).every((x, j) => bare(words[k - want.length + 1 + j]?.text ?? '') === x));
+      if (i >= 0) return endAt(i);
+    }
+  }
+  const i = words.findIndex((w) => w.t0 < clip.out - 0.02 && w.t1 + pad > clip.out);
+  return i >= 0 ? endAt(i) : undefined;
+}
+
 function run(bin: string, args: string[], signal?: AbortSignal, timeout = 600_000): Promise<void> {
   return new Promise((resolve, reject) =>
     execFile(bin, args, { windowsHide: true, timeout, maxBuffer: 64 * 1024 * 1024, signal, cwd: path.dirname(bin) }, (e, _o, err) => (e ? reject(new Error(String(err).trim().split('\n').slice(-3).join(' ') || e.message)) : resolve())),
@@ -93,7 +162,7 @@ function run(bin: string, args: string[], signal?: AbortSignal, timeout = 600_00
  * Timed lines of what's said in `clip` between `from` and `to` (source seconds). English by default:
  * other languages are translated, unless `keepLanguage`.
  */
-export async function transcribe(o: { ffmpeg: string; whisper: { bin: string; model: string }; clip: ReelClip; from: number; to: number; keepLanguage?: boolean; signal?: AbortSignal }): Promise<{ language?: string; lines: Line[] }> {
+export async function transcribe(o: { ffmpeg: string; whisper: { bin: string; model: string }; clip: ReelClip; from: number; to: number; keepLanguage?: boolean; signal?: AbortSignal }): Promise<{ language?: string; lines: Line[]; words: Word[] }> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-speech-'));
   try {
     const wav = path.join(dir, 'speech.wav');
@@ -101,8 +170,11 @@ export async function transcribe(o: { ffmpeg: string; whisper: { bin: string; mo
     const base = path.join(dir, 'speech');
     await run(o.whisper.bin, ['-m', o.whisper.model, '-f', wav, '-l', 'auto', ...(o.keepLanguage ? [] : ['-tr']), '-ml', '1', '-sow', '-oj', '-of', base, '-np'], o.signal);
     const parsed = parseWhisperJson(JSON.parse(fs.readFileSync(base + '.json', 'utf8')));
+    const pcm = wavSamples(fs.readFileSync(wav));
+    parsed.words = refineWordEnds(parsed.words, pcm.samples, pcm.rate);
+    const words = parsed.words.map((w) => ({ ...w, t0: Math.round((w.t0 + o.from) * 1000) / 1000, t1: Math.round((w.t1 + o.from) * 1000) / 1000 }));
     const lines = groupLines(parsed.words).map((l) => ({ ...l, from: Math.round((l.from + o.from) * 1000) / 1000, to: Math.round((l.to + o.from) * 1000) / 1000 }));
-    return { language: parsed.language, lines };
+    return { language: parsed.language, lines, words };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

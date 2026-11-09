@@ -9,11 +9,13 @@ import type { FeedRow, ReelClip } from '../../shared/studio';
 export const FEED_SLOTS = 3;
 export const FEED_SAMPLE = { width: 120, height: 30, fps: 4 };
 /**
- * A slot holds your row when this share of it is white plate and the plate ends at the feed's right
- * edge. Measured on Ferris's footage (120x30 crop): own rows 0.13-0.23 with the right edge at
- * 117-118 of 120; other players' rows 0-0.002; bright scenery fakes rows that don't end there.
+ * A slot holds your row when this share of it is white plate and the plate ends near the feed's right
+ * edge. Measured on Ferris's footage (120x30 crop): own rows 0.1-0.23; the plate's right edge sits at
+ * 108-119 of 120 (it stops short of the victim's portrait on some rows) and a short name like
+ * "Ferrsir" starts the plate past the middle; other players' rows 0-0.002; bright scenery fakes rows
+ * that end further left.
  */
-export const OWN_ROW = { min: 0.1, max: 0.26, right: [0.955, 0.995] as const, maxLeft: 0.5 };
+export const OWN_ROW = { min: 0.09, max: 0.26, right: [0.85, 0.995] as const, maxLeft: 0.65 };
 
 export interface SlotStats {
   /** Share of the slot's pixels that are white plate (bright, grey). */
@@ -106,38 +108,43 @@ export function ownRows(samples: FeedSample[], fps = FEED_SAMPLE.fps): FeedRow[]
 }
 
 /**
- * Moments a new row of yours enters the feed. New rows always enter the top slot (older ones slide
- * down), so a kill is the top slot turning into your row and holding for two samples.
+ * Moments a new row of yours enters the feed. New rows enter the top slot and older ones slide down,
+ * so a kill shows as the top slot turning into your row, or as one more of your rows than before
+ * (a quick second kill pushes the first one down while the top slot stays yours, and a teammate's
+ * row can push yours down between two samples). Either must hold for the next sample too.
  */
 export function rowOnsets(samples: FeedSample[], fps = FEED_SAMPLE.fps): number[] {
   const out: number[] = [];
+  const count = (smp?: FeedSample) => (smp ? smp.own.filter((x) => x != null).length : 0);
   samples.forEach((smp, i) => {
-    const top = smp.own[0] != null;
-    const before = i > 0 && samples[i - 1].own[0] != null;
-    const held = samples[i + 1]?.own[0] != null;
-    if (top && !before && held) out.push(Math.max(0, smp.t - 0.5 / fps));
+    if (i === 0) return;
+    const prev = samples[i - 1];
+    const next = samples[i + 1];
+    const topNew = smp.own[0] != null && prev.own[0] == null && next?.own[0] != null;
+    const more = count(smp) > count(prev) && count(next) >= count(smp);
+    if (topNew || more) out.push(Math.max(0, smp.t - 0.5 / fps));
   });
   return out;
 }
 
 /**
- * Put each kill on the moment its row appears, and drop kills with no row of yours (a teammate's).
+ * Your kills are the moments your rows appear in the feed. The clipper's own kill times run up to two
+ * seconds late and often count a teammate's kill as yours, so once the feed can be read they are
+ * replaced outright: a clip with no row of yours has no kills of yours.
  * Leaves the clip as it is when the feed couldn't be scanned.
  */
-export function withFeedRows<T extends Pick<ReelClip, 'hits' | 'kills'> & { feedRows?: FeedRow[] }>(clip: T, samples: FeedSample[]): T {
-  // No samples means the scan failed: keep the clip as the clipper logged it. A readable feed with no
-  // rows of yours means none of these kills are yours (every row is a teammate's or an enemy's).
+export function withFeedRows<T extends Pick<ReelClip, 'hits' | 'kills'> & { feedRows?: FeedRow[]; in?: number; out?: number }>(clip: T, samples: FeedSample[]): T {
   if (!samples.length) return clip;
   const rows = ownRows(samples);
-  const onsets = rowOnsets(samples);
-  const used = new Set<number>();
-  const hits: number[] = [];
-  for (const h of clip.hits) {
-    // The row shows up to ~1.2 s before the clipper logs the kill, and never much after it.
-    const i = onsets.findIndex((o, k) => !used.has(k) && o >= h - 1.5 && o <= h + 0.5);
-    if (i < 0) continue;
-    used.add(i);
-    hits.push(onsets[i]);
-  }
+  const a = clip.in ?? 0;
+  const b = clip.out ?? Infinity;
+  const hits = rowOnsets(samples).filter((t) => t >= a && t <= b);
   return { ...clip, hits, kills: hits.length, feedRows: rows };
+}
+
+/** Your own death also puts a white-plated row in the feed, and kills while the "DEFEATED BY" card is up are
+ *  someone else's camera: drop any kill within 0.75 s of a dead sample. */
+export function dropWhileDead(hits: number[], dead: number[] | undefined): number[] {
+  if (!dead?.length) return hits;
+  return hits.filter((h) => !dead.some((t) => Math.abs(t - h) <= 0.75));
 }

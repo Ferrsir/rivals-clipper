@@ -73,12 +73,51 @@ const squash = (s: string) => norm(s).replace(/[^a-z0-9]/g, '');
 const ALIAS_TO_HERO = new Map<string, string>();
 for (const [name, ...aliases] of HEROES) for (const a of [name, ...aliases]) ALIAS_TO_HERO.set(squash(a), name);
 
-/** "MAGIK", "magik", "Dead Pool", "deadpool" -> "Magik" / "Deadpool". Unknown names pass through trimmed. */
+/** Edit distance, for hero names the screen reader got slightly wrong ("DERDPOOL", "DEADPOQOL"). */
+function distance(a: string, b: string): number {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0];
+    d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return d[b.length];
+}
+
+const FULL_NAMES = HEROES.map(([name]) => ({ name, key: squash(name) }));
+
+/**
+ * "MAGIK", "magik", "Dead Pool", "deadpool" -> "Magik" / "Deadpool". Also reads the clipper's noisy
+ * screen reads: "A            DEADPOOL" (a stray letter in front), "DERDPOOL", "DEADPOQOL".
+ * Anything it can't place is unknown (undefined), so a hero rule never trusts it.
+ */
 export function canonicalHero(name: string | undefined | null): string | undefined {
   if (!name || typeof name !== 'string') return undefined;
   const key = squash(name);
   if (!key || /^(unknown|none|null|unsure|uncertain)$/.test(key)) return undefined;
-  return ALIAS_TO_HERO.get(key) ?? name.trim();
+  const exact = ALIAS_TO_HERO.get(key);
+  if (exact) return exact;
+  // The last word on its own: "I   DEADPOOL", "GD DEADPOOL".
+  const words = norm(name).split(/[^a-z0-9&]+/).filter(Boolean);
+  for (let n = Math.min(3, words.length); n >= 1; n--) {
+    const hit = ALIAS_TO_HERO.get(squash(words.slice(-n).join(' ')));
+    if (hit && squash(words.slice(-n).join(' ')).length >= 4) return hit;
+  }
+  // One or two letters misread in a long name.
+  let best: { name: string; d: number } | undefined;
+  for (const h of FULL_NAMES) {
+    if (h.key.length < 5) continue;
+    for (const k of new Set([key, squash(words[words.length - 1] ?? '')])) {
+      const d = distance(k, h.key);
+      const allowed = h.key.length >= 8 ? 2 : 1;
+      if (d <= allowed && (!best || d < best.d)) best = { name: h.name, d };
+    }
+  }
+  return best?.name;
 }
 
 export const HERO_NAMES = [...new Set(HEROES.map((h) => h[0]))];

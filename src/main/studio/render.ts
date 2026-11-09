@@ -255,13 +255,15 @@ interface ClipJobOpts {
   preview: boolean;
   /** Clip uid is the hero (for slow-mo gain etc. nothing changes yet, kept for cache key clarity). */
   workDir: string;
+  /** The mix's game level, so a levelled-up clip still lands at TikTok loudness after it. */
+  gameMix?: number;
 }
 
 /** Stage A for one clip. */
 export function buildClipJob(o: ClipJobOpts): FfJob {
   const segs = mergeSegments(o.segments);
   const { clip, size, fps, style } = o;
-  const key = hashOf({ v: 24, fs: o.feedStyle, fb: !!o.feedBorder, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
+  const key = hashOf({ v: 24, fs: o.feedStyle, fb: !!o.feedBorder, hits: clip.hits, rows: clip.feedRows, ov: (o.overlays ?? []).filter((x) => x.clipUid === o.clip.uid).map((x) => [x, safeMtime(x.image)]), source: [clip.sourceFingerprint, safeMtime(clip.videoFile)], track: clip.cropTrack, feed: clip.preserveKillFeed !== false, audioCount: o.audioCount, f: clip.videoFile, segs: segs.map((s) => [s.src, s.out, s.speed]), size, fps, crop: [clip.cropX, clip.cropY, clip.cropZoom], mic: clip.useMic && clip.hasMic, mute: !!clip.muteGame, edits: [clip.gain, clip.normalize, clip.fadeIn, clip.fadeOut, clip.normalize ? o.gameMix : 0], preview: o.preview, sm: [style.slowmo.smooth, style.slowmo.gameVolume, style.motionBlur, style.slowmo.speed] });
   const output = path.join(o.workDir, `clip-${key}.mkv`);
   const s0 = Math.max(0, Math.min(...segs.map((s) => s.src[0])) - 0.05);
   const s1 = Math.max(...segs.map((s) => s.src[1]));
@@ -355,6 +357,15 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     const frames = Math.max(1, Math.round(outDur * fps));
     const dur = frames / fps;
     const speed = s.speed;
+    if (s.kind === 'hold') {
+      // Freeze the last frame; the clip's own sound stops (the song carries the beat).
+      lines.push(`[vi${i}]trim=start=${r6(a)}:end=${r6(b)},setpts=PTS-STARTPTS,fps=${fps},tpad=stop_mode=clone:stop_duration=${r6(dur + 0.2)},trim=end_frame=${frames},setpts=PTS-STARTPTS[v${i}]`);
+      lines.push(`[gi${i}]anullsink`);
+      lines.push(`anullsrc=r=48000:cl=stereo,atrim=end=${r6(dur)},aformat=sample_fmts=fltp:channel_layouts=stereo[g${i}]`);
+      if (useMic) lines.push(`[mi${i}]anullsink`);
+      lines.push(`anullsrc=r=48000:cl=stereo,atrim=end=${r6(dur)},aformat=sample_fmts=fltp:channel_layouts=stereo[m${i}]`);
+      return;
+    }
     const v: string[] = [`trim=start=${r6(a)}:end=${r6(b)}`, 'setpts=PTS-STARTPTS'];
     if (style.motionBlur.on && speed >= style.motionBlur.minSpeed && !o.preview) {
       const k = Math.max(2, Math.min(5, Math.round(speed)));
@@ -369,7 +380,7 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     lines.push(`[vi${i}]${v.join(',')}[v${i}]`);
 
     const slow = speed < slowSpeedMax;
-    const gGain = clip.muteGame ? 0 : slow ? style.slowmo.gameVolume : 1;
+    const gGain = clip.muteGame ? 0 : (slow ? style.slowmo.gameVolume : 1) * (clip.gain ?? 1);
     const aChain = (src: string, gain: number) => {
       const parts = [`atrim=start=${r6(a)}:end=${r6(b)}`, 'asetpts=PTS-STARTPTS'];
       const t = atempoChain(speed);
@@ -382,9 +393,15 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     if (useMic) lines.push(`${aChain('mi', slow ? 0.6 : 1)}[m${i}]`);
     else lines.push(`anullsrc=r=48000:cl=stereo,atrim=end=${r6(dur)},aformat=sample_fmts=fltp:channel_layouts=stereo[m${i}]`);
   });
-  lines.push(`${segs.map((_, i) => `[v${i}][g${i}][m${i}]`).join('')}concat=n=${n}:v=1:a=2[v][ga][ma]`);
-
   const total = segs.reduce((s, x) => s + Math.max(1, Math.round((x.out[1] - x.out[0]) * fps)) / fps, 0);
+  // Hand edits on the whole clip: level its sound up, fade it in from / out to black.
+  const post = clipPostFilters(clip, total, o.gameMix);
+  lines.push(`${segs.map((_, i) => `[v${i}][g${i}][m${i}]`).join('')}concat=n=${n}:v=1:a=2${post.v || post.a ? '[vc][gc][ma]' : '[v][ga][ma]'}`);
+  if (post.v || post.a) {
+    lines.push(`[vc]${post.v || 'null'}[v]`);
+    lines.push(`[gc]${post.a || 'anull'}[ga]`);
+  }
+
   const args = [
     '-ss', r6(s0), '-t', r6(s1 - s0 + 0.3), '-i', clip.videoFile,
     ...ov.inputs.flat(),
@@ -393,6 +410,29 @@ export function buildClipJob(o: ClipJobOpts): FfJob {
     output,
   ];
   return { args, filter: lines.join(';\n'), output, duration: total };
+}
+
+/** Filters for a clip's hand edits after its pieces are joined: loudness, fades. Empty strings when there are none. */
+export function clipPostFilters(clip: Pick<ReelClip, 'normalize' | 'fadeIn' | 'fadeOut'>, total: number, gameMix = 1): { v: string; a: string } {
+  const v: string[] = [];
+  const a: string[] = [];
+  if (clip.normalize) {
+    a.push('loudnorm=I=-14:TP=-1.5:LRA=11', 'aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo');
+    // The reel turns all game sound down by the mix's game level; undo that here so the line still hits -14 LUFS.
+    const back = Math.min(3, 1 / Math.max(0.05, gameMix));
+    if (Math.abs(back - 1) > 1e-3) a.push(`volume=${r3(back)}`);
+  }
+  const fi = Math.min(clip.fadeIn ?? 0, total / 2);
+  const fo = Math.min(clip.fadeOut ?? 0, total / 2);
+  if (fi > 0.01) {
+    v.push(`fade=t=in:st=0:d=${r3(fi)}`);
+    a.push(`afade=t=in:st=0:d=${r3(fi)}`);
+  }
+  if (fo > 0.01) {
+    v.push(`fade=t=out:st=${r3(total - fo)}:d=${r3(fo)}`);
+    a.push(`afade=t=out:st=${r3(total - fo)}:d=${r3(fo)}`);
+  }
+  return { v: v.join(','), a: a.join(',') };
 }
 
 function intermediateCodec(preview: boolean, fps: number): string[] {
@@ -492,10 +532,54 @@ export interface AssembleOpts {
   output: string;
   /** Also write the reel's audio without music, for a no-music copy. */
   noMusicAudio?: string;
+  /** Music level per stretch of the reel (a quiet bed under a hook) and audio jumps (the song drops out). */
+  musicEnv?: MusicEnvelope;
+  /** Seconds of fade at the very end (the ending's fade). Overrides the style's fade-out. */
+  endFade?: number;
   workDir: string;
   fontFile?: string;
   intro?: IntroCard | null;
   outro?: OutroText | null;
+}
+
+export interface MusicEnvelope {
+  /** Output seconds where the music plays at `level` (0..1) instead of full, rising back to full over `rise` seconds after `to`. */
+  levels: Array<{ from: number; to: number; level: number; rise?: number }>;
+  cuts: Array<{ at: number; length: number }>;
+}
+
+/** volume= expression (over output time t) for the music: quiet beds and drop-outs, '' when the music plays full throughout. */
+export function musicEnvelopeExpr(env: MusicEnvelope | undefined): string {
+  if (!env) return '';
+  const f: string[] = [];
+  for (const l of env.levels) {
+    if (l.to - l.from < 0.01 || l.level >= 0.999) continue;
+    const rise = Math.max(0.01, l.rise ?? 0.08);
+    const lv = r3(l.level);
+    f.push(`if(between(t,${r3(l.from)},${r3(l.to)}),${lv},if(between(t,${r3(l.to)},${r3(l.to + rise)}),${lv}+(1-${lv})*(t-${r3(l.to)})/${r3(rise)},1))`);
+  }
+  for (const c of env.cuts) {
+    if (c.length < 0.02) continue;
+    // 15 ms edges so the jump doesn't click.
+    const a = c.at;
+    const b = c.at + c.length;
+    f.push(`if(between(t,${r3(a)},${r3(b)}),max(0,max(${r3(a + 0.015)}-t,t-${r3(b - 0.015)})/0.015),1)`);
+  }
+  return f.join('*');
+}
+
+/** The envelope for a planned reel: each clip's music level over its span, plus the project's audio jumps. */
+export function musicEnvelopeFor(tl: Timeline, clips: Array<Pick<ReelClip, 'uid' | 'musicLevel'>>, cuts: Array<{ at: number; length: number }> = []): MusicEnvelope {
+  const levels: MusicEnvelope['levels'] = [];
+  for (const c of tl.clips) {
+    const level = clips.find((x) => x.uid === c.uid)?.musicLevel;
+    if (level === undefined || level >= 0.999) continue;
+    const prev = levels[levels.length - 1];
+    // Neighbouring quiet clips share one bed.
+    if (prev && Math.abs(prev.to - c.out[0]) < 1e-3 && Math.abs(prev.level - level) < 1e-3) prev.to = c.out[1];
+    else levels.push({ from: c.out[0], to: c.out[1], level });
+  }
+  return { levels, cuts: cuts.filter((c) => c.at < tl.duration) };
 }
 
 export function beatPulses(tl: Timeline, which: 'none' | 'downbeats' | 'all'): number[] {
@@ -707,7 +791,7 @@ export function buildAssembleJob(o: AssembleOpts): FfJob & { concatList: string 
   const vchain = [...effectsChain(o), ...textFilters(o)];
   // Never fade over the final elimination before the viewer has had time to see it.
   const lastKill=tl.kills.at(-1);
-  const fo = Math.min(o.style.fadeOut, dur / 3, lastKill===undefined ? dur : Math.max(0,dur-lastKill-.5));
+  const fo = o.endFade !== undefined ? Math.min(o.endFade, dur / 2) : Math.min(o.style.fadeOut, dur / 3, lastKill===undefined ? dur : Math.max(0,dur-lastKill-.5));
   if (fo > 0.01) vchain.push(`fade=t=out:st=${r3(dur - fo)}:d=${r3(fo)}`);
   vchain.push('format=yuv420p');
   lines.push(`[0:v]${vchain.join(',')}[vout]`);
@@ -727,7 +811,8 @@ export function buildAssembleJob(o: AssembleOpts): FfJob & { concatList: string 
   const noMusicParts = [...parts];
   if (o.music) {
     const mfo = Math.max(0.3, fo);
-    lines.push(`[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${r3(mix.music)},afade=t=in:d=0.02,afade=t=out:st=${r3(Math.max(0, dur - mfo))}:d=${r3(mfo)},apad,atrim=end=${r3(dur)}${duck ? '[mus]' : '[music]'}`);
+    const env = musicEnvelopeExpr(o.musicEnv);
+    lines.push(`[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${r3(mix.music)},${env ? `volume='${env}':eval=frame,` : ''}afade=t=in:d=0.02,afade=t=out:st=${r3(Math.max(0, dur - mfo))}:d=${r3(mfo)},apad,atrim=end=${r3(dur)}${duck ? '[mus]' : '[music]'}`);
     if (duck) lines.push('[mus][mickey]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=400:makeup=1[music]');
     parts.push('[music]');
   }

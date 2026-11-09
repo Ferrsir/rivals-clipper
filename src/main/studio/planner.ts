@@ -6,7 +6,7 @@
 // the hero clip's first kill, or the cut out of the intro card when there is one.
 // Pure functions, no I/O, so it's fully testable.
 
-import type { CaptionLine, IntroCard, MusicAnalysis, ReelClip, StyleRecipe, Timeline, TimelineClip, TimelineSegment, SegmentKind } from '../../shared/studio';
+import type { CaptionLine, IntroCard, MusicAnalysis, ReelClip, ReelEnding, StyleRecipe, Timeline, TimelineClip, TimelineSegment, SegmentKind } from '../../shared/studio';
 
 export interface PlanInput {
   clips: ReelClip[];
@@ -19,7 +19,12 @@ export interface PlanInput {
   captions?: CaptionLine[];
   maxSeconds?: number;
   targetSeconds?: number;
+  /** 'play-out' lets the last clip run past its last kill (no beat snap) so it can fade out with the song. */
+  ending?: ReelEnding;
 }
+
+/** Dead time between two kills longer than this is cut out (a jump cut) instead of sped through. */
+export const JUMP = { over: 1.5, after: 0.35, before: 0.9 };
 
 interface Piece {
   kind: SegmentKind;
@@ -50,7 +55,8 @@ const EPS = 1e-6;
 
 function makeGrid(an: MusicAnalysis, M: number): Grid {
   const down = new Set(an.downbeats.map((d) => Math.round(d * 1000)));
-  const drop = an.drops[0];
+  // The song's big drop inside the part that plays: with the song started at 0:46, a drop at 0:11 is long gone.
+  const drop = firstDrop(an, M);
   const downList = an.downbeats;
   const dropBar = drop !== undefined ? downList.findIndex((d) => Math.abs(d - drop) < 0.005) : -1;
   const t: number[] = [];
@@ -68,7 +74,7 @@ function makeGrid(an: MusicAnalysis, M: number): Grid {
       if (((rel % 4) + 4) % 4 === 0) s = 3;
     }
     if (drop !== undefined && Math.abs(b - drop) < 0.005) s = 6;
-    else if (an.drops.slice(1).some((d) => Math.abs(b - d) < 0.005)) s = 4;
+    else if (an.drops.some((d) => d !== drop && Math.abs(b - d) < 0.005)) s = 4;
     t.push(Math.max(0, o));
     strength.push(s);
     downbeat.push(isDown);
@@ -99,6 +105,28 @@ interface Ctx {
   dropOut: number | null;
   /** Slow-mo applies to this clip. */
   slow: boolean;
+  /** Last clip of a play-out ending. */
+  playOut?: { maxTail: number };
+}
+
+/** Typical beat length of the grid (0.5 s without one). */
+function beatLen(g: Grid | null): number {
+  if (!g || g.t.length < 2) return 0.5;
+  const d = g.t.slice(1).map((t, i) => t - g.t[i]).filter((x) => x > 0.05).sort((a, b) => a - b);
+  return d[Math.floor(d.length / 2)] ?? 0.5;
+}
+
+/** A freeze on the clip's last frame from `C` to a beat about `beats` beats later, so a line can finish before the cut. */
+function holdPiece(c: ReelClip, idx: number, C: number, src: number, g: Grid | null): Piece | null {
+  const beats = c.holdBeats ?? 0;
+  if (beats <= 0) return null;
+  const len = beatLen(g);
+  let end = C + beats * len;
+  if (g) {
+    const near = beatsIn(g, C + Math.max(0.15, (beats - 0.5) * len), C + (beats + 0.5) * len);
+    if (near.length) end = g.t[near[0]];
+  }
+  return { kind: 'hold', clip: idx, src0: Math.max(c.in, src - 0.04), src1: src, out0: C, out1: end };
 }
 
 export function cleanHits(c: ReelClip): number[] {
@@ -112,11 +140,15 @@ function layoutPlain(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout 
   const L = Math.max(0.1, c.out - c.in);
   let C = T + L;
   let score = 0;
-  if (ctx.grid) {
+  // A clip that holds its last frame, or plays the reel out, keeps every frame: the hold or the fade lands the beat.
+  if (ctx.grid && !(c.holdBeats ?? 0) && !ctx.playOut) {
     let best = -Infinity;
+    // Your own footage (a hook, an anime scene) was trimmed on purpose, so keep nearly all of it:
+    // only a game clip with no kill marked may be cut down hard to reach a stronger beat.
+    const keep = c.external || c.manualTrim ? 8 : 0.6;
     for (const i of beatsIn(ctx.grid, T + Math.min(L, 1), T + L)) {
       const used = ctx.grid.t[i] - T;
-      const sc = ctx.grid.strength[i] - (0.6 * (L - used)) / L;
+      const sc = ctx.grid.strength[i] - (keep * (L - used)) / L;
       if (sc > best) {
         best = sc;
         C = ctx.grid.t[i];
@@ -125,7 +157,10 @@ function layoutPlain(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout 
     if (best > -Infinity) score = best;
   }
   const used = C - T;
-  return { pieces: [{ kind: 'plain', clip: idx, src0: c.out - used, src1: c.out, out0: T, out1: C }], end: C, kills: [], onBeat: [], score };
+  const pieces: Piece[] = [{ kind: 'plain', clip: idx, src0: c.out - used, src1: c.out, out0: T, out1: C }];
+  const hold = holdPiece(c, idx, C, c.out, ctx.grid);
+  if (hold) pieces.push(hold);
+  return { pieces, end: hold ? hold.out1 : C, kills: [], onBeat: [], score };
 }
 
 function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
@@ -162,7 +197,9 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
 
   // --- run-up to the first kill ---
   const avail = hits[0] - pre[0] - c.in;
-  const [leadMin, leadMax] = st.leadIn;
+  // Trimmed by hand: run up from where you set the start, not the style's usual lead-in.
+  const handLead = Math.max(0.1, avail / cruise);
+  const [leadMin, leadMax] = c.manualTrim ? [handLead * 0.85, handLead * 1.15] : st.leadIn;
   const leadPref = leadMin + 0.35 * (leadMax - leadMin);
   const slowIn0 = pre[0] / sp;
   const tryLead = (K: number): { v: number; ok: boolean } => {
@@ -177,7 +214,13 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   let beat0 = false;
   if (g) {
     let best = -Infinity;
-    for (const i of beatsIn(g, T + leadMin, T + leadMax)) {
+    // The clip that should hit the drop may run up for longer than the style's usual lead-in,
+    // as far as its own footage allows, so a short hook before it still lands its first kill on the drop.
+    const leadBeats = beatsIn(g, T + leadMin, T + leadMax);
+    if (ctx.dropOut !== null && ctx.dropOut > T + leadMax && ctx.dropOut <= T + Math.max(leadMax, avail / Math.max(vmin, 0.1) + slowIn0)) {
+      leadBeats.push(...beatsIn(g, ctx.dropOut, ctx.dropOut));
+    }
+    for (const i of leadBeats) {
       const K = g.t[i];
       const r = tryLead(K);
       if (!r.ok) continue;
@@ -208,11 +251,12 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   onBeat.push(beat0);
 
   // --- kill to kill ---
+  const jump: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const K = kills[i];
     const gap = hits[i + 1] - hits[i];
     const s = post[i] + pre[i + 1];
-    const m = gap - s;
+    let m = gap - s;
     let D = NaN;
     let vs = sp;
     let vg = cruise;
@@ -241,6 +285,11 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
       vg = vs;
     } else {
       const slowOut = s / sp;
+      // A slow double: show the end of the first kill and the run-up to the next, not the walk in between.
+      if (c.jumpCut !== false && m > JUMP.over) {
+        jump[i] = Math.min(m, JUMP.after + JUMP.before);
+        m = jump[i];
+      }
       if (g) {
         let best = -Infinity;
         for (const j of beatsIn(g, K + slowOut + m / vmax, K + slowOut + m / vmin)) {
@@ -270,9 +319,15 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
     const b = hits[i + 1];
     const o1 = K + post[i] / vs;
     pieces.push({ kind: 'slow-out', clip: idx, src0: a, src1: a + post[i], out0: K, out1: o1 });
-    const gapLen = b - pre[i + 1] - (a + post[i]);
+    const g0 = a + post[i];
+    const g1 = b - pre[i + 1];
+    const gapLen = jump[i] ?? g1 - g0;
     const o2 = o1 + (gapLen > 1e-4 ? gapLen / vg : 0);
-    if (gapLen > 1e-4) pieces.push({ kind: 'gap', clip: idx, src0: a + post[i], src1: b - pre[i + 1], out0: o1, out1: o2 });
+    if (jump[i] !== undefined) {
+      const mid = o1 + JUMP.after / vg;
+      pieces.push({ kind: 'gap', clip: idx, src0: g0, src1: g0 + JUMP.after, out0: o1, out1: mid });
+      pieces.push({ kind: 'gap', clip: idx, src0: g1 - (gapLen - JUMP.after), src1: g1, out0: mid, out1: o2 });
+    } else if (gapLen > 1e-4) pieces.push({ kind: 'gap', clip: idx, src0: g0, src1: g1, out0: o1, out1: o2 });
     pieces.push({ kind: 'slow-in', clip: idx, src0: b - pre[i + 1], src1: b, out0: o2, out1: K + D });
     kills.push(K + D);
     onBeat.push(hit);
@@ -284,10 +339,15 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
   const slowOutL = post[n - 1] / sp;
   pieces.push({ kind: 'slow-out', clip: idx, src0: hl, src1: hl + post[n - 1], out0: Kl, out1: Kl + slowOutL });
   const R = Math.max(0, c.out - hl - post[n - 1]);
-  const [tailMin, tailMax] = st.tail;
+  const handTail = Math.max(0.1, R / cruise);
+  const [tailMin, tailMax] = c.manualTrim ? [handTail * 0.85, handTail * 1.15] : st.tail;
   let C = NaN;
   let vt = cruise;
-  if (g) {
+  if (ctx.playOut) {
+    // The ending: the rest of the clip at real speed, faded out with the song.
+    vt = 1;
+    C = Kl + slowOutL + Math.max(0.1, Math.min(R, ctx.playOut.maxTail));
+  } else if (g) {
     let best = -Infinity;
     for (const j of beatsIn(g, Kl + slowOutL + Math.min(tailMin, R / vmin), Kl + slowOutL + tailMax)) {
       const tailOut = g.t[j] - Kl - slowOutL;
@@ -311,7 +371,13 @@ function layoutClip(c: ReelClip, idx: number, T: number, ctx: Ctx): ClipLayout {
     if (g) score -= 2;
   }
   const tailSrc0 = hl + post[n - 1];
-  pieces.push({ kind: 'tail', clip: idx, src0: tailSrc0, src1: tailSrc0 + (C - Kl - slowOutL) * vt, out0: Kl + slowOutL, out1: C });
+  const tailSrc1 = tailSrc0 + (C - Kl - slowOutL) * vt;
+  pieces.push({ kind: 'tail', clip: idx, src0: tailSrc0, src1: tailSrc1, out0: Kl + slowOutL, out1: C });
+  const hold = ctx.playOut ? null : holdPiece(c, idx, C, tailSrc1, g);
+  if (hold) {
+    pieces.push(hold);
+    C = hold.out1;
+  }
   // Close eliminations share a planning impact, but remain separate real kills. Map every
   // supplied marker through the actual retimed pieces instead of dropping the second one.
   const allHits=[...c.hits].filter(h=>Number.isFinite(h) && h>c.in+.05 && h<c.out-.02).sort((a,b)=>a-b);
@@ -366,7 +432,8 @@ function layoutAll(input: PlanInput, grid: Grid | null, dropOut: number | null, 
   }
   const out: Layout['clips'] = [];
   clips.forEach((c, i) => {
-    const ctx: Ctx = { ...ctxBase, dropOut: !dropOnIntro && i === heroIdx ? dropOut : null, slow: style.slowmo.scope === 'all' || i === heroIdx };
+    const last = i === clips.length - 1;
+    const ctx: Ctx = { ...ctxBase, dropOut: !dropOnIntro && i === heroIdx ? dropOut : null, slow: style.slowmo.scope === 'all' || i === heroIdx, playOut: last && input.ending?.mode === 'play-out' ? { maxTail: input.ending.maxTail ?? 8 } : undefined };
     const l = layoutClip(c, i, T, ctx);
     pieces.push(...l.pieces);
     out.push({ index: i, out: [T, l.end], kills: l.kills, onBeat: l.onBeat });
@@ -404,13 +471,13 @@ function planUnfitted(input: PlanInput): Timeline {
   let M = typeof input.musicStart === 'number' ? Math.max(0, input.musicStart) : 0;
   let layout: Layout;
   if (sync && an) {
-    const drop = an.drops[0];
     const candidates = typeof input.musicStart === 'number' ? [M] : [0, ...an.beats.filter((b) => b < an.durationSec - 4)];
     const downs = new Set(an.downbeats.map((d) => Math.round(d * 1000)));
     let best: Layout | undefined;
     let bestScore = -Infinity;
     let bestM = M;
     for (const m of candidates) {
+      const drop = firstDrop(an, m);
       const grid = makeGrid(an, m);
       const dropOut = drop !== undefined && drop - m >= 0 ? drop - m : null;
       const l = layoutAll(input, grid, dropOut, heroIdx);
@@ -442,6 +509,10 @@ function planUnfitted(input: PlanInput): Timeline {
     const o1 = q(p.out1);
     if (o1 - o0 < 0.5 / fps) continue;
     const speed = p.kind === 'intro' ? 1 : (p.src1 - p.src0) / (o1 - o0);
+    if (p.kind === 'hold') {
+      segments.push({ clipUid: input.clips[p.clip].uid, clipIndex: p.clip, kind: 'hold', src: [round4(p.src0), round4(p.src1)], out: [o0, o1], speed: 0 });
+      continue;
+    }
     if (p.kind !== 'intro' && p.src1 - p.src0 < 1e-4) continue;
     segments.push({
       clipUid: p.clip >= 0 ? input.clips[p.clip].uid : 'intro',
@@ -458,7 +529,7 @@ function planUnfitted(input: PlanInput): Timeline {
     const cur = segments[i];
     if (Math.abs(cur.out[0] - prev.out[1]) > 1e-6) {
       prev.out[1] = cur.out[0];
-      if (prev.kind !== 'intro') prev.speed = round4((prev.src[1] - prev.src[0]) / (prev.out[1] - prev.out[0]));
+      if (prev.kind !== 'intro' && prev.kind !== 'hold') prev.speed = round4((prev.src[1] - prev.src[0]) / (prev.out[1] - prev.out[0]));
     }
   }
   const duration = segments.length ? segments[segments.length - 1].out[1] : 0;
@@ -481,7 +552,7 @@ function planUnfitted(input: PlanInput): Timeline {
   if (an) {
     beats = an.beats.map((b) => round4(b - M)).filter((b) => b >= 0 && b <= duration);
     downbeats = an.downbeats.map((b) => round4(b - M)).filter((b) => b >= 0 && b <= duration);
-    const d = an.drops[0];
+    const d = firstDrop(an, M);
     if (d !== undefined && d - M >= 0 && d - M <= duration) drop = round4(d - M);
     musicShort = an.durationSec - M < duration - 0.05;
     if (sync && d !== undefined && tClips.length) {
@@ -563,3 +634,8 @@ export function orderClips(clips: ReelClip[], order: 'manual' | 'build-up'): Ree
 }
 
 const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
+/** The first drop at or after where the song starts playing (the song's first drop when none is left). */
+export function firstDrop(an: MusicAnalysis, start: number): number | undefined {
+  return an.drops.find((d) => d >= start - 1e-3) ?? (start <= 0 ? an.drops[0] : undefined);
+}

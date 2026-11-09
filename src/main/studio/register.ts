@@ -22,19 +22,22 @@ import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSideca
 import { describeFit, duration as reelSeconds, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
 import { scanClip, trimAround, type ClipScan } from './clip-filter';
-import { withFeedRows } from './feed-rows';
+import { dropWhileDead, withFeedRows } from './feed-rows';
 import { findSong, readIntent, styleFromPrompt } from './intent';
 import { checkClip, describeRules, filterLibrary, hasRules, heroOf, mergeRules, readClipRules, type ClipRules } from './clip-rules';
 import { HeroChecks, checkHeroes } from './hero-check';
 import { scoreClip } from '../scoring';
 import { detectMoments, expandOwnFootage } from './moments';
 import { SpeechTools } from './tools';
-import { assignSpeakers, linesToSubtitles, transcribe } from './speech';
+import { assignSpeakers, hookEnd, linesToSubtitles, transcribe } from './speech';
 import { aiCast, autoCast, localSynth } from './voices';
 import { IMAGE_EXTS, VIDEO_EXTS, importAssets } from './assets';
 import { reviewRenderedReel } from './review';
 import { aiMusicPrompt, sourcesFor, suggestFromLibrary } from './suggest';
 import { STYLES, clone, getStyle } from './styles';
+
+/** A hook clip's defaults: the song at 16% under it, and its last frame held one beat. */
+export const HOOK = { musicLevel: 0.16, holdBeats: 1 };
 
 export interface StudioContext {
   getSettings: () => Settings;
@@ -381,31 +384,43 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
    * "make them have subtitles": what's said in the clips, as English lines, with who says each one
    * (from the AI). "ai voices for them talking": a voice per character reads those lines.
    */
-  const addSpeech = async (project: ReelProject, request: string, wantSubs: boolean, wantVoices: boolean, notes: string[], signal?: AbortSignal) => {
+  const addSpeech = async (project: ReelProject, request: string, wantSubs: boolean, wantVoices: boolean, notes: string[], signal?: AbortSignal, untilWord?: string) => {
     const ff = await ffmpeg();
     const keepLanguage = /\b(original|japanese|native) (language|audio|subtitles?|subs)\b|\bdon'?t translate\b/i.test(request);
-    if (wantSubs || wantVoices) {
+    // A hook (your own clip before the gameplay) ends just after its last word, never mid-word.
+    const hook = project.clips[0]?.external && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
+    if (wantSubs || wantVoices || hook) {
       // Only transcribe when the plan has no lines of its own (your words win).
-      const sources = [...new Set(project.clips.map(c => c.videoFile))].filter(file => !(project.subtitles ?? []).some(t => project.clips.find(c => c.uid === t.clipUid)?.videoFile === file));
+      const sources = [...new Set(project.clips.map(c => c.videoFile))].filter(file => file === hook?.videoFile || !(project.subtitles ?? []).some(t => project.clips.find(c => c.uid === t.clipUid)?.videoFile === file));
       let whisper: { bin: string; model: string } | undefined;
       for (const file of sources) {
         const used = project.clips.filter(c => c.videoFile === file);
         const from = Math.max(0, Math.min(...used.map(c => c.in)) - 0.5);
-        const to = Math.max(...used.map(c => c.out)) + 0.5;
+        // Look a little past the hook's end, in case it cuts in before the word you named.
+        const to = Math.min(Math.max(...used.map(c => c.durationSec)), Math.max(...used.map(c => c.out)) + (file === hook?.videoFile && untilWord ? 4 : 0.5));
         try {
           whisper ??= await speechTools().whisper(undefined, 'small', signal);
           const heard = await transcribe({ ffmpeg: ff, whisper, clip: used[0], from, to, keepLanguage, signal });
+          if (hook && file === hook.videoFile) {
+            const end = hookEnd(heard.words, hook, untilWord);
+            if (end !== undefined && end > hook.in + 0.3 && Math.abs(end - hook.out) > 0.02) {
+              notes.push(`Ended the hook at ${end.toFixed(2)} s, just after ${untilWord ? `"${untilWord}"` : 'its last word'}, so the line finishes.`);
+              hook.out = end;
+            }
+          }
+          if (!wantSubs && !wantVoices) continue;
+          if (file === hook?.videoFile && (project.subtitles ?? []).some(t => t.clipUid === hook.uid)) continue;
           let lines = heard.lines;
           if (lines.length && ctx.ai) lines = await assignSpeakers({ ai: ctx.ai, ffmpeg: ff, clip: used[0], lines, request, signal }).catch(() => lines);
           if (!lines.length) continue;
           project.subtitles = [...(project.subtitles ?? []), ...linesToSubtitles(lines, project.clips, file)];
           notes.push(`Subtitled ${lines.length} spoken line${lines.length === 1 ? '' : 's'}${heard.language && heard.language !== 'en' && !keepLanguage ? ` (translated from ${heard.language})` : ''}.`);
         } catch (error) {
-          notes.push(`Couldn't make subtitles (${(error as Error).message}).`);
+          notes.push(wantSubs || wantVoices ? `Couldn't make subtitles (${(error as Error).message}).` : `Couldn't check where the hook's last word ends (${(error as Error).message}).`);
           break;
         }
       }
-      if (!(project.subtitles ?? []).length) notes.push('No speech was found for subtitles. Write the lines in your prompt (e.g. Gojo: "Throughout heaven and earth...") and they will be used.');
+      if ((wantSubs || wantVoices) && !(project.subtitles ?? []).length) notes.push('No speech was found for subtitles. Write the lines in your prompt (e.g. Gojo: "Throughout heaven and earth...") and they will be used.');
     }
     if (wantVoices) {
       // Lines you wrote without a speaker are read by one voice.
@@ -476,11 +491,14 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       const src = sources.get(c.clipId);
       const hero = src ? heroOf(src, allowed.heroes) : c.hero;
       const scan = scans.get(c.videoFile);
-      const own = scan && feedReadable ? withFeedRows(c, scan.feed) : c;
+      const read = scan && feedReadable ? withFeedRows(c, scan.feed) : c;
+      // Kills while you're dead (the "DEFEATED BY" card is up) are spectating, and your death row looks like a kill.
+      const alive = dropWhileDead(read.hits, scan?.dead);
+      const own = { ...read, hits: alive, kills: alive.length };
       // Not your kill, or it opens straight on the kill with no build-up: leave it out.
       const first = own.hits.find(h => h > own.in);
       if (first === undefined || first - own.in < 1) return null;
-      const trimmed = trimAround(own, scan?.scoreboard ?? []);
+      const trimmed = trimAround(own, [...(scan?.scoreboard ?? []), ...(scan?.dead ?? [])]);
       if (!trimmed) return null;
       // Score what's really in the clip: kills only count when they're yours (feed rows) and inside the trim.
       const scored = rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);
@@ -506,7 +524,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
         if (c) { project.clips = [c]; break; }
       }
     }
-    if (dropped) notes.push(`Left out ${dropped} clip${dropped === 1 ? '' : 's'} with the scoreboard open.`);
+    if (dropped) notes.push(`Left out ${dropped} clip${dropped === 1 ? '' : 's'} with no kill of yours on screen, the scoreboard open, or you already dead.`);
     const fit = fitToTarget(project, pool, analysisFor(project), ownOnly ? { maxAdd: 0 } : { prepare });
     project = fit.project;
     const fitNote = describeFit(fit, target);
@@ -555,7 +573,20 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       if (ok) notes.push('Found the face for your picture overlay.');
       if (failed) notes.push(`Couldn't find the face for your picture (${failed}); it sits where the AI first placed it.`);
     }
-    if (intent.subtitles || intent.voices) await addSpeech(project, request, intent.subtitles, intent.voices, notes, signal);
+    // A hook clip before the gameplay (Ferris's style): its own sound levelled up, the song a quiet bed under it,
+    // and its last frame held for a beat so the line finishes before the montage hits.
+    const hookClip = project.clips[0]?.external && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
+    if (hookClip && project.music) {
+      hookClip.musicLevel ??= HOOK.musicLevel;
+      hookClip.normalize ??= true;
+      hookClip.holdBeats ??= HOOK.holdBeats;
+      notes.push(`The hook keeps its own sound with the song quiet underneath (${Math.round(HOOK.musicLevel * 100)}%), and holds its last frame for a beat before the montage.`);
+    }
+    if (intent.playOut) {
+      project.ending = { mode: 'play-out', fade: project.ending?.fade ?? 1.8 };
+      notes.push('The last clip plays out and fades with the song.');
+    }
+    if (intent.subtitles || intent.voices || hookClip) await addSpeech(project, request, intent.subtitles, intent.voices, notes, signal, intent.untilWord);
     if (intent.faceOverlay && !(project.overlays ?? []).length) notes.push(!(project.assets ?? []).some(a => a.kind === 'image') ? 'Add the picture you want on their face (drop it in with your clip) and make the reel again.' : "The AI didn't place your picture; try naming who it goes on, e.g. \"put the Deadpool icon on Gojo's face\".");
     return { project, notes };
   };

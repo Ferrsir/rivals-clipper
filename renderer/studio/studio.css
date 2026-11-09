@@ -176,7 +176,25 @@
 
 /* Bottom: timeline and clip strip */
 .st-bottom { border-top: 1px solid var(--line); background: #0b0d11; flex: none; }
-.st-canvas { display: block; width: 100%; cursor: pointer; }
+/* Timeline, laid out like Premiere Pro's sequence panel. */
+.tl { background: #1b1b1b; border-bottom: 1px solid #111; outline: none; user-select: none; }
+.tl:focus-visible { box-shadow: inset 0 0 0 1px #3d9cff; }
+.tl-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #262626; border-bottom: 1px solid #111; }
+.st .tl-tool { background: #1e1e1e; border: 1px solid #3a3a3a; color: #cfcfcf; border-radius: 3px; padding: 2px 8px; font-size: 12px; }
+.st .tl-tool.on { background: #2f4f73; border-color: #3d9cff; color: #fff; }
+.tl-sep { width: 1px; height: 18px; background: #3a3a3a; margin: 0 4px; }
+.tl-hint { color: #8c8c8c; font-size: 11px; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.tl-tc { font: 600 14px/1 ui-monospace, Consolas, monospace; color: #3d9cff; letter-spacing: 0.04em; margin-left: auto; }
+.tl-body { display: flex; }
+.tl-heads { flex: none; width: 112px; background: #232323; border-right: 1px solid #111; padding-bottom: 6px; }
+.tl-head { display: flex; align-items: center; gap: 6px; padding: 0 8px; background: #2b2b2b; color: #bdbdbd; font-size: 11px; box-sizing: border-box; }
+.tl-head.ruler { background: #262626; }
+.tl-head b { color: #e6e6e6; background: #3a3a3a; border-radius: 2px; padding: 1px 4px; font-size: 10px; }
+.tl-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+.tl-canvas { display: block; }
+.st-scrubview { position: absolute; inset: 0; width: 100% !important; height: 100%; background: #000; pointer-events: none; }
+.st-effects { border-top: 1px solid var(--line); margin-top: 10px; }
 .st-strip { display: flex; gap: 6px; padding: 6px 8px 8px; overflow-x: auto; min-height: 42px; align-items: center; }
 .st-chip { display: flex; align-items: center; gap: 6px; flex: none; padding: 4px 4px 4px 8px; background: var(--panel); border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; cursor: pointer; user-select: none; font-size: 12px; }
 .st-chip.on { background: var(--st-hover); outline: 1px solid var(--text); }

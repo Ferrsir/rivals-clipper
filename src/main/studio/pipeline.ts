@@ -12,7 +12,7 @@ import { audioStreamCount } from '../audio-streams';
 import type { ExportFormat, FormatId, MusicAnalysis, ReelProject, RenderProgress, RenderRequest, Timeline } from '../../shared/studio';
 import { FORMATS } from './formats';
 import { orderClips, plan } from './planner';
-import { EncoderChoice, FfJob, Size, buildAssembleJob, buildClipJob, buildIntroJob, hashOf } from './render';
+import { EncoderChoice, FfJob, Size, buildAssembleJob, buildClipJob, buildIntroJob, hashOf, musicEnvelopeFor } from './render';
 
 export interface PipelineOpts {
   ffmpeg: string;
@@ -57,6 +57,7 @@ export function planFor(project: ReelProject, analysis: MusicAnalysis | null, fp
     captions: project.captions,
     maxSeconds,
     targetSeconds: project.targetSeconds,
+    ending: project.ending,
   });
   timeline.warnings.push(...(project.sourceWarnings ?? []));
   timeline.captions.push(...subtitleTimes(project, timeline));
@@ -78,17 +79,20 @@ export function spokenLines(project: ReelProject, tl: Timeline): SpokenLine[] {
 export function subtitleSpans(project: ReelProject, tl: Timeline): Array<{ text: string; start: number; end: number; speaker?: string }> {
   const out: Array<{ text: string; start: number; end: number; speaker?: string }> = [];
   const toOut = (uid: string, t: number): number | undefined => {
-    const seg = tl.segments.find((s) => s.clipUid === uid && t >= s.src[0] - 1e-4 && t <= s.src[1] + 1e-4);
+    const seg = tl.segments.find((s) => s.clipUid === uid && s.kind !== 'hold' && t >= s.src[0] - 1e-4 && t <= s.src[1] + 1e-4);
     return seg ? seg.out[0] + (t - seg.src[0]) / Math.max(1e-3, seg.speed) : undefined;
   };
   for (const sub of project.subtitles ?? []) {
-    const segs = tl.segments.filter((s) => s.clipUid === sub.clipUid);
+    const all = tl.segments.filter((s) => s.clipUid === sub.clipUid);
+    const segs = all.filter((s) => s.kind !== 'hold');
     if (!segs.length) continue;
+    // A line that runs to the clip's last frame stays up while that frame is held.
+    const hold = all.find((s) => s.kind === 'hold');
     const from = Math.max(sub.from, segs[0].src[0]);
     const to = Math.min(sub.to, segs[segs.length - 1].src[1]);
     if (to - from < 0.1) continue;
     const start = toOut(sub.clipUid, from);
-    const end = toOut(sub.clipUid, to);
+    const end = hold && sub.to >= segs[segs.length - 1].src[1] - 0.08 ? hold.out[1] : toOut(sub.clipUid, to);
     if (start === undefined || end === undefined || end - start < 0.1) continue;
     out.push({ text: sub.text, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, ...(sub.speaker ? { speaker: sub.speaker } : {}) });
   }
@@ -272,7 +276,7 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
     }
     clips.forEach((c, i) => {
       const segs = tl.segments.filter((s) => s.clipIndex === i && s.kind !== 'intro');
-      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedStyle: project.feedStyle, feedBorder: project.feedBorder, overlays: project.overlays, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir }), label: `clip ${i + 1} of ${clips.length}` });
+      if (segs.length) jobs.push({ job: buildClipJob({ clip: c, feedStyle: project.feedStyle, feedBorder: project.feedBorder, overlays: project.overlays, audioCount: audioCounts.get(c.videoFile), segments: segs, size, fps, style: project.style, preview: req.preview, workDir, gameMix: project.mix.game }), label: `clip ${i + 1} of ${clips.length}` });
     });
 
     const clipShare = 0.6;
@@ -307,6 +311,8 @@ export async function renderProject(o: PipelineOpts): Promise<string[]> {
       fontFile: font,
       intro: project.intro,
       outro: project.outro,
+      musicEnv: musicEnvelopeFor(tl, project.clips, project.musicCuts),
+      endFade: project.ending ? project.ending.fade : undefined,
     });
     const partialOut = out.replace(/\.mp4$/, '.part.mp4');
     job.args = job.args.map(arg => arg === out ? partialOut : arg);
