@@ -685,3 +685,37 @@ test('the match bar going away mid-match is reported from its first missing fram
   assert.ok(h.events.some((e) => e.key === 'hud' && e.value === true));
 });
 
+
+test('a KO streak digit misread as more than your kills this life is capped (22:35: "5" read as "9")', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  ['Valka', 'Mokka', 'Zed', 'Pyro'].forEach((v, i) => {
+    h.feed(1000 + i * 2000, 10 + i);
+    h.fusion.onOcr('feed', 10 + i, words(['yaomingdiesel', 10], [v, 300]), 1100 + i * 2000);
+  });
+  h.fusion.tick(9000);
+  h.banner(9500, 30);
+  h.fusion.onOcr('banner', 30, { text: '9 PLAYER KO STREAK!', words: [] }, 9600);
+  h.fusion.tick(12_000);
+  assert.deepEqual(h.events.filter((e) => e.key === 'streak').map((e) => e.value), [5]);
+});
+
+test('a garbled KO streak banner still reads its count', () => {
+  for (const text of ['5 PLAYSRHRBTREAK!', '5 PlWERHE-STREAK!', '5 PLAYER"KO-STREAK!']) {
+    const h = harness({ name: 'Leithl' });
+    inMatch(h);
+    h.banner(4000, 9);
+    h.fusion.onOcr('banner', 9, { text, words: [] }, 4100);
+    h.fusion.tick(6000);
+    assert.equal(h.kills().length, 1, text);
+  }
+});
+
+test('other text where the banner goes is not a streak', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.banner(4000, 9);
+  h.fusion.onOcr('banner', 9, { text: 'CAPTURE SUPER-SOLDIER LABORATORY', words: [] }, 4100);
+  h.fusion.tick(6000);
+  assert.equal(h.kills().length, 0);
+});

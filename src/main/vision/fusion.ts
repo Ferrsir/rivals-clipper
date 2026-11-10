@@ -112,6 +112,8 @@ interface BannerItem {
   id: number;
   t: number;
   count?: number;
+  /** The count was read as a digit ("5 PLAYER KO STREAK!"), which OCR sometimes gets wrong. */
+  digit?: boolean;
   ocrDone: boolean;
   done: boolean;
 }
@@ -168,6 +170,8 @@ export class ScreenFusion {
   private feed: FeedItem[] = [];
   private banners: BannerItem[] = [];
   private lastKillAt = -Infinity;
+  /** Your kill count when this life began (your last death or the match start), once one was seen. */
+  private killsAtLifeStart?: number;
   private recentVictims: Array<{ name: string; at: number }> = [];
   assists = 0;
   private hudSeenAt = -Infinity;
@@ -292,13 +296,20 @@ export class ScreenFusion {
         const b = this.banners.find((x) => x.id === id);
         if (!b) return;
         b.ocrDone = true;
-        const m = r?.text.match(/\b(\d{1,2})\s*PLAYER\s+K[O0]\s+STREAK\b/i);
-        if (m) b.count = Number(m[1]);
+        // OCR often garbles the middle on busy backgrounds ("5 PLAYSRHRBTREAK!", "5 PlWERHE-STREAK!" on 2026-11-09).
+        const m = r?.text.match(/\b(\d{1,2})\s*PL[A-Z]{2}.{0,12}?TREAK\b/i);
+        if (m) {
+          b.count = Number(m[1]);
+          b.digit = true;
+        }
         // The multi-kill callout: DOUBLE / TRIPLE / QUAD / PENTA / HEXA.
         const word = r?.text.match(/\b(DOUBLE|TRIPLE|QUAD(?:RA)?|PENTA|HEXA)\b/i)?.[1].toUpperCase();
-        if (word) b.count = { DOUBLE: 2, TRIPLE: 3, QUAD: 4, QUADRA: 4, PENTA: 5, HEXA: 6 }[word];
+        if (word) {
+          b.count = { DOUBLE: 2, TRIPLE: 3, QUAD: 4, QUADRA: 4, PENTA: 5, HEXA: 6 }[word];
+          b.digit = false;
+        }
         // Not a streak banner after all (another message in the same place).
-        if (r && r.text.trim() && !/KO|STREAK|PLAYER|DOUBLE|TRIPLE|QUAD|PENTA|HEXA/i.test(r.text)) b.done = true;
+        if (r && r.text.trim() && !/KO|TREAK|PLAYER|DOUBLE|TRIPLE|QUAD|PENTA|HEXA/i.test(r.text)) b.done = true;
         break;
       }
       case 'map': {
@@ -435,7 +446,7 @@ export class ScreenFusion {
       b.done = true;
       if (this.notPlaying(b.t)) continue;
       // The game says the streak is still going: the clipper keeps the clip open for the next kill.
-      if (b.count >= 2) this.sink.gameEvent('streak', b.count, b.t);
+      if (b.count >= 2) this.sink.gameEvent('streak', b.digit ? this.plausibleStreak(b.count) : b.count, b.t);
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
       if (b.t - this.lastKillAt > 2500 && !this.kos.some((k) => !k.done && Math.abs(k.t - b.t) < 2500)) this.emitKill(b.t, undefined);
     }
@@ -505,6 +516,7 @@ export class ScreenFusion {
     const ds = this.deathScreen;
     if (ds && at >= ds.since - DEATH_SCREEN_BRIDGE_MS && at <= ds.lastSeen + DEATH_SCREEN_BRIDGE_MS) return;
     this.deadAt = Math.max(this.deadAt, at);
+    this.killsAtLifeStart = this.kills;
     this.deaths++;
     this.sink.gameEvent('kill_feed', { attacker: attacker || undefined, victim: this.me, attacker_is_teammate: false, victim_is_teammate: true }, at);
     this.sink.gameEvent('death', this.deaths, at);
@@ -557,6 +569,7 @@ export class ScreenFusion {
     // The feed may already have reported this death; otherwise this is the first (and fastest) sign of it.
     if (!known) {
       this.deadAt = first.t;
+      this.killsAtLifeStart = this.kills;
       this.deaths++;
       this.sink.gameEvent('kill_feed', { attacker: undefined, victim: this.me, attacker_is_teammate: false, victim_is_teammate: true }, first.t);
       this.sink.gameEvent('death', this.deaths, first.t);
@@ -671,11 +684,22 @@ export class ScreenFusion {
     }
   }
 
+  /**
+   * The banner's KO streak counts your kills since your last death, so it can't be more than the kills seen in
+   * this life plus the one it came with. Its digit is sometimes misread (a "5" read as "9" on 2026-11-09 22:35).
+   */
+  private plausibleStreak(read: number): number {
+    if (this.killsAtLifeStart === undefined) return read;
+    const most = this.kills - this.killsAtLifeStart + 1;
+    return read > most ? Math.max(2, most) : read;
+  }
+
   private startMatch(t: number): void {
     this.inMatch = true;
     this.practice = false;
     this.matchStartAt = t;
     this.kills = 0;
+    this.killsAtLifeStart = 0;
     this.deaths = 0;
     this.mapKnown = false;
     this.sink.gameEvent('match_start', undefined, t);
@@ -700,6 +724,7 @@ export class ScreenFusion {
     this.inMatch = false;
     this.practice = true;
     this.kills = 0;
+    this.killsAtLifeStart = 0;
     this.sink.gameEvent('match_start', undefined, t);
     this.sink.infoUpdate('game_info', 'game_type', 'Practice');
   }

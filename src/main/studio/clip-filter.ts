@@ -1,6 +1,5 @@
 // Rejects clips whose footage isn't gameplay, so the Studio never picks them on its own: the Tab
-// scoreboard (whole screen darkened and grey, measured on Ferris's recordings at mean luma ~46 and
-// saturation ~8 against 84-100 / 15-24 in play), and the death screen, where the camera follows a
+// scoreboard (and the blank loading screen), and the death screen, where the camera follows a
 // teammate and a "DEFEATED BY" card sits bottom right. Checked on small frames, cached per file.
 
 import { execFile } from 'node:child_process';
@@ -11,44 +10,65 @@ import {
   COUNTDOWN_BOX, DEATH_BOX, DEATH_MIN, DEATH_TEMPLATE, countdownCropFilter, countdownInRgb, deadSpans, deathCropFilter, deathScore, unpad, type DeadSample,
 } from '../vision/death-screen';
 
-export interface FrameStats {
-  /** Mean luma 0..255. */
-  y: number;
-  /** Mean saturation 0..255 (max-min of RGB). */
-  sat: number;
-  /** Mean luma of the left fifth of the frame (outside the scoreboard panel). */
-  leftY: number;
-}
+/** The middle of the frame, 1.8 frame heights wide (the scoreboard is 1.46 wide), at this size. */
+export const BOARD_BOX = { w: 72, h: 40 };
+export const boardCropFilter = () => 'crop=w=min(iw\\,trunc(ih*0.9)*2):h=ih:x=(iw-ow)/2:y=0';
 
-export function frameStats(rgb: Uint8Array, width: number, height: number): FrameStats {
-  let y = 0;
-  let sat = 0;
-  let left = 0;
-  let leftN = 0;
-  const leftW = Math.max(1, Math.round(width * 0.19));
-  for (let j = 0; j < height; j++) {
-    for (let i = 0; i < width; i++) {
-      const o = (j * width + i) * 3;
-      const r = rgb[o];
-      const g = rgb[o + 1];
-      const b = rgb[o + 2];
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      y += l;
-      sat += Math.max(r, g, b) - Math.min(r, g, b);
-      if (i < leftW) {
-        left += l;
-        leftN++;
+/**
+ * True when a BOARD_BOX crop (packed rgb24) shows the Tab scoreboard or the blank loading screen.
+ * The scoreboard is two panels side by side, your team's blue and the enemy's red, over a darkened game.
+ * Measured on Ferris's clips (2026-11-09, 32 clips, 1420 frames): every scoreboard frame but the first
+ * moment of the fade found, and no gameplay, dark maps included (the old darkness test flagged a quarter
+ * of all frames). The loading screen is flat dark navy.
+ */
+export function scoreboardInRgb(rgb: Uint8Array, w = BOARD_BOX.w, h = BOARD_BOX.h): boolean {
+  const unit = w / 1.8; // pixels per frame height
+  const X = (f: number) => Math.round(w / 2 + f * unit);
+  const y0 = Math.round(0.29 * h);
+  const y1 = Math.round(0.66 * h);
+  const top = Math.round(0.18 * h);
+  const panel = (a: number, b: number, sign: 1 | -1) => {
+    let sum = 0;
+    let sq = 0;
+    let n = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = X(a); x < X(b); x++) {
+        const o = (y * w + x) * 3;
+        const d = sign * (rgb[o + 2] - rgb[o]); // blue minus red, or red minus blue
+        sum += d;
+        sq += d * d;
+        n++;
+      }
+    }
+    const mean = sum / Math.max(1, n);
+    return { mean, sd: Math.sqrt(Math.max(0, sq / Math.max(1, n) - mean * mean)) };
+  };
+  let lum = 0;
+  let lumSq = 0;
+  let outside = 0;
+  let outN = 0;
+  const xa = X(-0.8);
+  const xb = X(0.8);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 3;
+      const l = 0.299 * rgb[o] + 0.587 * rgb[o + 1] + 0.114 * rgb[o + 2];
+      lum += l;
+      lumSq += l * l;
+      if (x < xa || x >= xb || y < top) {
+        outside += l;
+        outN++;
       }
     }
   }
-  const n = width * height;
-  return { y: y / n, sat: sat / n, leftY: left / leftN };
+  const n = w * h;
+  const mean = lum / n;
+  const sd = Math.sqrt(Math.max(0, lumSq / n - mean * mean));
+  if (sd < 9 && mean < 45) return true; // the loading screen
+  const left = panel(-0.45, -0.05, 1);
+  const right = panel(0.05, 0.45, -1);
+  return left.mean > 12 && right.mean > 10 && left.sd < 22 && outside / Math.max(1, outN) < 36;
 }
-
-// Measured on real scoreboard frames (48x20; the means hold at the 120x20 used now): mean luma 31-40, left strip 17-29, saturation (max-min)
-// under 30; gameplay luma 84-100. Dark gameplay can be as dark but keeps its colour, so saturation
-// tells them apart.
-export const isScoreboard = (s: FrameStats) => s.y < 60 && s.leftY < 50 && s.sat < 30;
 
 /** Keep only flagged samples that have a flagged neighbour (the scoreboard is held, not a single dark frame). */
 export function heldRuns(flags: boolean[]): number[] {
@@ -60,7 +80,6 @@ export function heldRuns(flags: boolean[]): number[] {
 }
 
 const W = FEED_SAMPLE.width;
-const H = 20;
 const FH = FEED_SAMPLE.height;
 
 // ---------- death screen ----------
@@ -97,7 +116,7 @@ export function readDeaths(samples: DeadSample[]): { dead: number[]; deaths: num
   return { dead, deaths: fresh };
 }
 
-/** One small decode per clip: the whole frame (scoreboard check), the kill-feed crop and the death card's box, stacked. */
+/** One small decode per clip: the middle of the frame (scoreboard check), the kill-feed crop, the death card and the respawn countdown, stacked. */
 export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal, hudScale = 1): Promise<ClipScan> {
   let key = file;
   try {
@@ -112,12 +131,12 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal, hud
   const DH = DEATH_BOX.h;
   const CW = COUNTDOWN_BOX.w;
   const CH = COUNTDOWN_BOX.h;
-  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=4[a][b][c][d];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter(hudScale)},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[d]${countdownCropFilter(hudScale)},scale=${CW}:${CH}:flags=area,format=rgb24,pad=${W}:${CH}:0:0[cd];[full][feed][death][cd]vstack=inputs=4[out]`;
+  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=4[a][b][c][d];[a]${boardCropFilter()},scale=${BOARD_BOX.w}:${BOARD_BOX.h}:flags=area,format=rgb24,pad=${W}:${BOARD_BOX.h}:0:0[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter(hudScale)},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[d]${countdownCropFilter(hudScale)},scale=${CW}:${CH}:flags=area,format=rgb24,pad=${W}:${CH}:0:0[cd];[full][feed][death][cd]vstack=inputs=4[out]`;
   return new Promise((resolve) => {
     execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-filter_complex', graph, '-map', '[out]', '-an', '-f', 'rawvideo', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {
         if (error) return resolve(EMPTY);
-        const full = W * H * 3;
+        const full = W * BOARD_BOX.h * 3;
         const feedBytes = W * FH * 3;
         const deathBytes = W * DEATH_BOX.h * 3;
         const size = full + feedBytes + deathBytes + W * COUNTDOWN_BOX.h * 3;
@@ -126,7 +145,7 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal, hud
         const slots: SlotStats[][] = [];
         for (let f = 0; (f + 1) * size <= out.length; f++) {
           const frame = out.subarray(f * size, (f + 1) * size);
-          flags.push(isScoreboard(frameStats(frame.subarray(0, full), W, H)));
+          flags.push(scoreboardInRgb(unpad(frame.subarray(0, full), W, BOARD_BOX.w, BOARD_BOX.h)));
           slots.push(slotStats(frame.subarray(full, full + feedBytes), W, FH));
           // The card's box sits at the left of a padded strip W wide: take its rows out.
           const card = unpad(frame.subarray(full + feedBytes, full + feedBytes + deathBytes), W, DEATH_BOX.w, DEATH_BOX.h);
