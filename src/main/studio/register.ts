@@ -21,7 +21,7 @@ import { findFont, planFor, renderProject } from './pipeline';
 import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSidecar, sanitizeAssets, sanitizeProject, reconcileProjectSources } from './projects';
 import { describeFit, duration as reelSeconds, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
-import { scanClip, trimAround, type ClipScan } from './clip-filter';
+import { TRADE_S, scanClip, trimAround, type ClipScan } from './clip-filter';
 import { dropWhileDead, withFeedRows } from './feed-rows';
 import { findSong, readIntent, styleFromPrompt } from './intent';
 import { checkClip, describeRules, filterLibrary, hasRules, heroOf, mergeRules, readClipRules, type ClipRules } from './clip-rules';
@@ -498,7 +498,9 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       // Not your kill, or it opens straight on the kill with no build-up: leave it out.
       const first = own.hits.find(h => h > own.in);
       if (first === undefined || first - own.in < 1) return null;
-      const trimmed = trimAround(own, [...(scan?.scoreboard ?? []), ...(scan?.dead ?? [])]);
+      // End before your death, unless a kill lands right as you die (then the dead times end it a moment later).
+      const deaths = (scan?.deaths ?? []).filter(d => !alive.some(h => h >= d - 0.25 && h <= d + TRADE_S));
+      const trimmed = trimAround(own, [...(scan?.scoreboard ?? []), ...(scan?.dead ?? []), ...deaths]);
       if (!trimmed) return null;
       // Score what's really in the clip: kills only count when they're yours (feed rows) and inside the trim.
       const scored = rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);

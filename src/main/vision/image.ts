@@ -32,6 +32,9 @@ export function makeView(frame: Uint8Array, layout: HudLayout, g: RegionGeom): V
   const stride = layout.mosaicW * 4;
   const mask = new Uint8Array(w * h);
   const luma = new Uint8Array(w * h);
+  // The death-screen colours are only looked for in their own boxes.
+  const yellow = g.id === 'respawn';
+  const card = g.id === 'deathcard';
   for (let y = 0; y < h; y++) {
     let p = (g.outY + y) * stride;
     const row = y * w;
@@ -50,8 +53,8 @@ export function makeView(frame: Uint8Array, layout: HudLayout, g: RegionGeom): V
       if (l >= 150 && sat <= 60) m |= PALE;
       if (b >= 160 && b - r >= 60 && b >= gr) m |= BLUE;
       if (r >= 170 && r - b >= 70 && r - gr >= 30) m |= RED;
-      if (isCountdownYellow(r, gr, b)) m |= YELLOW;
-      if (isCardYellow(r, gr, b)) m |= CARD;
+      if (yellow && isCountdownYellow(r, gr, b)) m |= YELLOW;
+      if (card && isCardYellow(r, gr, b)) m |= CARD;
       mask[row + x] = m;
       luma[row + x] = g.id === 'subtitle' && b > 120 && gr > 70 && b - r > 35 ? 255 : l;
     }

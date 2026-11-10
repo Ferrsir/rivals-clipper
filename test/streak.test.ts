@@ -115,3 +115,11 @@ test('a new clip after a cut is not limited by the old death', () => {
   s.onKill(200000);
   assert.equal(s.currentEndAt, 204000);
 });
+
+test('a cut never drops a kill already in the clip that landed just after the death', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(100000);
+  s.onKill(102500); // reported before the death was
+  s.cut(101000, 1000, 2000);
+  assert.equal(s.currentEndAt, 103200, 'the kill at 102.5 s stays in, with a little after it');
+});

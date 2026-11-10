@@ -94,8 +94,8 @@ const DEAD_MS = 10_000;
 const WATCH_MS = 8000;
 /** Death-screen spans less than this far apart are one death (the Tab scoreboard hides the countdown for a few seconds). */
 const DEATH_SCREEN_BRIDGE_MS = 3000;
-/** How long after the countdown was last seen you still count as dead (it can be hidden by the scoreboard). */
-const DEATH_SCREEN_HOLD_MS = 2000;
+/** How long after the countdown was last seen you still count as dead (the Tab scoreboard can hide it). */
+const DEATH_SCREEN_HOLD_MS = DEATH_SCREEN_BRIDGE_MS;
 /** Text the game shows when you are not the one playing. */
 const NOT_PLAYING_WORDS = /\b(SPECTATING|SPECTATOR|SPECTATE|OBSERVING|OBSERVER|REPLAY|RESPAWNING|RESPAWN\s+IN)\b/i;
 
@@ -370,7 +370,7 @@ export class ScreenFusion {
       if (!ready) continue;
       k.done = true;
       if (k.assist) {
-        if (this.notPlaying(k.t) || this.deadOnScreen(k.t)) this.ignore(k.t, 'assist', k.victim);
+        if (this.notPlaying(k.t)) this.ignore(k.t, 'assist', k.victim);
         else this.emitAssist(k.t, k.victim);
         continue;
       }
@@ -433,7 +433,7 @@ export class ScreenFusion {
         continue;
       }
       b.done = true;
-      if (this.notPlaying(b.t) || this.deadOnScreen(b.t)) continue;
+      if (this.notPlaying(b.t)) continue;
       // The game says the streak is still going: the clipper keeps the clip open for the next kill.
       if (b.count >= 2) this.sink.gameEvent('streak', b.count, b.t);
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
@@ -524,7 +524,7 @@ export class ScreenFusion {
     const ds = this.deathScreen;
     if (!ds) return false;
     const from = ds.fresh ? ds.since + DEATH_GRACE_MS : ds.since - 250;
-    return t > from && t <= Math.max(ds.lastSeen + DEATH_SCREEN_HOLD_MS, ds.since + DEAD_MS);
+    return t > from && t <= ds.lastSeen + DEATH_SCREEN_HOLD_MS;
   }
 
   /** Called every frame with whether the countdown and the card are on screen. */
@@ -547,7 +547,9 @@ export class ScreenFusion {
     const first = this.deathSignFirst;
     // You died right there: the countdown appeared (without the replay's card) just after a clear frame.
     const fresh = first.countdown && !first.card && first.t - this.lastClearAt <= 1000;
-    const known = t - this.deadAt < DEAD_MS && first.t - this.deadAt >= -DEATH_SCREEN_BRIDGE_MS;
+    // The feed already reported this death: its row came at the death, the replay's card about 3 s later.
+    const sinceFeed = first.t - this.deadAt;
+    const known = sinceFeed >= -DEATH_SCREEN_BRIDGE_MS && sinceFeed <= (fresh ? DEATH_SCREEN_BRIDGE_MS : 2 * DEATH_SCREEN_BRIDGE_MS);
     this.deathScreen = { since: first.t, lastSeen: t, fresh };
     this.sink.infoUpdate('match_info', 'not_playing', fresh ? 'respawn countdown (you died)' : 'death screen');
     // The feed may already have reported this death; otherwise this is the first (and fastest) sign of it.

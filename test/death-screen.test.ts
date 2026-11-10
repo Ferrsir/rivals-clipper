@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { countdownInRgb, deadSpans, type DeadSample } from '../src/main/vision/death-screen';
 import { judgeClip } from '../src/main/clip-check';
+import { readDeaths } from '../src/main/studio/clip-filter';
 import { countdownVisible, deathCardVisible } from '../src/main/vision/detectors';
 import { layoutFor, region } from '../src/main/vision/layout';
 import { makeView } from '../src/main/vision/image';
@@ -94,4 +95,20 @@ test('clips without a death screen are left alone', () => {
 
 test('a death before the kills (you respawned, then got them) leaves the clip alone', () => {
   assert.deepEqual(judgeClip(samples(10, [[0, 1.5]]), [3, 4], 10), { action: 'keep' });
+});
+
+test('a kill that lands just after your death still gets the clip cut at the death (review)', () => {
+  // Died at 4 s, the only kill counted at 4.5 s (a trade): the clip ends after it, not 8 s later.
+  const v = judgeClip(samples(12, [[4, 12]]), [4.5], 12);
+  assert.equal(v.action, 'trim');
+  assert.ok(v.action === 'trim' && v.untilSec >= 5 && v.untilSec <= 5.25, JSON.stringify(v));
+});
+
+test('the Studio keeps a trade kill: the first 1.5 s of a death seen as it happened are not "dead"', () => {
+  const { dead, deaths } = readDeaths(samples(10, [[4, 8]]));
+  assert.deepEqual(deaths, [4]);
+  assert.ok(!dead.some((t) => t < 5.5), dead.join(','));
+  assert.ok(dead.includes(6));
+  // Already dead from the first frame: every dead time counts.
+  assert.ok(readDeaths(samples(6, [[0, 4, true]])).dead.includes(0));
 });

@@ -7,7 +7,9 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { FEED_SAMPLE, feedSamples, slotStats, type FeedSample, type SlotStats } from './feed-rows';
 import { feedCropFilter } from './render';
-import { COUNTDOWN_BOX, DEATH_BOX, DEATH_MIN, DEATH_TEMPLATE, countdownCropFilter, countdownInRgb, deathCropFilter, deathScore, unpad } from '../vision/death-screen';
+import {
+  COUNTDOWN_BOX, DEATH_BOX, DEATH_MIN, DEATH_TEMPLATE, countdownCropFilter, countdownInRgb, deadSpans, deathCropFilter, deathScore, unpad, type DeadSample,
+} from '../vision/death-screen';
 
 export interface FrameStats {
   /** Mean luma 0..255. */
@@ -70,14 +72,29 @@ export { countdownCropFilter, deathCropFilter, unpad };
 export interface ClipScan {
   /** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
   scoreboard: number[];
-  /** Times (seconds) where you're dead and watching a teammate ("DEFEATED BY" on screen). */
+  /**
+   * Times (seconds) where you're dead: the respawn countdown or the "DEFEATED BY" card is on screen.
+   * The first TRADE_S after a death seen as it happened are left out, so a kill that lands as you die still counts.
+   */
   dead?: number[];
+  /** Times (seconds) you died on camera (the countdown appearing). */
+  deaths?: number[];
   /** Your rows in the kill feed, sampled at the same times. */
   feed: FeedSample[];
 }
 
 const cache = new Map<string, ClipScan>();
-const EMPTY: ClipScan = { scoreboard: [], feed: [], dead: [] };
+const EMPTY: ClipScan = { scoreboard: [], feed: [], dead: [], deaths: [] };
+
+/** A kill up to this long after your death on camera still counts (a projectile landing, a trade). */
+export const TRADE_S = 1.5;
+
+/** Dead times and deaths from samples taken 4 times a second. */
+export function readDeaths(samples: DeadSample[]): { dead: number[]; deaths: number[] } {
+  const fresh = deadSpans(samples, 0.25).filter((s) => s.fresh).map((s) => s.from);
+  const dead = heldRuns(samples.map((s) => s.countdown || s.card)).filter((t) => !fresh.some((d) => t >= d && t < d + TRADE_S));
+  return { dead, deaths: fresh };
+}
 
 /** One small decode per clip: the whole frame (scoreboard check), the kill-feed crop and the death card's box, stacked. */
 export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Promise<ClipScan> {
@@ -104,7 +121,7 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
         const deathBytes = W * DEATH_BOX.h * 3;
         const size = full + feedBytes + deathBytes + W * COUNTDOWN_BOX.h * 3;
         const flags: boolean[] = [];
-        const deadFlags: boolean[] = [];
+        const deadSamples: DeadSample[] = [];
         const slots: SlotStats[][] = [];
         for (let f = 0; (f + 1) * size <= out.length; f++) {
           const frame = out.subarray(f * size, (f + 1) * size);
@@ -114,9 +131,9 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
           const card = unpad(frame.subarray(full + feedBytes, full + feedBytes + deathBytes), W, DEATH_BOX.w, DEATH_BOX.h);
           // The respawn countdown (top left) shows from the moment you die; the card only during the replay.
           const countdown = unpad(frame.subarray(full + feedBytes + deathBytes), W, COUNTDOWN_BOX.w, COUNTDOWN_BOX.h);
-          deadFlags.push(deathScore(card) >= DEATH_MIN || countdownInRgb(countdown));
+          deadSamples.push({ t: f / 4, card: deathScore(card) >= DEATH_MIN, countdown: countdownInRgb(countdown) });
         }
-        const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots), dead: heldRuns(deadFlags) };
+        const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots), ...readDeaths(deadSamples) };
         if (cache.size > 2000) cache.clear();
         cache.set(key, scan);
         resolve(scan);

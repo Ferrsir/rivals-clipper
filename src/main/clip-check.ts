@@ -43,8 +43,8 @@ export function judgeClip(samples: DeadSample[], killTimes: number[], durationSe
   const valid = killTimes.filter((t) => !killWhileDead(t, spans)).sort((a, b) => a - b);
   if (!valid.length) return { action: 'reject', reason: 'every kill in it happened while you were dead (death screen on)' };
   const first = valid[0];
-  // The first death after your first real kill: the clip ends there.
-  const death = spans.find((s) => s.from > first - 0.25);
+  // The first death not over before your first real kill (that kill may land just after it): the clip ends there.
+  const death = spans.find((s) => s.to + 0.25 >= first);
   if (!death) return { action: 'keep' };
   // A real kill after you respawned (the clip spans a whole death): keep it all rather than lose that kill.
   if (valid.some((t) => t > death.to)) return { action: 'keep' };
@@ -55,12 +55,12 @@ export function judgeClip(samples: DeadSample[], killTimes: number[], durationSe
 }
 
 /** The countdown and the "DEFEATED BY" card, sampled CHECK_FPS times a second over the whole clip. */
-export function scanDeathScreen(ffmpeg: string, file: string): Promise<DeadSample[]> {
+export function scanDeathScreen(ffmpeg: string, file: string, hudScale = 1): Promise<DeadSample[]> {
   const W = Math.max(COUNTDOWN_BOX.w, DEATH_BOX.w);
   const graph =
     `[0:v]fps=${CHECK_FPS},split=2[a][b];` +
-    `[a]${countdownCropFilter()},scale=${COUNTDOWN_BOX.w}:${COUNTDOWN_BOX.h}:flags=area,format=rgb24,pad=${W}:${COUNTDOWN_BOX.h}:0:0[cd];` +
-    `[b]${deathCropFilter()},scale=${DEATH_BOX.w}:${DEATH_BOX.h}:flags=area,format=rgb24,pad=${W}:${DEATH_BOX.h}:0:0[card];` +
+    `[a]${countdownCropFilter(hudScale)},scale=${COUNTDOWN_BOX.w}:${COUNTDOWN_BOX.h}:flags=area,format=rgb24,pad=${W}:${COUNTDOWN_BOX.h}:0:0[cd];` +
+    `[b]${deathCropFilter(hudScale)},scale=${DEATH_BOX.w}:${DEATH_BOX.h}:flags=area,format=rgb24,pad=${W}:${DEATH_BOX.h}:0:0[card];` +
     `[cd][card]vstack=inputs=2[out]`;
   return new Promise((resolve, reject) => {
     // Two threads, so the check never competes with the game for the whole CPU.

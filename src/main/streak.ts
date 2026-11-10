@@ -27,6 +27,9 @@ export type StreakAction =
   | { type: 'restart' }
   | { type: 'none' };
 
+/** Footage kept after a kill that lands in the grace window after your death. */
+const KEEP_AFTER_KILL_MS = 700;
+
 export class StreakTracker {
   private active = false;
   private clipStart = 0; // epoch ms the clip's footage begins
@@ -34,6 +37,8 @@ export class StreakTracker {
   private endAt = 0;
   /** Set when you died during the clip: footage can't run past this. */
   private ceiling = Infinity;
+  /** Time of the latest kill in the clip. */
+  private lastKill = -Infinity;
 
   constructor(private cfg: StreakConfig) {}
 
@@ -61,6 +66,7 @@ export class StreakTracker {
   begin(now: number, pastMs: number, stopAt: number, endAt = stopAt): void {
     this.active = true;
     this.ceiling = Infinity;
+    this.lastKill = now;
     this.clipStart = now - Math.min(pastMs, Math.max(0, this.cfg.maxClipMs - this.cfg.postRollMs));
     this.endAt = Math.min(endAt, this.cap);
     this.stopAt = Math.max(this.endAt, Math.min(stopAt, this.cap + (this.cfg.lateMs ?? 0)));
@@ -75,6 +81,7 @@ export class StreakTracker {
     }
     // A kill the capped clip can't show: it gets its own clip instead of a marker past the footage.
     if (now > this.cap) return { type: 'restart' };
+    this.lastKill = Math.max(this.lastKill, now);
     const endAt = Math.max(this.endAt, Math.min(now + this.cfg.postRollMs, this.cap));
     // Once the clip is full there is nothing left to wait for.
     const wait = endAt >= this.cap ? Math.max(this.stopAt, this.cap) : Math.max(this.stopAt, now + this.chainMs + late);
@@ -103,7 +110,9 @@ export class StreakTracker {
   cut(at: number, tailMs = 1000, graceMs = 2000): number | undefined {
     if (!this.active) return undefined;
     this.ceiling = Math.min(this.ceiling, Math.max(this.clipStart + 1, at + graceMs));
-    const endAt = Math.min(this.endAt, Math.max(this.clipStart + 1, at + tailMs));
+    // A kill already in the clip within the grace window stays in the footage, with a little after it.
+    const keptKill = this.lastKill <= at + graceMs ? this.lastKill + KEEP_AFTER_KILL_MS : -Infinity;
+    const endAt = Math.min(this.endAt, Math.max(this.clipStart + 1, at + tailMs, keptKill));
     const stopAt = Math.max(endAt, Math.min(this.stopAt, this.ceiling + (this.cfg.lateMs ?? 0)));
     if (endAt === this.endAt && stopAt === this.stopAt) return undefined;
     this.endAt = endAt;
@@ -114,6 +123,7 @@ export class StreakTracker {
   /** Call when the clip has actually been stopped (timer fired, match ended, or game closed). */
   finish(): void {
     this.ceiling = Infinity;
+    this.lastKill = -Infinity;
     this.active = false;
     this.clipStart = 0;
     this.stopAt = 0;

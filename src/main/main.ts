@@ -38,8 +38,8 @@ interface PendingClip {
   hero?: string;
   ultUsedBeforeKills: boolean;
   firstKillAt?: number;
-  /** When you died during the clip (its footage was cut there). */
-  diedAt?: number;
+  /** The match bar went away for a while during the clip (a round change or the match ending): it ends there. */
+  hudBreakAt?: number;
   match: ClipSidecar['match'];
   matchSource: ClipSidecar['match'];
   bufferInfo: BufferInfo;
@@ -147,7 +147,10 @@ function makeStreak() {
     maxClipMs: settings.maxClipSeconds * 1000,
     chainMs: settings.chainSeconds * 1000,
     // Screen detection reports kills up to ~2 s late (1.6 s on 2026-11-09); keep listening that much longer.
-    lateMs: 2500,
+    // Overwolf's events come as they happen.
+    get lateMs() {
+      return engine === 'overwolf' ? 0 : 2500;
+    },
   });
 }
 
@@ -242,7 +245,6 @@ const DEATH_GRACE_MS = 2000;
 /** You died at `at`: an auto clip ends just after (Ferris: no death screens in clips). Manual clips are left alone. */
 function cutAtDeath(at: number) {
   if (!pending || pending.trigger !== 'auto' || !streak.isActive) return;
-  pending.diedAt = Math.min(pending.diedAt ?? Infinity, at);
   const stopAt = streak.cut(at, DEATH_TAIL_MS, DEATH_GRACE_MS);
   if (stopAt !== undefined) scheduleStop(stopAt);
 }
@@ -253,12 +255,22 @@ function cutAtDeath(at: number) {
  * keeps at least a second after it.
  */
 function clipEnd(endAt: number | undefined): number | undefined {
-  if (!pending || pending.trigger !== 'auto' || hudGoneAt === undefined) return endAt;
-  const lastKill = Math.max(...pending.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => e.at), -Infinity);
-  if (hudGoneAt <= lastKill) return endAt;
-  const cut = Math.max(hudGoneAt + 300, lastKill + 1000);
+  if (!pending || pending.trigger !== 'auto') return endAt;
+  // A break that is over, or the bar gone right now for longer than a flicker (heavy effects hide it for a moment).
+  const goneNow = hudGoneAt !== undefined && Date.now() - hudGoneAt >= HUD_FLICKER_MS ? hudGoneAt : undefined;
+  const gone = Math.min(pending.hudBreakAt ?? Infinity, goneNow ?? Infinity);
+  const times = pending.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => e.at);
+  // Gone long before the first kill is not a round change at the end of this clip (more likely the bar isn't being found).
+  if (gone === Infinity || (times.length && gone < Math.min(...times) - 3000)) return endAt;
+  const lastKill = Math.max(...times, -Infinity);
+  // Kills in the last moment of a round can come after the bar went: they keep a second after them.
+  const cut = Math.max(gone + 300, lastKill + 1000);
   return endAt === undefined ? cut : Math.min(endAt, cut);
 }
+
+/** The match bar missing this long is a flicker; this long or more, while a clip records, is a break (a round change). */
+const HUD_FLICKER_MS = 1500;
+const HUD_BREAK_MS = 4000;
 
 function scheduleStop(stopAt: number) {
   if (stopTimer) clearTimeout(stopTimer);
@@ -308,16 +320,20 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     audioTracks: tracks.map((label, index) => ({ index, label })),
     useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
-  if (clip.matchSource === state.context) matchClips.push(saved.videoFile);
-  void checkSavedClip(saved).then((final) => {
+  const check = checkSavedClip(saved).then((final) => {
     if (!final) return;
+    if (clip.matchSource === state.context) matchClips.push(final.videoFile);
     const k = final.events.filter((e) => e.type === 'kill').length;
     const a = final.events.filter((e) => e.type === 'assist').length;
     status(`Saved ${k}-kill${a ? `, ${a}-assist` : ''} clip (score ${final.score})`);
     pushClip(final);
     tagger.enqueue(final.videoFile);
-  });
+  }).finally(() => clipChecks.delete(check));
+  clipChecks.add(check);
 }
+
+/** Saved clips still being checked, so closing the app waits for them. */
+const clipChecks = new Set<Promise<void>>();
 
 /**
  * Looks at the saved footage for the death screen: cuts the clip just after your death, or drops it when
@@ -328,8 +344,10 @@ async function checkSavedClip(clip: ClipSidecar): Promise<ClipSidecar | undefine
   if (clip.trigger !== 'auto' || engine !== 'local') return clip;
   try {
     const ff = await localFfmpeg();
-    const samples = await scanDeathScreen(ff, clip.videoFile);
-    const times = clip.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => (e.at - clip.startTimeEpoch) / 1000);
+    const samples = await scanDeathScreen(ff, clip.videoFile, settings.hudScale);
+    // Assists only count when they make clips of their own.
+    const counted = clip.events.filter((e) => e.type === 'kill' || (e.type === 'assist' && settings.clipAssists));
+    const times = counted.map((e) => (e.at - clip.startTimeEpoch) / 1000);
     const verdict = judgeClip(samples, times, clip.durationMs / 1000);
     if (verdict.action === 'keep') return clip;
     log.write('skip', { reason: 'death screen', action: verdict.action, why: verdict.reason, clip: clip.id });
@@ -339,7 +357,6 @@ async function checkSavedClip(clip: ClipSidecar): Promise<ClipSidecar | undefine
       for (const f of [sidecarPath(clip.videoFile), clip.videoFile.replace(/\.mp4$/i, '.cover.jpg')]) {
         if (fs.existsSync(f)) await shell.trashItem(f).catch(() => undefined);
       }
-      matchClips = matchClips.filter((f) => f !== clip.videoFile);
       status('Dropped a clip whose kills were in your death replay (moved to the Recycle Bin)');
       return undefined;
     }
@@ -386,6 +403,8 @@ function handleMoment(type: 'kill' | 'assist', now: number, total?: number, vict
       // A KO in the moment after your death (a projectile landing): its clip still ends at the death.
       if (now - lastDeathAt <= DEATH_GRACE_MS) cutAtDeath(lastDeathAt);
     } else if (action.type === 'extend') scheduleStop(action.stopAt);
+    // A kill after a round change (the clip runs into the next round): keep it all rather than lose the kill.
+    if (pending?.hudBreakAt !== undefined && now > pending.hudBreakAt + HUD_BREAK_MS) pending.hudBreakAt = undefined;
   }
   // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
@@ -435,7 +454,11 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       break;
     case 'hud':
       // The match bar went away (round change, match end) or came back.
-      hudGoneAt = value === false ? now : undefined;
+      if (value === false) hudGoneAt ??= now;
+      else {
+        if (pending && hudGoneAt !== undefined && now - hudGoneAt >= HUD_BREAK_MS) pending.hudBreakAt ??= hudGoneAt;
+        hudGoneAt = undefined;
+      }
       break;
     case 'kill_feed':
       state.onKillFeed(value, now);
@@ -819,6 +842,8 @@ installGracefulShutdown(app, async () => {
   status('Closing: finishing saved clips…');
   stopCapture();
   const results = await Promise.allSettled([detector.shutdown(), recorder.stop(), shutdownStudio?.()]);
+  // A clip saved just now may still be under its death-screen check (a trim or a move to the Recycle Bin).
+  await Promise.allSettled([...clipChecks]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   log?.flushSync();
 }, error => {

@@ -89,6 +89,8 @@ test('reverse save completion preserves each clip and its original match and dim
   assert.equal(h.saved[1].match.map, 'Original map');
   assert.equal(h.saved[0].video.width, 640);
   assert.equal(h.saved[1].video.width, 320);
+  // Clips join the match's list once their death-screen check is done.
+  await new Promise((r) => setImmediate(r));
   assert.equal(h.ctx.matchClips.length, 1);
 });
 
@@ -184,8 +186,9 @@ test('your death ends an auto clip a second after it', async () => {
 test('a manual clip is not cut by a death', async () => {
   const h = harness();
   h.ctx.handleManualClip(); await Promise.resolve();
+  const stopAt = h.ctx.streak.currentStopAt;
   h.ctx.onGameEvent('screen', 'death', 1, 100500);
-  assert.equal(h.ctx.pending.diedAt, undefined);
+  assert.equal(h.ctx.streak.currentStopAt, stopAt);
 });
 
 // 2026-11-09 18:42: two kills in the last second of a round, then the clip ran on into "CONTROL KRAKOA".
@@ -207,6 +210,27 @@ test('the match bar coming back leaves the clip end alone', async () => {
   h.ctx.handleKill(100000); await Promise.resolve();
   h.ctx.onGameEvent('screen', 'hud', false, 101000);
   h.ctx.onGameEvent('screen', 'hud', true, 101500);
+  h.advance(130000);
+  assert.deepEqual(stops, [105000]);
+});
+
+test('a round change ends the clip even when the match bar is back before the clip stops', async () => {
+  const h = harness();
+  const stops: Array<number | undefined> = [];
+  h.ctx.recorder.stopClip = (until?: number) => stops.push(until);
+  h.ctx.handleKill(100000); await Promise.resolve();
+  h.ctx.onGameEvent('screen', 'hud', false, 102000);
+  h.ctx.onGameEvent('screen', 'hud', true, 108000);
+  h.advance(130000);
+  assert.deepEqual(stops, [102300]);
+});
+
+test('a match bar lost long before the kills does not shorten the clip', async () => {
+  const h = harness();
+  const stops: Array<number | undefined> = [];
+  h.ctx.recorder.stopClip = (until?: number) => stops.push(until);
+  h.ctx.onGameEvent('screen', 'hud', false, 80000);
+  h.ctx.handleKill(100000); await Promise.resolve();
   h.advance(130000);
   assert.deepEqual(stops, [105000]);
 });
