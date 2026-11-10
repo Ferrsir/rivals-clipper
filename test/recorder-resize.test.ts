@@ -35,7 +35,8 @@ function setup(windowSize: () => { width: number; height: number } | undefined) 
     },
   });
   const say = (line: string) => child!.stderr.write(line + '\n');
-  return { rec, resized, logs, say };
+  const sayRaw = (chunk: string) => child!.stderr.write(chunk);
+  return { rec, resized, logs, say, sayRaw };
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -65,6 +66,19 @@ test('a size report that ends at the recorded size, or a minimised game, does no
   say('[Parsed_gfxcapture_0 @ 000001] [verbose] Capture size changed to 160x28');
   await wait(80);
   assert.deepEqual(resized, []);
+});
+
+test('a resize message split across two stderr chunks is still heard', async (t) => {
+  let size = { width: 1920, height: 1080 };
+  const { rec, resized, sayRaw } = setup(() => size);
+  t.after(() => rec.stop());
+  await rec.start(DEFAULT_SETTINGS, {}, '.');
+  size = { width: 1440, height: 1080 };
+  sayRaw('[Parsed_gfxcapture_0 @ 000001] [verbose] Capture size cha');
+  await wait(5);
+  sayRaw('nged to 1440x1080\n');
+  await wait(80);
+  assert.deepEqual(resized, [{ width: 1440, height: 1080 }]);
 });
 
 test('verbose ffmpeg lines stay out of the error text, warnings stay in', () => {

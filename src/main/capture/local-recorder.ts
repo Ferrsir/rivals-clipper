@@ -268,16 +268,25 @@ export class LocalRecorder implements ClipRecorder {
       watchdog.progress();
       buffer.push(d); // bytes from an older process must not enter a replacement replay buffer
     });
+    // Pipes don't keep line boundaries, so hold a partial line until the rest of it arrives.
+    let partial = '';
+    const onLine = (raw: string) => {
+      const line = raw.trim();
+      if (!line) return;
+      // ffmpeg runs at verbose level only to hear about window resizes; keep those lines out of error reports.
+      if (/Capture size changed to \d+x\d+/.test(line)) this.onCaptureSizeChanged(proc);
+      if (/^(\[[^\]]*\]\s*)*\[(verbose|info|debug)\]/.test(line)) return;
+      this.stderrTail.push(line);
+      if (this.stderrTail.length > 30) this.stderrTail.shift();
+    };
     proc.stderr.on('data', (d: Buffer) => {
-      for (const raw of d.toString('utf8').split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line) continue;
-        // ffmpeg runs at verbose level only to hear about window resizes; keep those lines out of error reports.
-        if (/Capture size changed to \d+x\d+/.test(line)) this.onCaptureSizeChanged(proc);
-        if (/^(\[[^\]]*\]\s*)*\[(verbose|info|debug)\]/.test(line)) continue;
-        this.stderrTail.push(line);
-        if (this.stderrTail.length > 30) this.stderrTail.shift();
-      }
+      const lines = (partial + d.toString('utf8')).split(/\r?\n/);
+      partial = (lines.pop() ?? '').slice(-4096);
+      lines.forEach(onLine);
+    });
+    proc.stderr.once('end', () => {
+      onLine(partial);
+      partial = '';
     });
     // Consume the final stdout packets before saving a partial clip or restarting.
     proc.on('close', (code) => {
