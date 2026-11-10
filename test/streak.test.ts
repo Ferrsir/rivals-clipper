@@ -69,3 +69,23 @@ test('a kill past the length cap starts a new clip instead of a marker past the 
   assert.deepEqual(s.onKill(114000), { type: 'extend', stopAt: 117500, endAt: 117000 });
   assert.deepEqual(s.onKill(117300), { type: 'restart' });
 });
+
+// 2026-11-09 18:33, a penta the game called out: kills 13.2, 6.2, 13.7 and 7.5 s apart, saved as five 1-kill clips.
+test('a penta with 13+ second gaps is one clip with the default settings', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  const kills = [781896, 795140, 801341, 814999, 822529];
+  assert.equal(s.onKill(kills[0]).type, 'start');
+  for (const k of kills.slice(1)) {
+    assert.ok(k < s.currentStopAt, `still recording at ${k}`);
+    assert.equal(s.onKill(k).type, 'extend');
+  }
+  assert.equal(s.currentEndAt, 822529 + 4000);
+});
+
+test('a multi-kill callout keeps the clip open for another full window', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(100000);
+  assert.equal(s.hold(110000), 127500);
+  assert.equal(s.currentEndAt, 104000, 'the callout itself adds no footage');
+  assert.equal(new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000 }).hold(1), undefined);
+});

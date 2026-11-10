@@ -3,6 +3,7 @@
 // GEP often delivers nested values as JSON strings, so everything goes through parseMaybeJson.
 
 import type { ClipEvent, HeroRole, MatchContext } from '../shared/types';
+import { canonicalHero } from './studio/clip-rules';
 
 export interface RosterEntry {
   name?: string;
@@ -151,7 +152,9 @@ export class MatchState {
     }
     switch (key) {
       case 'local_hero':
-        this.detectedHero = typeof value === 'string' ? value : undefined;
+        // Screen text is often misread ("CBSBEADPOOL"): keep only a real hero name.
+        if (typeof value !== 'string') this.detectedHero = undefined;
+        else this.detectedHero = canonicalHero(value) ?? this.detectedHero;
         return false;
       case 'match_id':
         this.context.matchId = String(value);

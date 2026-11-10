@@ -142,3 +142,11 @@ test('Overwolf: a roster with nobody marked as you is spectating', () => {
   s.onInfoUpdate('match_info', 'roster_2', { name: 'Me', is_local: true, is_alive: true }, 0);
   assert.equal(s.notPlaying(1000), undefined);
 });
+
+test('a misread hero name is stored as the real hero, and junk keeps the last good one', () => {
+  const s = new MatchState();
+  s.onInfoUpdate('game_info', 'local_hero', 'CBSBEADPOOL', 0);
+  assert.equal(s.myHero, 'Deadpool');
+  s.onInfoUpdate('game_info', 'local_hero', 'R CAA', 0);
+  assert.equal(s.myHero, 'Deadpool');
+});

@@ -111,7 +111,9 @@ export function canonicalHero(name: string | undefined | null): string | undefin
   let best: { name: string; d: number } | undefined;
   for (const h of FULL_NAMES) {
     if (h.key.length < 5) continue;
-    for (const k of new Set([key, squash(words[words.length - 1] ?? '')])) {
+    // OCR glues junk from the HUD onto the front ("CBSBEADPOOL"), so also try the tail that is the hero's length.
+    const tails = [h.key.length, h.key.length + 1].filter((n) => key.length > n).map((n) => key.slice(-n));
+    for (const k of new Set([key, squash(words[words.length - 1] ?? ''), ...tails])) {
       const d = distance(k, h.key);
       const allowed = h.key.length >= 8 ? 2 : 1;
       if (d <= allowed && (!best || d < best.d)) best = { name: h.name, d };

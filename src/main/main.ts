@@ -363,6 +363,12 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     case 'kill_feed':
       state.onKillFeed(value, now);
       break;
+    case 'streak': {
+      // The game's double/triple/quad/penta callout: the streak isn't over, so keep the clip open.
+      const stopAt = pending ? streak.hold(now) : undefined;
+      if (stopAt) scheduleStop(stopAt);
+      break;
+    }
     case 'match_start':
       inMatch = true;
       state.onMatchStart();

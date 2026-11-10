@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClipSidecar } from '../shared/types';
+import { heroOf } from './studio/clip-rules';
 
 export type ClipSort = 'new' | 'score' | 'kills' | 'rating';
 
@@ -117,7 +118,11 @@ interface Entry {
 function readSidecar(file: string): ClipSidecar | undefined {
   try {
     const c = JSON.parse(fs.readFileSync(file, 'utf8')) as ClipSidecar;
-    return validSidecar(c) ? c : undefined;
+    if (!validSidecar(c)) return undefined;
+    // Older clips kept the raw text read off the screen ("CBSBEADPOOL"); show the real hero name.
+    const hero = heroOf(c);
+    if (hero) c.hero = hero;
+    return c;
   } catch {
     return undefined; // broken or half-written sidecar
   }
