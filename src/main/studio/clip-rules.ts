@@ -107,11 +107,19 @@ export function canonicalHero(name: string | undefined | null): string | undefin
     const hit = ALIAS_TO_HERO.get(squash(words.slice(-n).join(' ')));
     if (hit && squash(words.slice(-n).join(' ')).length >= 4) return hit;
   }
+  // The first words on their own, when the rest is misread: "ELSA BLOODS ZED E".
+  for (let n = Math.min(3, words.length - 1); n >= 1; n--) {
+    const head = squash(words.slice(0, n).join(' '));
+    const hit = ALIAS_TO_HERO.get(head);
+    if (hit && head.length >= 4) return hit;
+  }
   // One or two letters misread in a long name.
   let best: { name: string; d: number } | undefined;
   for (const h of FULL_NAMES) {
     if (h.key.length < 5) continue;
-    for (const k of new Set([key, squash(words[words.length - 1] ?? '')])) {
+    // OCR glues junk from the HUD onto the front ("CBSBEADPOOL"), so also try the tail that is the hero's length.
+    const tails = [h.key.length, h.key.length + 1].filter((n) => key.length > n).map((n) => key.slice(-n));
+    for (const k of new Set([key, squash(words[words.length - 1] ?? ''), ...tails])) {
       const d = distance(k, h.key);
       const allowed = h.key.length >= 8 ? 2 : 1;
       if (d <= allowed && (!best || d < best.d)) best = { name: h.name, d };

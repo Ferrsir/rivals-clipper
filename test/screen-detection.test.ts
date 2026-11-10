@@ -390,6 +390,15 @@ test('a streak banner with recognized text adds the missed kill', () => {
   assert.equal(h.kills().length, 1);
 });
 
+test('a PENTA callout banner tells the clipper the streak is still going', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.banner(4000, 9);
+  h.fusion.onOcr('banner', 9, {text: 'PENTA KO', words: []}, 4100);
+  h.fusion.tick(6000);
+  assert.deepEqual(h.events.filter((e) => e.key === 'streak').map((e) => e.value), [5]);
+});
+
 test('a streak banner right after a KO is not another kill', () => {
   const h = harness({ name: 'Leithl', ocr: false });
   inMatch(h);

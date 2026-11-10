@@ -154,3 +154,11 @@ test('a song that starts mid-track syncs to the drop inside the chosen part', as
   assert.equal(firstDrop(an, 0), 11.8);
   assert.equal(firstDrop(an, 70), undefined);
 });
+
+// 2026-11-09 18:30–18:34: names the clipper read off Ferris's screen for Deadpool.
+test('screen misreads with junk glued on still snap to the hero', () => {
+  for (const raw of ['CBSBEADPOOL', 'DEADPQOOL', 'DEXDPOOL', 'GPADPOOL', 'OC                 DEADROOL', 'YE              DEADPROL']) assert.equal(canonicalHero(raw), 'Deadpool', raw);
+  assert.equal(canonicalHero('ELSA BLOODS ZED E'), 'Elsa Bloodstone');
+  assert.equal(canonicalHero('IE NM ND DEADPOOL'), 'Deadpool');
+  assert.equal(canonicalHero('R CAA'), undefined);
+});

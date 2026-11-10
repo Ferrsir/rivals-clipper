@@ -81,6 +81,15 @@ export class StreakTracker {
     return { type: 'extend', stopAt, endAt };
   }
 
+  /** The game called a multi-kill at `now`: keep waiting a full chain window for the next kill. */
+  hold(now: number): number | undefined {
+    if (!this.active || this.endAt >= this.cap) return undefined;
+    const stopAt = Math.max(this.stopAt, now + this.chainMs + (this.cfg.lateMs ?? 0));
+    if (stopAt === this.stopAt) return undefined;
+    this.stopAt = stopAt;
+    return stopAt;
+  }
+
   /** Call when the clip has actually been stopped (timer fired, match ended, or game closed). */
   finish(): void {
     this.active = false;

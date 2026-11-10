@@ -25,7 +25,7 @@ import type { RegionId } from './layout';
 
 export interface EventSink {
   /** Same keys as GEP's match_info events. `at` is when it happened on screen (epoch ms). */
-  gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end', value: unknown, at: number): void;
+  gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end' | 'streak', value: unknown, at: number): void;
   infoUpdate(feature: 'game_info' | 'match_info', key: string, value: unknown): void;
 }
 
@@ -275,8 +275,11 @@ export class ScreenFusion {
         b.ocrDone = true;
         const m = r?.text.match(/\b(\d{1,2})\s*PLAYER\s+K[O0]\s+STREAK\b/i);
         if (m) b.count = Number(m[1]);
+        // The multi-kill callout: DOUBLE / TRIPLE / QUAD / PENTA / HEXA.
+        const word = r?.text.match(/\b(DOUBLE|TRIPLE|QUAD(?:RA)?|PENTA|HEXA)\b/i)?.[1].toUpperCase();
+        if (word) b.count = { DOUBLE: 2, TRIPLE: 3, QUAD: 4, QUADRA: 4, PENTA: 5, HEXA: 6 }[word];
         // Not a streak banner after all (another message in the same place).
-        if (r && r.text.trim() && !/KO|STREAK|PLAYER/i.test(r.text)) b.done = true;
+        if (r && r.text.trim() && !/KO|STREAK|PLAYER|DOUBLE|TRIPLE|QUAD|PENTA|HEXA/i.test(r.text)) b.done = true;
         break;
       }
       case 'map': {
@@ -406,6 +409,8 @@ export class ScreenFusion {
       }
       b.done = true;
       if (this.notPlaying(b.t)) continue;
+      // The game says the streak is still going: the clipper keeps the clip open for the next kill.
+      if (b.count >= 2) this.sink.gameEvent('streak', b.count, b.t);
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
       if (b.t - this.lastKillAt > 2500 && !this.kos.some((k) => !k.done && Math.abs(k.t - b.t) < 2500)) this.emitKill(b.t, undefined);
     }

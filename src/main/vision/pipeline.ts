@@ -1,4 +1,5 @@
-import { matchPortrait } from './portrait';
+import { PortraitBook, portraitError } from './portrait';
+import { canonicalHero } from '../studio/clip-rules';
 import { viewFor } from './image';
 // Runs the screen detector: HUD frames from ffmpeg (live screen or a recorded video) go through the
 // analyzer, text recognition and fusion, and out come GEP-style events. The live app and the test
@@ -9,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import { gameWindowSource } from '../capture/encoder';
 import { HudAnalyzer, type Observation } from './detectors';
 import { ScreenFusion, type EventSink, type FusionCallbacks, type FusionOptions, type OcrKind, type OcrResult } from './fusion';
-import type { Crop } from './image';
+import type { Crop, View } from './image';
 import { hudFilterGraph, type HudLayout, type RegionId } from './layout';
 import type { OcrMode, ScreenOcr } from './ocr';
 
@@ -111,6 +112,16 @@ export interface PipelineOptions extends FusionOptions {
   /** Harness: wait for each text read before the next frame, so results don't depend on machine speed. */
   awaitOcr?: boolean;
   koColumnX?: number;
+  /** Hero portraits learned in earlier sessions (PortraitBook.export()). */
+  portraits?: Record<string, string[]>;
+  /** Called when a new hero portrait was learned, with everything to save. */
+  onPortraitsLearned?: (portraits: Record<string, string[]>) => void;
+}
+
+/** True when the read names the hero cleanly ("DEADPOOL", "JA  DEADPOOL"), not a guess from a garbled read. */
+function cleanRead(raw: string, hero: string): boolean {
+  const letters = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
+  return letters(raw).endsWith(letters(hero)) || letters(raw).startsWith(letters(hero));
 }
 
 /** Analyzer + OCR + fusion, fed one frame at a time. */
@@ -125,12 +136,36 @@ export class DetectionPipeline {
   private clock = () => Date.now();
   private portraitVotes = 0;
   private portraitHero?: string;
+  private portraitCandidate?: string;
   private portraitSink?: EventSink;
+  readonly portraits: PortraitBook;
+  /** The portrait on screen now, when it has held still for a few frames (so it's safe to learn from). */
+  private steadyPortrait?: View;
+  private lastPortrait?: Uint8Array;
+  private steadyFrames = 0;
+  /** The portrait matched a known hero on the latest frame. */
+  private portraitMatched = false;
 
   constructor(sink: EventSink, private ocr: ScreenOcr | undefined, private o: PipelineOptions, cb: FusionCallbacks = {}) {
     this.portraitSink = sink;
+    this.portraits = new PortraitBook(o.portraits);
     this.analyzer = new HudAnalyzer(o.layout, { frameMs: o.frameMs, koColumnX: o.koColumnX });
-    this.fusion = new ScreenFusion(sink, { ...o, ocr: !!ocr && o.ocr }, {
+    // The hero's name read from the screen: learn the portrait from a clean read, and let a known
+    // portrait outrank the text (text reads come out as "CBSBEADPOOL" or "ELSA BLOODS ZED E").
+    const textSink: EventSink = {
+      gameEvent: (key, value, at) => sink.gameEvent(key, value, at),
+      infoUpdate: (feature, key, value) => {
+        if (key !== 'local_hero') return sink.infoUpdate(feature, key, value);
+        const hero = typeof value === 'string' ? canonicalHero(value) : undefined;
+        if (!hero) return;
+        if (this.steadyPortrait && cleanRead(String(value), hero) && this.portraits.learn(hero, this.steadyPortrait)) {
+          this.o.onPortraitsLearned?.(this.portraits.export());
+        }
+        if (this.portraitMatched && this.portraitHero && this.portraitHero !== hero) return;
+        sink.infoUpdate(feature, key, hero);
+      },
+    };
+    this.fusion = new ScreenFusion(textSink, { ...o, ocr: !!ocr && o.ocr }, {
       ...cb,
       requestOcr: (req) => this.runOcr(req.kind, req.id),
       wantCrop: (region: RegionId) => this.analyzer.want(region),
@@ -140,12 +175,16 @@ export class DetectionPipeline {
   async processFrame(frame: Uint8Array, t: number): Promise<void> {
     if (this.o.awaitOcr) this.clock = () => t;
     if (this.o.layout.regions.some(r => r.id === 'portrait')) {
-      const hero = matchPortrait(viewFor(frame, this.o.layout, 'portrait'));
-      this.portraitVotes = hero ? this.portraitVotes + 1 : 0;
-      if (!hero && this.portraitHero) {
-        this.portraitHero = undefined;
-        this.portraitSink?.infoUpdate('game_info', 'local_hero', undefined);
-      }
+      const view = viewFor(frame, this.o.layout, 'portrait');
+      const still = this.lastPortrait && (portraitError(view.luma, this.lastPortrait) ?? 1) < 0.15;
+      this.steadyFrames = still ? this.steadyFrames + 1 : 0;
+      this.lastPortrait = new Uint8Array(view.luma);
+      this.steadyPortrait = this.steadyFrames >= 3 ? { ...view, luma: this.lastPortrait } : undefined;
+      const hero = this.portraits.match(view);
+      this.portraitMatched = !!hero;
+      this.portraitVotes = hero && hero === this.portraitCandidate ? this.portraitVotes + 1 : hero ? 1 : 0;
+      this.portraitCandidate = hero;
+      // A portrait we don't know (menus, death screen, a new hero) says nothing: keep the last hero.
       if (hero && this.portraitVotes >= 3 && hero !== this.portraitHero) {
         this.portraitHero = hero;
         this.portraitSink?.infoUpdate('game_info', 'local_hero', hero);

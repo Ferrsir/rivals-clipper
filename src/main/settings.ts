@@ -64,8 +64,10 @@ export const DEFAULT_SETTINGS: Settings = {
   bufferSeconds: 60,
   preRollSeconds: 3,
   postRollSeconds: 4,
-  maxClipSeconds: 20,
-  chainSeconds: 8,
+  // A penta can span 40 s (2026-11-09: 5 kills with gaps up to 13.7 s), so a streak needs room.
+  maxClipSeconds: 60,
+  // The game kept counting that penta across 13.7 s gaps, so kills that far apart are one streak.
+  chainSeconds: 15,
   resolution: 'native',
   fps: 60,
   bitrateKbps: 0,
@@ -124,7 +126,8 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     passthrough[k] = v !== null && typeof v === typeof def && Array.isArray(v) === Array.isArray(def) ? v : def;
   }
   const postRollSeconds = clampInt(r.postRollSeconds, 3, 4, base.postRollSeconds);
-  const maxClipSeconds = clampInt(r.maxClipSeconds, 15, 300, base.maxClipSeconds);
+  // Never below 60: the old 20 s cap cut multi-kills in half (and older settings files still say 20).
+  const maxClipSeconds = clampInt(r.maxClipSeconds, 60, 300, base.maxClipSeconds);
   const preRollSeconds = Math.min(clampInt(r.preRollSeconds, 3, 4, base.preRollSeconds), Math.max(0, maxClipSeconds - postRollSeconds));
   const s: Settings = {
     ...(passthrough as unknown as Settings),
@@ -132,7 +135,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = DEFAULT_SETTINGS
     preRollSeconds,
     postRollSeconds,
     maxClipSeconds,
-    chainSeconds: clampInt(r.chainSeconds, 4, 15, base.chainSeconds),
+    chainSeconds: clampInt(r.chainSeconds, 4, 20, base.chainSeconds),
     // The buffer has to hold the whole pre-roll plus a margin, or clips come out short.
     bufferSeconds: Math.max(clampInt(r.bufferSeconds, 20, 300, base.bufferSeconds), preRollSeconds + 10),
     resolution: oneOf(r.resolution, ['native', '1080p', '1440p', '2160p'] as const, base.resolution),
