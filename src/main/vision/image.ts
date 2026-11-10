@@ -1,6 +1,7 @@
 // Small, fast image helpers for the screen detector. Frames are BGRA (what ffmpeg's rawvideo gives),
 // and every helper works on one region of the stacked HUD mosaic. No dependencies, so it could move to a worker thread.
 
+import { isCardYellow, isCountdownYellow } from './death-screen';
 import type { HudLayout, RegionGeom, RegionId } from './layout';
 
 export const LIGHT = 1; // light grey / white background (your rows in the kill feed)
@@ -9,6 +10,8 @@ export const WHITE = 4; // near-white (HUD text drawn over the game: KO list, ba
 export const BLUE = 8; // your team's blue
 export const RED = 16; // the enemy team's red/orange
 export const PALE = 32; // bright, unsaturated: HUD text that has started to fade (older KO-list lines)
+export const YELLOW = 64; // saturated HUD yellow: the respawn countdown (see death-screen.ts)
+export const CARD = 128; // the "DEFEATED BY" card's yellow (see death-screen.ts)
 
 export interface View {
   id: RegionId;
@@ -29,6 +32,9 @@ export function makeView(frame: Uint8Array, layout: HudLayout, g: RegionGeom): V
   const stride = layout.mosaicW * 4;
   const mask = new Uint8Array(w * h);
   const luma = new Uint8Array(w * h);
+  // The death-screen colours are only looked for in their own boxes.
+  const yellow = g.id === 'respawn';
+  const card = g.id === 'deathcard';
   for (let y = 0; y < h; y++) {
     let p = (g.outY + y) * stride;
     const row = y * w;
@@ -47,6 +53,8 @@ export function makeView(frame: Uint8Array, layout: HudLayout, g: RegionGeom): V
       if (l >= 150 && sat <= 60) m |= PALE;
       if (b >= 160 && b - r >= 60 && b >= gr) m |= BLUE;
       if (r >= 170 && r - b >= 70 && r - gr >= 30) m |= RED;
+      if (yellow && isCountdownYellow(r, gr, b)) m |= YELLOW;
+      if (card && isCardYellow(r, gr, b)) m |= CARD;
       mask[row + x] = m;
       luma[row + x] = g.id === 'subtitle' && b > 120 && gr > 70 && b - r > 35 ? 255 : l;
     }

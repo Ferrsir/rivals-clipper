@@ -89,3 +89,45 @@ test('a multi-kill callout keeps the clip open for another full window', () => {
   assert.equal(s.currentEndAt, 104000, 'the callout itself adds no footage');
   assert.equal(new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000 }).hold(1), undefined);
 });
+
+// 2026-11-09 22:33: a double, then you die 0.5 s later. The clip must stop a second after the death,
+// not run 4 s on into the death screen.
+test('dying ends the clip a second later, and stops the wait for more kills', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(100000);
+  s.onKill(101200);
+  const stopAt = s.cut(101700, 1000, 2000);
+  assert.equal(s.currentEndAt, 102700);
+  assert.equal(stopAt, 103700 + 2500, 'only waits for a late report of a kill made just before the death');
+  // A kill reported right after the death still lands in the clip, but can't stretch it into the death screen.
+  assert.equal(s.onKill(102000).type, 'extend');
+  assert.equal(s.currentEndAt, 103700);
+  assert.equal(s.hold(102500), undefined, 'a callout no longer holds the clip open');
+  // A kill long after (a wrong death call): it gets its own clip.
+  assert.equal(s.onKill(110000).type, 'restart');
+});
+
+test('a new clip after a cut is not limited by the old death', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(100000);
+  s.cut(100500);
+  s.finish();
+  s.onKill(200000);
+  assert.equal(s.currentEndAt, 204000);
+});
+
+test('a cut never drops a kill already in the clip that landed just after the death', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(100000);
+  s.onKill(102500); // reported before the death was
+  s.cut(101000, 1000, 2000);
+  assert.equal(s.currentEndAt, 103000, 'the kill at 102.5 s stays in, up to the end of the grace');
+});
+
+test('a kept kill never stretches the clip past the death grace', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(98000);
+  s.onKill(101800);
+  s.cut(100000, 1000, 2000);
+  assert.equal(s.currentEndAt, 102000);
+});

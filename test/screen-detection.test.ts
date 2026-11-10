@@ -44,9 +44,10 @@ test('HUD scale moves the regions with it', () => {
 
 test('ffmpeg graph crops every region and stacks them', () => {
   const g = hudFilterGraph(layoutFor(2560, 1440), { gpuFrames: true, fps: 10 });
-  assert.match(g, /^\[0:v\]hwdownload,format=bgra,split=9/);
-  assert.equal((g.match(/crop=/g) ?? []).length, DEFAULT_REGIONS.length);
-  assert.match(g, /vstack=inputs=9\[hud\]$/);
+  const n = DEFAULT_REGIONS.length;
+  assert.match(g, new RegExp(`^\\[0:v\\]hwdownload,format=bgra,split=${n}`));
+  assert.equal((g.match(/crop=/g) ?? []).length, n);
+  assert.match(g, new RegExp(`vstack=inputs=${n}\\[hud\\]$`));
 });
 
 // ---------- synthetic HUD frames ----------
@@ -245,8 +246,8 @@ function harness(opts: { name?: string; ocr?: boolean; hudVerified?: boolean } =
     events,
     info,
     ocrReqs,
-    hud(t: number, on: boolean) {
-      fusion.onObservation({ kind: 'hud', t, matchHud: on, feedRows: 0, koLines: 0 });
+    hud(t: number, on: boolean, dead: { countdown?: boolean; deathCard?: boolean } = {}) {
+      fusion.onObservation({ kind: 'hud', t, matchHud: on, feedRows: 0, koLines: 0, ...dead });
       fusion.tick(t);
     },
     ko(t: number, id: number, assist = false) {
@@ -583,4 +584,124 @@ test('a KO landing just after your death does not end the death window', () => {
   h.fusion.onOcr('ko', 4, words(['Pyro', 10]), 6100);
   h.fusion.tick(9000);
   assert.equal(h.events.filter((e) => e.key === 'assist').length, 0);
+});
+
+// ---------- the death screen (respawn countdown, "DEFEATED BY" card) ----------
+
+/** Frames every 100 ms from `from` to `to` with the countdown (and optionally the card) on screen. */
+function deadFrames(h: ReturnType<typeof harness>, from: number, to: number, card = false) {
+  for (let t = from; t < to; t += 100) h.hud(t, true, { countdown: true, deathCard: card });
+}
+
+test('the respawn countdown appearing is your death, reported from its first frame', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  deadFrames(h, 3000, 3500);
+  assert.deepEqual(h.deaths().map((d) => d.at), [3000]);
+});
+
+test('one frame of countdown-like yellow is not a death', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  h.hud(1000, true, { countdown: true });
+  h.hud(1100, true);
+  h.hud(1200, true);
+  assert.equal(h.deaths().length, 0);
+});
+
+test('in the replay of your death, your name on the KO is your killer\'s KO, not yours (2026-11-09 22:30)', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  deadFrames(h, 3000, 9000, true);
+  // The replay: a KO line and a feed row naming you as the attacker, five seconds into your death.
+  h.ko(8000, 1);
+  h.feed(8050, 2);
+  h.fusion.onOcr('ko', 1, words(['Pixerolaxx', 10]), 8100);
+  h.fusion.onOcr('feed', 2, words(['yaomingdiesel', 10], ['Pixerolaxx', 300]), 8200);
+  deadFrames(h, 9000, 12_000);
+  h.fusion.tick(14_000);
+  assert.equal(h.kills().length, 0);
+  assert.ok(h.info.some(([k, v]) => k === 'ignored_ko' && /death screen/.test((v as { reason: string }).reason)));
+});
+
+test('a KO just after a death seen as it happened still counts (22:33: the second kill was read 0.5 s after the countdown)', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  deadFrames(h, 3000, 4000);
+  h.feed(3500, 1);
+  h.fusion.onOcr('feed', 1, words(['yaomingdiesel', 10], ['AsahinaYuni', 300]), 3700);
+  deadFrames(h, 4000, 8000);
+  assert.equal(h.kills().length, 1);
+});
+
+test('when the death screen was already up (behind the scoreboard), no KO counts, not even right away (22:32)', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  // Scoreboard: the countdown is hidden, so the first frame we see it is not the moment you died.
+  for (let t = 500; t < 3000; t += 100) h.hud(t, false);
+  deadFrames(h, 3000, 3300, true);
+  h.feed(3300, 1);
+  h.fusion.onOcr('feed', 1, words(['yaomingdiesel', 10], ['Romisumi', 300]), 3400);
+  deadFrames(h, 3300, 8000, true);
+  assert.equal(h.kills().length, 0);
+});
+
+test('your death row read after the countdown is the same death, not a second one', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  deadFrames(h, 3000, 6000);
+  h.feed(5000, 1);
+  h.fusion.onOcr('feed', 1, words(['LeonRER4', 10], ['yaomingdiesel', 300]), 5200);
+  deadFrames(h, 6000, 9000);
+  h.fusion.tick(12_000);
+  assert.equal(h.deaths().length, 1);
+});
+
+test('KOs count again after you respawn and the countdown is gone', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  deadFrames(h, 3000, 14_000);
+  for (let t = 14_000; t < 18_000; t += 100) h.hud(t, true);
+  h.feed(17_000, 1);
+  h.fusion.onOcr('feed', 1, words(['yaomingdiesel', 10], ['Valka', 300]), 17_200);
+  h.fusion.tick(20_000);
+  assert.equal(h.kills().length, 1);
+});
+
+test('the match bar going away mid-match is reported from its first missing frame (round change)', () => {
+  const h = harness({ name: 'yaomingdiesel' });
+  inMatch(h);
+  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
+  for (let t = 3000; t < 6000; t += 100) h.hud(t, false);
+  const gone = h.events.find((e) => e.key === 'hud' && e.value === false);
+  assert.ok(gone, 'reported');
+  assert.ok(gone!.at <= 3000 && gone!.at > 2800, `at ${gone!.at}`);
+  for (let t = 6000; t < 9000; t += 100) h.hud(t, true);
+  assert.ok(h.events.some((e) => e.key === 'hud' && e.value === true));
+});
+
+
+test('a garbled KO streak banner still reads its count', () => {
+  for (const text of ['5 PLAYSRHRBTREAK!', '5 PlWERHE-STREAK!', '5 PLAYER"KO-STREAK!', '5 PLAYER\nKO STREAK!']) {
+    const h = harness({ name: 'Leithl' });
+    inMatch(h);
+    h.banner(4000, 9);
+    h.fusion.onOcr('banner', 9, { text, words: [] }, 4100);
+    h.fusion.tick(6000);
+    assert.equal(h.kills().length, 1, text);
+  }
+});
+
+test('other text where the banner goes is not a streak', () => {
+  const h = harness({ name: 'Leithl' });
+  inMatch(h);
+  h.banner(4000, 9);
+  h.fusion.onOcr('banner', 9, { text: 'CAPTURE SUPER-SOLDIER LABORATORY', words: [] }, 4100);
+  h.fusion.tick(6000);
+  assert.equal(h.kills().length, 0);
 });

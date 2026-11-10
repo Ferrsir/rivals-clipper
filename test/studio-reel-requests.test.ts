@@ -172,13 +172,24 @@ test('a picture overlay follows the face keyframes in the rendered clip', { skip
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 });
 
-test('scoreboard frames are recognised from their dark, grey look', async () => {
-  const { frameStats, isScoreboard, trimAround } = await import('../src/main/studio/clip-filter');
-  const fill = (r: number, g: number, b: number) => { const a = new Uint8Array(10 * 4 * 3); for (let i = 0; i < a.length; i += 3) { a[i] = r; a[i + 1] = g; a[i + 2] = b; } return a; };
-  assert.ok(isScoreboard(frameStats(fill(40, 42, 46), 10, 4)));
-  assert.ok(isScoreboard(frameStats(fill(22, 34, 48), 10, 4)), 'tinted panel still counts');
-  assert.ok(!isScoreboard(frameStats(fill(90, 110, 70), 10, 4)));
-  assert.ok(!isScoreboard(frameStats(fill(30, 45, 80), 10, 4)), 'dark but colourful gameplay is kept');
+test('the scoreboard is found from its blue and red team panels, not from a dark picture', async () => {
+  const { scoreboardInRgb, BOARD_BOX, trimAround } = await import('../src/main/studio/clip-filter');
+  const { w, h } = BOARD_BOX;
+  const unit = w / 1.8;
+  const frame = (px: (x: number, y: number) => [number, number, number]) => {
+    const a = new Uint8Array(w * h * 3);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) a.set(px(x, y), (y * w + x) * 3);
+    return a;
+  };
+  const panel = (x: number, y: number) => y > 0.25 * h && y < 0.7 * h && Math.abs(x - w / 2) < 0.73 * unit;
+  const board = frame((x, y) => (!panel(x, y) ? [18, 20, 26] : x < w / 2 ? [40, 55, 105] : [105, 55, 45]));
+  assert.ok(scoreboardInRgb(board));
+  assert.ok(scoreboardInRgb(frame(() => [26, 28, 40])), 'the blank loading screen');
+  assert.ok(!scoreboardInRgb(frame(() => [12, 12, 12])), 'a black fade is not the loading screen');
+  // A dark map: dim, textured and colourful, but no blue/red panels (2026-11-09 22:31 was flagged by the old test).
+  const darkMap = frame((x, y) => [10 + ((x * 7 + y * 13) % 70), 15 + ((x * 3) % 50), 20 + ((y * 11) % 60)]);
+  assert.ok(!scoreboardInRgb(darkMap));
+  assert.ok(!scoreboardInRgb(frame((x, y) => [90 + (x % 40), 110, 70 + (y % 30)])), 'bright gameplay');
   const { heldRuns } = await import('../src/main/studio/clip-filter');
   assert.deepEqual(heldRuns([false, true, false, true, true, false]), [0.75, 1], 'a single dark sample is ignored');
   const c = { in: 0, out: 7, hits: [4] };

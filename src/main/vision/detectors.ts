@@ -4,16 +4,27 @@
 // fusion.ts. Thresholds are in HUD units (see layout.ts) so they hold at any resolution.
 
 import {
-  BLUE, DARK, LIGHT, PALE, RED, WHITE, columnExtent, cropAll, cropLuma, findBands, fraction, rowCounts, signature, sigDistance,
+  BLUE, CARD, DARK, LIGHT, PALE, RED, WHITE, YELLOW, columnExtent, cropAll, cropLuma, findBands, fraction, rowCounts, signature, sigDistance,
   transitionDensity, viewFor, type Box, type Crop, type View,
 } from './image';
+import { DEATH_BOX, DEATH_MIN, countdownShape, deathScoreOf } from './death-screen';
 import type { HudLayout, RegionId } from './layout';
 
 export type Observation =
   | { kind: 'feed-row'; t: number; id: number; box: Box; crop: Crop }
   | { kind: 'ko-line'; t: number; id: number; box: Box; crop: Crop; assist: boolean }
   | { kind: 'banner'; t: number; id: number; box: Box; crop: Crop }
-  | { kind: 'hud'; t: number; matchHud: boolean; feedRows: number; koLines: number }
+  | {
+      kind: 'hud';
+      t: number;
+      matchHud: boolean;
+      feedRows: number;
+      koLines: number;
+      /** The respawn countdown is on screen (top left): you're dead. Undefined when the layout has no such region. */
+      countdown?: boolean;
+      /** The "DEFEATED BY" card is on screen: the replay of your death. */
+      deathCard?: boolean;
+    }
   | { kind: 'crop'; t: number; region: RegionId; crop: Crop };
 
 export interface Candidate {
@@ -352,6 +363,21 @@ export function matchHudVisible(v: View): boolean {
   return blue >= 30 * u && red >= 30 * u;
 }
 
+// ---------- death screen ----------
+
+/** The respawn countdown in the 'respawn' region. */
+export function countdownVisible(v: View): boolean {
+  return countdownShape((x, y) => (v.mask[y * v.w + x] & YELLOW) !== 0, v.w, v.h);
+}
+
+/** The "DEFEATED BY" card in the 'deathcard' region, sampled onto the card template's grid. */
+export function deathCardVisible(v: View): boolean {
+  const sx = v.w / DEATH_BOX.w;
+  const sy = v.h / DEATH_BOX.h;
+  const at = (x: number, y: number) => (v.mask[Math.min(v.h - 1, Math.floor((y + 0.5) * sy)) * v.w + Math.min(v.w - 1, Math.floor((x + 0.5) * sx))] & CARD) !== 0;
+  return deathScoreOf(at) >= DEATH_MIN;
+}
+
 // ---------- the analyzer: one frame in, observations out ----------
 
 export interface AnalyzerOptions {
@@ -402,7 +428,16 @@ export class HudAnalyzer {
       out.push({ kind: 'banner', t: tr.firstSeen, id: tr.id, box: tr.box, crop: cropLuma(bannerView, tr.box, 6) });
 
     const topView = viewFor(frame, this.layout, 'top');
-    out.push({ kind: 'hud', t, matchHud: matchHudVisible(topView), feedRows: this.feed.onScreen(t, frameMs), koLines: this.ko.onScreen(t, frameMs) });
+    const has = (id: RegionId) => this.layout.regions.some((r) => r.id === id);
+    out.push({
+      kind: 'hud',
+      t,
+      matchHud: matchHudVisible(topView),
+      feedRows: this.feed.onScreen(t, frameMs),
+      koLines: this.ko.onScreen(t, frameMs),
+      countdown: has('respawn') ? countdownVisible(viewFor(frame, this.layout, 'respawn')) : undefined,
+      deathCard: has('deathcard') ? deathCardVisible(viewFor(frame, this.layout, 'deathcard')) : undefined,
+    });
 
     for (const id of this.wanted) out.push({ kind: 'crop', t, region: id, crop: cropAll(viewFor(frame, this.layout, id)) });
     this.wanted.clear();
