@@ -323,3 +323,35 @@
 .st-step-notes { margin:4px 0 0; padding-left:18px; line-height:1.5; }
 .st-more-ideas summary { cursor:pointer; color:var(--muted); font-size:12px; margin:4px 0; }
 @keyframes st-pulse { 50% { box-shadow:0 0 0 4px rgba(255,200,40,.18); } }
+
+/* ---- Theme: matches the shell's look (style.css tokens) ---- */
+#studio-root.st { --st-bg2: var(--bg-2, #0e1020); --st-hover: var(--panel-2, #1b1f35); --st-good: var(--green, #3ee08f); --st-bad: var(--red, #ff5d6c); }
+.st input, .st select, .st textarea { border-radius: 8px; }
+.st button { border-radius: 8px; transition: background-color .15s, border-color .15s, filter .15s; }
+.st .st-btn.primary, .st .st-seg button.on { background: var(--grad, var(--accent)); border-color: transparent; color: #1a1200; }
+.st .st-btn.primary:hover:not(:disabled) { background: var(--grad, var(--accent)); filter: brightness(1.07); }
+.st .st-btn.primary { box-shadow: 0 6px 18px rgba(255, 170, 50, 0.2); }
+.st-top { gap: 8px; padding: 10px 14px; background: linear-gradient(180deg, var(--panel), var(--bg-2, #0e1020)); }
+.st-seg { border-radius: 999px; background: var(--st-bg2); }
+.st .st-menu button:hover:not(:disabled) { color: var(--text); background: var(--st-hover); }
+.st-left, .st-right { background: var(--panel); }
+.st-center { background: radial-gradient(600px 300px at 50% 0%, rgba(91, 140, 255, 0.06), transparent 70%); }
+.st .st-tabs button { font-weight: 600; padding: 11px 6px; border-bottom-width: 3px; }
+.st .st-tabs button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.03); color: var(--text); }
+.st .st-tabs button.on { border-image: var(--grad, linear-gradient(var(--accent), var(--accent))) 1; border-image-slice: 0 0 1 0; }
+.st-clip, .st-track, .st-sug, .st-idea, .st-idea-card, .st-ai, .st-review { border-radius: 10px; transition: border-color .15s, transform .15s; }
+.st-clip:hover { border-color: var(--line-2, #343a5c); transform: translateX(2px); }
+.st .st-clip video { border-radius: 6px; }
+.st .st-add { border-radius: 50%; width: 28px; height: 28px; padding: 0; color: #1a1200; background: var(--grad, var(--accent)); border: 0; }
+.st .st-add:hover:not(:disabled) { background: var(--grad, var(--accent)); filter: brightness(1.08); }
+.st-stage { border-radius: 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); border-color: var(--line-2, #343a5c); }
+.st-stage-empty { background: radial-gradient(circle at 50% 35%, #1d2240, #06070d 75%); }
+.st-dialog { border-radius: 16px; border-color: var(--line-2, #343a5c); }
+.st-modal { backdrop-filter: blur(3px); }
+.st-toast { border-radius: 10px; background: #181c33; }
+.st-bottom { background: var(--bg-2, #0b0d11); }
+.st-tags { color: var(--accent); }
+.st-bar > div { background: var(--grad, var(--accent)); }
+.st .st-create .st-make-reel { border-radius: 12px; letter-spacing: 0.02em; }
+.st-assets { border-color: var(--line-2, #454b59); border-radius: 12px; }
+.st select { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }

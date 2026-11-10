@@ -14,6 +14,8 @@ function renderStatus(s) {
   if (s.clipping) bits.push('● clipping');
   $('status').textContent = bits.join('  ·  ');
   $('status').classList.toggle('live', !!s.buffer);
+  $('status').classList.toggle('clipping', !!s.clipping);
+  $('status').title = bits.join('  ·  ');
   const warn = $('packagesWarning');
   warn.textContent = s.packagesProblem ?? '';
   warn.classList.toggle('hidden', !s.packagesProblem);
@@ -53,6 +55,8 @@ function watchClip(c) {
   video.onerror = () => { status.textContent = 'Playback failed. Use Show file to open the original MP4.'; };
   const normalized = c.videoFile.replace(/\\/g, '/');
   video.src = 'file:///' + normalized.split('/').map((part, i) => i === 0 && /^[A-Z]:$/i.test(part) ? part : encodeURIComponent(part)).join('/');
+  const kills = c.events.filter((e) => e.type === 'kill').length;
+  $('clipTitle').textContent = `${c.hero ?? 'Unknown hero'} · ${kills} kill${kills === 1 ? '' : 's'}${c.match.map ? ` · ${c.match.map}` : ''}`;
   $('clipMarkers').replaceChildren(...c.events.filter(e => e.type === 'kill').map((e, i) => {
     const button = document.createElement('button');
     const seconds = Math.max(0, (e.at - c.startTimeEpoch) / 1000);
@@ -63,6 +67,10 @@ function watchClip(c) {
   dialog.showModal();
   void video.play().catch(() => { if (!video.error) status.textContent = 'Press play to watch.'; });
 }
+// Only one clip card menu open at a time; a click elsewhere closes it.
+document.addEventListener('click', (e) => {
+  for (const d of document.querySelectorAll('details.more[open]')) if (!d.contains(e.target)) d.open = false;
+});
 $('closeClipPlayer').onclick = () => $('clipPlayer').close();
 $('clipPlayer').onclose = () => {
   const video = $('clipVideo');
@@ -73,28 +81,48 @@ $('clipPlayer').onclose = () => {
 
 function clipRow(c) {
   const li = document.createElement('li');
+  li.className = 'clip-card';
   const kills = c.events.filter((e) => e.type === 'kill').length;
-  const when = new Date(c.createdAt).toLocaleString();
-  const tags = c.tags.filter((t) => !t.includes(':')).join(' ');
+  const when = new Date(c.createdAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const tags = c.tags.filter((t) => !t.includes(':'));
   const hasMic = c.audioTracks.length > 1;
+  const tier = kills >= 5 ? 'k5' : kills >= 2 ? `k${kills}` : '';
+  const killLabel = kills >= 6 ? 'Team wipe' : kills === 5 ? '5 kills' : kills === 4 ? 'Quad' : kills === 3 ? 'Triple' : kills === 2 ? 'Double' : `${kills} kill${kills === 1 ? '' : 's'}`;
+  const dur = `${Math.floor(c.durationMs / 60000)}:${String(Math.floor(c.durationMs / 1000) % 60).padStart(2, '0')}`;
   li.innerHTML = `
-    <button class="watch"><img class="clip-cover" loading="lazy" alt="Clip cover" src="file:///${c.videoFile.replace(/\\/g, '/').replace(/\.mp4$/i, '.cover.jpg')}">Watch · ${Math.floor(c.durationMs / 60000)}:${String(Math.floor(c.durationMs / 1000) % 60).padStart(2, '0')}</button>
+    <button class="watch thumb" title="Watch this clip" aria-label="Watch ${kills} kill clip, ${dur}">
+      <img class="clip-cover" loading="lazy" alt="" src="file:///${esc(c.videoFile.replace(/\\/g, '/').replace(/\.mp4$/i, '.cover.jpg'))}">
+      <span class="kills ${tier}">${killLabel}</span>
+      <span class="play"><svg><use href="#i-play"/></svg></span>
+      <span class="score">score <b>${esc(c.score)}</b></span>
+      <span class="dur">${dur}</span>
+    </button>
     <div class="meta">
-      <div class="title"><strong>${kills} kill${kills === 1 ? '' : 's'}</strong> · ${esc(c.hero ?? 'Unknown hero')} · ${esc(c.match.map ?? '')}</div>
-      <div class="muted">${when} · ${(c.durationMs / 1000).toFixed(0)}s · score <b>${c.score}</b></div>
-      ${c.ai?.summary ? `<div class="summary">“${esc(c.ai.summary)}”${c.ai.hype ? ` <span class="muted">hype ${c.ai.hype}/10</span>` : ''}</div>` : ''}
+      <div class="clip-title"><strong>${esc(c.hero ?? 'Unknown hero')}</strong>${c.match.map ? `<span class="map">${esc(c.match.map)}</span>` : ''}</div>
+      <div class="clip-when muted">${esc(when)} · ${(c.durationMs / 1000).toFixed(0)}s</div>
+      ${c.ai?.summary ? `<p class="summary">“${esc(c.ai.summary)}”${c.ai.hype ? `<span class="hype">hype ${esc(c.ai.hype)}/10</span>` : ''}</p>` : ''}
       ${c.ai?.error ? `<div class="muted small">AI tagging failed: ${esc(c.ai.error)}</div>` : ''}
-      <div class="tags">${esc(tags)}</div>
+      ${tags.length ? `<div class="tags">${tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="actions">
-        <span class="stars">${[1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${(c.rating ?? 0) >= n ? 'on' : ''}">★</button>`).join('')}</span>
-        ${hasMic ? `<label class="check"><input type="checkbox" class="useMic" ${c.useMic ? 'checked' : ''}> mic in reels</label>` : '<span class="muted">no mic track</span>'}
-        <button class="delete" title="Move to the Recycle Bin">Delete</button>
-        <button class="exportGame">Export game audio</button>
-        ${hasMic ? '<button class="exportMic">Export with mic</button>' : ''}
-        <button class="show">Show file</button>
-        ${aiReady() ? `<button class="aiTag">${c.ai && !c.ai.error ? 'Re-tag with AI' : 'Tag with AI'}</button>` : ''}
+        <span class="stars" aria-label="Your rating">${[1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${(c.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} star${n === 1 ? '' : 's'}">★</button>`).join('')}</span>
+        ${hasMic ? `<label class="check" title="Use my mic track when this clip goes in a reel"><input type="checkbox" class="useMic" ${c.useMic ? 'checked' : ''}><span>Mic</span></label>` : '<span class="no-mic muted">No mic track</span>'}
+        <details class="more">
+          <summary title="More actions" aria-label="More actions"><svg><use href="#i-more"/></svg></summary>
+          <div class="menu">
+            ${aiReady() ? `<button class="aiTag">${c.ai && !c.ai.error ? 'Re-tag with AI' : 'Tag with AI'}</button>` : ''}
+            <button class="exportGame">Export game audio</button>
+            ${hasMic ? '<button class="exportMic">Export with mic</button>' : ''}
+            <button class="show">Show file</button>
+            <hr>
+            <button class="delete danger" title="Move to the Recycle Bin">Delete</button>
+          </div>
+        </details>
       </div>
     </div>`;
+  const cover = li.querySelector('.clip-cover');
+  cover.addEventListener('error', () => cover.classList.add('missing'));
+  const more = li.querySelector('.more');
+  more.addEventListener('click', (e) => { if (e.target.closest('.menu button')) more.open = false; });
   li.querySelector('.watch').addEventListener('click', () => watchClip(c));
   li.querySelectorAll('[data-star]').forEach((b) =>
     b.addEventListener('click', async () => replace(await clipper.rate(c.videoFile, Number(b.dataset.star)))),
@@ -151,6 +179,10 @@ function fillSelect(el, facets, allLabel) {
 async function refreshFacets() {
   const f = await clipper.clipFacets();
   libraryTotal = f.total;
+  const top = [...f.heroes].sort((a, b) => b.count - a.count)[0];
+  $('statClips').textContent = String(f.total);
+  $('statHero').textContent = top ? top.value : '–';
+  $('statHero').title = top ? `${top.value}: ${top.count} clip${top.count === 1 ? '' : 's'}` : '';
   fillSelect($('fHero'), f.heroes, 'All heroes');
   fillSelect($('fMap'), f.maps, 'All maps');
   fillSelect($('fType'), f.gameTypes, 'All modes');
@@ -185,10 +217,12 @@ function queueQuery() {
 
 function renderClips(total = clips.length) {
   $('clipList').replaceChildren(...clips.map(clipRow));
-  $('count').textContent = total === libraryTotal ? `(${libraryTotal})` : `(${total} of ${libraryTotal})`;
+  $('count').textContent = total === libraryTotal ? `${libraryTotal}` : `${total} of ${libraryTotal}`;
+  $('statKills').textContent = String(clips.reduce((n, c) => n + c.events.filter((e) => e.type === 'kill').length, 0));
+  $('statBest').textContent = clips.length ? String(Math.max(...clips.map((c) => Number(c.score) || 0))) : '–';
   const empty = $('emptyLibrary');
   empty.classList.toggle('hidden', clips.length > 0);
-  empty.textContent = libraryTotal
+  $('emptyText').textContent = libraryTotal
     ? 'No clips match these filters.'
     : 'No clips yet. Play a match and your kills will show up here, ranked.';
 }
@@ -198,8 +232,8 @@ for (const id of ['fHero', 'fMap', 'fType', 'fKills', 'fRating']) $(id).addEvent
 $('aiTagAll').addEventListener('click', async () => {
   if (!aiReady()) return alert('Sign in to Claude or ChatGPT first (Settings, Account).');
   const n = await clipper.aiTagUntagged();
-  $('aiTagAll').textContent = n ? `Tagging ${n} clip${n === 1 ? '' : 's'}…` : 'Every clip is tagged';
-  setTimeout(() => ($('aiTagAll').textContent = 'AI-tag untagged clips'), 4000);
+  $('aiTagAll').querySelector('span').textContent = n ? `Tagging ${n} clip${n === 1 ? '' : 's'}…` : 'Every clip is tagged';
+  setTimeout(() => ($('aiTagAll').querySelector('span').textContent = 'AI-tag untagged clips'), 4000);
 });
 $('clearFilters').addEventListener('click', () => {
   $('q').value = '';
@@ -300,7 +334,16 @@ clipper.onClip(replace);
 
 // ---------- tabs ----------
 let studioMounted = false;
+const PAGES = {
+  clipper: ['Clips', 'Every kill, saved and ranked automatically.'],
+  studio: ['Studio', 'Turn your best clips into reels, TikToks and videos.'],
+  settings: ['Settings', 'Recording, kill detection, updates and your AI account.'],
+};
 function showTab(name) {
+  const [title, sub] = PAGES[name] ?? [name, ''];
+  $('pageTitle').textContent = title;
+  $('pageSub').textContent = sub;
+  document.body.dataset.tab = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `tab-${name}`));
   if (name === 'studio' && !studioMounted) {
