@@ -480,7 +480,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const sources = new Map(listClips(p().clips, 1000).map(c => [c.id, c]));
     const pool = allowed.clips.filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score).slice(0, 60);
     const scans = new Map<string, ClipScan>();
-    for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal));
+    for (const file of new Set([...project.clips.filter(c => !c.external).map(c => c.videoFile), ...pool.map(c => c.videoFile)])) scans.set(file, await scanClip(ff0, file, signal, ctx.getSettings().hudScale));
     // Kill times from when your row appears in the feed (dropping teammates' kills), then trim off the scoreboard.
     // If no scanned clip shows a single row of yours, the feed is somewhere this build doesn't look
     // (another HUD scale or layout): keep the clipper's kills rather than throw everything away.

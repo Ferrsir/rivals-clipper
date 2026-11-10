@@ -92,16 +92,17 @@ export const TRADE_S = 1.5;
 /** Dead times and deaths from samples taken 4 times a second. */
 export function readDeaths(samples: DeadSample[]): { dead: number[]; deaths: number[] } {
   const fresh = deadSpans(samples, 0.25).filter((s) => s.fresh).map((s) => s.from);
-  const dead = heldRuns(samples.map((s) => s.countdown || s.card)).filter((t) => !fresh.some((d) => t >= d && t < d + TRADE_S));
+  // dropWhileDead drops kills within 0.75 s of a dead time, so the dead times start that much after the trade window.
+  const dead = heldRuns(samples.map((s) => s.countdown || s.card)).filter((t) => !fresh.some((d) => t >= d && t < d + TRADE_S + 0.75));
   return { dead, deaths: fresh };
 }
 
 /** One small decode per clip: the whole frame (scoreboard check), the kill-feed crop and the death card's box, stacked. */
-export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Promise<ClipScan> {
+export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal, hudScale = 1): Promise<ClipScan> {
   let key = file;
   try {
     const st = fs.statSync(file);
-    key = `${file}|${st.size}|${st.mtimeMs}`;
+    key = `${file}|${st.size}|${st.mtimeMs}|${hudScale}`;
   } catch {
     return Promise.resolve(EMPTY);
   }
@@ -111,7 +112,7 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
   const DH = DEATH_BOX.h;
   const CW = COUNTDOWN_BOX.w;
   const CH = COUNTDOWN_BOX.h;
-  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=4[a][b][c][d];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter()},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[d]${countdownCropFilter()},scale=${CW}:${CH}:flags=area,format=rgb24,pad=${W}:${CH}:0:0[cd];[full][feed][death][cd]vstack=inputs=4[out]`;
+  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=4[a][b][c][d];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter(hudScale)},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[d]${countdownCropFilter(hudScale)},scale=${CW}:${CH}:flags=area,format=rgb24,pad=${W}:${CH}:0:0[cd];[full][feed][death][cd]vstack=inputs=4[out]`;
   return new Promise((resolve) => {
     execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-filter_complex', graph, '-map', '[out]', '-an', '-f', 'rawvideo', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {

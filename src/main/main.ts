@@ -256,16 +256,23 @@ function cutAtDeath(at: number) {
  */
 function clipEnd(endAt: number | undefined): number | undefined {
   if (!pending || pending.trigger !== 'auto') return endAt;
-  // A break that is over, or the bar gone right now for longer than a flicker (heavy effects hide it for a moment).
-  const goneNow = hudGoneAt !== undefined && Date.now() - hudGoneAt >= HUD_FLICKER_MS ? hudGoneAt : undefined;
-  const gone = Math.min(pending.hudBreakAt ?? Infinity, goneNow ?? Infinity);
   const times = pending.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => e.at);
-  // Gone long before the first kill is not a round change at the end of this clip (more likely the bar isn't being found).
-  if (gone === Infinity || (times.length && gone < Math.min(...times) - 3000)) return endAt;
+  const firstKill = Math.min(...times, Infinity);
   const lastKill = Math.max(...times, -Infinity);
+  // The bar gone right now, after the last kill or for longer than a flicker (heavy effects hide it for a moment);
+  // or a break that is already over.
+  const goneNow = hudGoneAt !== undefined && (hudGoneAt > lastKill || Date.now() - hudGoneAt >= HUD_FLICKER_MS) ? hudGoneAt : undefined;
+  // Gone long before the first kill is not a round change at the end of this clip (more likely the bar isn't being found).
+  const near = (t: number | undefined) => (t !== undefined && t >= firstKill - 3000 ? t : Infinity);
+  const gone = Math.min(near(pending.hudBreakAt), near(goneNow));
+  if (gone === Infinity) return endAt;
   // Kills in the last moment of a round can come after the bar went: they keep a second after them.
   const cut = Math.max(gone + 300, lastKill + 1000);
   return endAt === undefined ? cut : Math.min(endAt, cut);
+}
+
+function clipFirstKill(clip: PendingClip): number {
+  return Math.min(...clip.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => e.at), Infinity);
 }
 
 /** The match bar missing this long is a flicker; this long or more, while a clip records, is a break (a round change). */
@@ -320,9 +327,10 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     audioTracks: tracks.map((label, index) => ({ index, label })),
     useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
+  // Listed now, so the match result (which comes a moment after the match ends) reaches it while it is checked.
+  if (clip.matchSource === state.context) matchClips.push(saved.videoFile);
   const check = checkSavedClip(saved).then((final) => {
     if (!final) return;
-    if (clip.matchSource === state.context) matchClips.push(final.videoFile);
     const k = final.events.filter((e) => e.type === 'kill').length;
     const a = final.events.filter((e) => e.type === 'assist').length;
     status(`Saved ${k}-kill${a ? `, ${a}-assist` : ''} clip (score ${final.score})`);
@@ -357,6 +365,7 @@ async function checkSavedClip(clip: ClipSidecar): Promise<ClipSidecar | undefine
       for (const f of [sidecarPath(clip.videoFile), clip.videoFile.replace(/\.mp4$/i, '.cover.jpg')]) {
         if (fs.existsSync(f)) await shell.trashItem(f).catch(() => undefined);
       }
+      matchClips = matchClips.filter((f) => f !== clip.videoFile);
       status('Dropped a clip whose kills were in your death replay (moved to the Recycle Bin)');
       return undefined;
     }
@@ -456,7 +465,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
       // The match bar went away (round change, match end) or came back.
       if (value === false) hudGoneAt ??= now;
       else {
-        if (pending && hudGoneAt !== undefined && now - hudGoneAt >= HUD_BREAK_MS) pending.hudBreakAt ??= hudGoneAt;
+        if (pending && hudGoneAt !== undefined && now - hudGoneAt >= HUD_BREAK_MS && hudGoneAt >= clipFirstKill(pending) - 3000) pending.hudBreakAt ??= hudGoneAt;
         hudGoneAt = undefined;
       }
       break;
@@ -843,7 +852,7 @@ installGracefulShutdown(app, async () => {
   stopCapture();
   const results = await Promise.allSettled([detector.shutdown(), recorder.stop(), shutdownStudio?.()]);
   // A clip saved just now may still be under its death-screen check (a trim or a move to the Recycle Bin).
-  await Promise.allSettled([...clipChecks]);
+  await Promise.race([Promise.allSettled([...clipChecks]), new Promise((r) => setTimeout(r, 15_000))]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   log?.flushSync();
 }, error => {

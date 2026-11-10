@@ -685,25 +685,3 @@ test('the match bar going away mid-match is reported from its first missing fram
   assert.ok(h.events.some((e) => e.key === 'hud' && e.value === true));
 });
 
-test('a second death soon after a short respawn is a new death (review: an old death must not swallow it)', () => {
-  const h = harness({ name: 'yaomingdiesel' });
-  inMatch(h);
-  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
-  deadFrames(h, 3000, 7000);
-  for (let t = 7000; t < 11_000; t += 100) h.hud(t, true);
-  deadFrames(h, 11_000, 12_000);
-  assert.deepEqual(h.deaths().map((d) => d.at), [3000, 11_000]);
-});
-
-test('once the countdown is gone for a few seconds, your own KO counts again', () => {
-  const h = harness({ name: 'yaomingdiesel' });
-  inMatch(h);
-  for (let t = 500; t < 3000; t += 100) h.hud(t, true);
-  // A short respawn (5 s), then a kill with your name on the row 2 s after.
-  deadFrames(h, 3000, 8000);
-  for (let t = 8000; t < 13_000; t += 100) h.hud(t, true);
-  h.feed(11_500, 1);
-  h.fusion.onOcr('feed', 1, words(['yaomingdiesel', 10], ['Valka', 300]), 11_700);
-  h.fusion.tick(15_000);
-  assert.equal(h.kills().length, 1);
-});

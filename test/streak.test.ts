@@ -121,5 +121,13 @@ test('a cut never drops a kill already in the clip that landed just after the de
   s.onKill(100000);
   s.onKill(102500); // reported before the death was
   s.cut(101000, 1000, 2000);
-  assert.equal(s.currentEndAt, 103200, 'the kill at 102.5 s stays in, with a little after it');
+  assert.equal(s.currentEndAt, 103000, 'the kill at 102.5 s stays in, up to the end of the grace');
+});
+
+test('a kept kill never stretches the clip past the death grace', () => {
+  const s = new StreakTracker({ preRollMs: 3000, postRollMs: 4000, maxClipMs: 60000, chainMs: 15000, lateMs: 2500 });
+  s.onKill(98000);
+  s.onKill(101800);
+  s.cut(100000, 1000, 2000);
+  assert.equal(s.currentEndAt, 102000);
 });

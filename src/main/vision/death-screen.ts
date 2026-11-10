@@ -145,11 +145,16 @@ export function deathScore(rgb: Uint8Array, width = DEATH_BOX.w, height = DEATH_
 
 // ---------- ffmpeg crops of a saved clip (the recording is the game picture) ----------
 
-/** `scale` is the in-game HUD scale setting (the live layout scales every HUD box with it the same way). */
-export const countdownCropFilter = (scale = 1) => {
-  const f = (v: number) => +(v * scale).toFixed(4);
-  return `crop=w=trunc(ih*${f(COUNTDOWN_CROP.w)}/2)*2:h=trunc(ih*${f(COUNTDOWN_CROP.h)}/2)*2:x=trunc(ih*${f(COUNTDOWN_CROP.x)}/2)*2:y=trunc(ih*${f(COUNTDOWN_CROP.y)}/2)*2`;
-};
+/**
+ * An ffmpeg crop of a box given in fractions of the frame height, `x` from the left edge or (`fromRight`)
+ * in from the right. `scale` is the in-game HUD scale setting: the live layout scales every box with it the same way.
+ */
+function cropFilter(box: { x: number; y: number; w: number; h: number }, fromRight: boolean, scale: number): string {
+  const px = (v: number) => `trunc(ih*${+(v * scale).toFixed(4)}/2)*2`;
+  return `crop=w=${px(box.w)}:h=${px(box.h)}:x=${fromRight ? `iw-${px(box.x)}` : px(box.x)}:y=${px(box.y)}`;
+}
+
+export const countdownCropFilter = (scale = 1) => cropFilter(COUNTDOWN_CROP, false, scale);
 
 /** Takes a w x h rgb24 box out of the left of rows `stride` pixels wide. */
 export function unpad(strip: Uint8Array, stride: number, w: number, h: number): Uint8Array {
@@ -158,10 +163,7 @@ export function unpad(strip: Uint8Array, stride: number, w: number, h: number): 
   return box;
 }
 
-export const deathCropFilter = (scale = 1) => {
-  const f = (v: number) => +(v * scale).toFixed(4);
-  return `crop=w=trunc(ih*${f(DEATH_CROP.w)}/2)*2:h=trunc(ih*${f(DEATH_CROP.h)}/2)*2:x=iw-trunc(ih*${f(DEATH_CROP.xFromRight)}/2)*2:y=trunc(ih*${f(DEATH_CROP.y)}/2)*2`;
-};
+export const deathCropFilter = (scale = 1) => cropFilter({ ...DEATH_CROP, x: DEATH_CROP.xFromRight }, true, scale);
 
 // ---------- reading a clip's timeline ----------
 

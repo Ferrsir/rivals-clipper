@@ -104,11 +104,12 @@ test('a kill that lands just after your death still gets the clip cut at the dea
   assert.ok(v.action === 'trim' && v.untilSec >= 5 && v.untilSec <= 5.25, JSON.stringify(v));
 });
 
-test('the Studio keeps a trade kill: the first 1.5 s of a death seen as it happened are not "dead"', () => {
+test('the Studio keeps a trade kill up to 1.5 s after a death seen as it happened', () => {
   const { dead, deaths } = readDeaths(samples(10, [[4, 8]]));
   assert.deepEqual(deaths, [4]);
-  assert.ok(!dead.some((t) => t < 5.5), dead.join(','));
-  assert.ok(dead.includes(6));
+  // A kill is dropped within 0.75 s of a dead time, so the first dead time is 0.75 s past the trade window.
+  assert.ok(!dead.some((t) => t < 6.25), dead.join(','));
+  assert.ok(dead.includes(6.5));
   // Already dead from the first frame: every dead time counts.
   assert.ok(readDeaths(samples(6, [[0, 4, true]])).dead.includes(0));
 });

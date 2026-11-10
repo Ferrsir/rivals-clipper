@@ -89,8 +89,6 @@ test('reverse save completion preserves each clip and its original match and dim
   assert.equal(h.saved[1].match.map, 'Original map');
   assert.equal(h.saved[0].video.width, 640);
   assert.equal(h.saved[1].video.width, 320);
-  // Clips join the match's list once their death-screen check is done.
-  await new Promise((r) => setImmediate(r));
   assert.equal(h.ctx.matchClips.length, 1);
 });
 
@@ -234,3 +232,4 @@ test('a match bar lost long before the kills does not shorten the clip', async (
   h.advance(130000);
   assert.deepEqual(stops, [105000]);
 });
+

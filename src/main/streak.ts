@@ -111,7 +111,7 @@ export class StreakTracker {
     if (!this.active) return undefined;
     this.ceiling = Math.min(this.ceiling, Math.max(this.clipStart + 1, at + graceMs));
     // A kill already in the clip within the grace window stays in the footage, with a little after it.
-    const keptKill = this.lastKill <= at + graceMs ? this.lastKill + KEEP_AFTER_KILL_MS : -Infinity;
+    const keptKill = this.lastKill <= at + graceMs ? Math.min(this.lastKill + KEEP_AFTER_KILL_MS, this.ceiling) : -Infinity;
     const endAt = Math.min(this.endAt, Math.max(this.clipStart + 1, at + tailMs, keptKill));
     const stopAt = Math.max(endAt, Math.min(this.stopAt, this.ceiling + (this.cfg.lateMs ?? 0)));
     if (endAt === this.endAt && stopAt === this.stopAt) return undefined;
