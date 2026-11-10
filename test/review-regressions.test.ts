@@ -154,3 +154,28 @@ test('character crop follows a moving reference patch and holds on blank frames'
   const blank=trackFrames([new Uint8Array(10000),new Uint8Array(10000)],100,100,3);
   assert.equal(blank[0].x,blank[1].x);
 });
+
+import { PortraitBook } from '../src/main/vision/portrait';
+
+function fakePortrait(seed: number) {
+  const luma = new Uint8Array(34 * 36);
+  let x = seed;
+  for (let i = 0; i < luma.length; i++) { x = (x * 1103515245 + 12345) % 2147483648; luma[i] = 40 + (x % 180); }
+  return { id: 'portrait' as const, w: 34, h: 36, u: 0.25, mask: new Uint8Array(1224), luma };
+}
+
+test('hero portraits are learned from a clean read, matched after, and survive a restart', () => {
+  const book = new PortraitBook();
+  const dp = fakePortrait(1), elsa = fakePortrait(2);
+  assert.equal(book.match(dp), undefined);
+  assert.equal(book.learn('Deadpool', dp), true);
+  assert.equal(book.learn('Deadpool', dp), false, 'already known');
+  assert.equal(book.learn('Elsa Bloodstone', elsa), true);
+  assert.equal(book.match(dp), 'Deadpool');
+  assert.equal(book.match(elsa), 'Elsa Bloodstone');
+  const again = new PortraitBook(book.export());
+  assert.equal(again.match(dp), 'Deadpool');
+  assert.equal(again.match(fakePortrait(3)), undefined, 'an unknown portrait names nobody');
+  const flat = { ...dp, luma: new Uint8Array(1224).fill(90) };
+  assert.equal(book.learn('Deadpool', flat), false, 'a blank portrait (menu, fade) is never learned');
+});

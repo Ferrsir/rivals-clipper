@@ -21,6 +21,8 @@ export interface DetectorMemory {
   hudVerified?: boolean;
   /** Your name, learned from the kill feed when it isn't set in Settings. */
   learnedName?: string;
+  /** Your hero portraits (bottom-left HUD), learned from clean name reads. Base64 34x36 luma, by hero. */
+  portraits?: Record<string, string[]>;
   /** Screen size the memory was learned at. A different size clears hudVerified. */
   screen?: string;
 }
@@ -133,6 +135,12 @@ export class ScreenDetector {
         playerName: opts.playerName || this.memory.learnedName,
         hudVerified: !!this.memory.hudVerified,
         strictKills: true,
+        portraits: this.memory.portraits,
+        onPortraitsLearned: (portraits) => {
+          if (stale() || this.stopping) return;
+          this.memory.portraits = portraits;
+          this.saveMemory();
+        },
       },
       {
         onHudVerified: () => {
