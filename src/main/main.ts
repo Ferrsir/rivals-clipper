@@ -391,7 +391,9 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
 function onInfoUpdate(feature: string, key: string, value: unknown) {
   log.write('info', { feature, key, value });
   const learned = state.onInfoUpdate(feature, key, value, Date.now());
-  if (key === 'local_hero' && pending && !pending.hero) pending.hero = state.myHero;
+  // The hero seen while the clip records is the clip's hero. A clip can start before the new match's
+  // hero is recognised (2026-11-09 19:26: a Magik penta started while the last match's Deadpool was still set).
+  if (key === 'local_hero' && pending && state.myHero) pending.hero = state.myHero;
   if (learned) {
     try {
       fs.writeFileSync(paths(settings.rootFolder).heroRoles, JSON.stringify(state.heroRoles, null, 2));
