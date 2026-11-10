@@ -203,8 +203,8 @@ export class MatchState {
 
   onMatchStart(): void {
     this.lastDeathAt = -Infinity;
-    // A new match can be a new hero: don't carry the last match's hero into its clips.
-    this.detectedHero = undefined;
+    // The hero is kept: match_start also fires mid-match (the match bar returns after the scoreboard),
+    // and the portrait matcher only reports a hero when it changes. A clip takes the newest hero anyway.
     this.context = { round: 0 };
     this.ultHistory = [];
     this.recentFeed = [];
