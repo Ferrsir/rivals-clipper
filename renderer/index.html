@@ -7,10 +7,31 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Icons, referenced with <use href="#i-name">. -->
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-logo" viewBox="0 0 32 32"><path d="M6 4h14l6 6v6h-6l-4 4 4 8H12l-2-8H6z" fill="currentColor"/><path d="M10 9h8l3 3H10z" fill="#0a0b14" opacity=".55"/></symbol>
+    <symbol id="i-clips" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></symbol>
+    <symbol id="i-studio" viewBox="0 0 24 24"><path d="M4 7l3-3h13v13l-3 3H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 11h8M8 15h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2l2.2 6.3L20.5 10l-6.3 2.2L12 18.5l-2.2-6.3L3.5 10l6.3-1.7zM19 15l1 2.6 2.6 1-2.6 1L19 22l-1-2.4-2.6-1 2.6-1z" fill="currentColor"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 10.5l5-3v9l-5-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 9v4l2.5 2.5M9 2h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-update" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20.5c1.2-4 4.3-6 8-6s6.8 2 8 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></symbol>
+  </svg>
+
   <!-- First launch: sign in with Claude or ChatGPT -->
   <section id="signin" class="signin hidden">
     <div class="signin-card">
-      <h1>Rivals Clipper</h1>
+      <div class="signin-logo"><svg><use href="#i-logo"/></svg></div>
+      <h1>Rivals <span>Clipper</span></h1>
       <p class="muted">Sign in with the AI you already pay for. It powers clip tagging and the editing studio. You log in on Anthropic's or OpenAI's own page, and this app never sees your password.</p>
       <div class="providers">
         <div class="provider" data-provider="claude">
@@ -30,45 +51,66 @@
 
   <!-- Main app -->
   <div id="app" class="app hidden">
-    <nav class="sidebar">
-      <div class="brand">Rivals Clipper</div>
-      <button class="tab active" data-tab="clipper">Clipper</button>
-      <button class="tab" data-tab="studio">Studio</button>
-      <button class="tab" data-tab="settings">Settings</button>
-      <div class="account" id="accountBadge"></div>
+    <nav class="sidebar" aria-label="Main">
+      <div class="brand"><svg class="brand-mark"><use href="#i-logo"/></svg><span>Rivals<b>Clipper</b></span></div>
+      <button class="tab active" data-tab="clipper"><svg><use href="#i-clips"/></svg><span>Clips</span></button>
+      <button class="tab" data-tab="studio"><svg><use href="#i-studio"/></svg><span>Studio</span></button>
+      <button class="tab" data-tab="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
+      <div class="sidebar-foot">
+        <div class="account" id="accountBadge"></div>
+      </div>
     </nav>
 
     <div class="content">
-      <header><div id="status" class="status">Starting…</div></header>
+      <header class="topbar">
+        <div class="page-title">
+          <h1 id="pageTitle">Clips</h1>
+          <p id="pageSub" class="muted">Every kill, saved and ranked automatically.</p>
+        </div>
+        <div id="status" class="status" role="status">Starting…</div>
+      </header>
       <div id="packagesWarning" class="notice error hidden" role="alert"></div>
       <div id="autoSigninNotice" class="notice hidden"></div>
 
       <section id="tab-clipper" class="view">
-        <div class="panel clips">
+        <div class="stats" aria-label="Library at a glance">
+          <div class="stat gold"><span class="stat-label">Clips</span><span id="statClips" class="stat-value">0</span></div>
+          <div class="stat pink"><span class="stat-label">Kills shown</span><span id="statKills" class="stat-value">0</span></div>
+          <div class="stat blue"><span class="stat-label">Most played</span><span id="statHero" class="stat-value">–</span></div>
+          <div class="stat green"><span class="stat-label">Best score</span><span id="statBest" class="stat-value">–</span></div>
+        </div>
+
+        <div class="toolbar">
+          <label class="search"><svg><use href="#i-search"/></svg><input id="q" type="search" placeholder="Search hero, map, tag…" aria-label="Search clips"></label>
+          <select id="fHero" aria-label="Hero"><option value="">All heroes</option></select>
+          <select id="fMap" aria-label="Map"><option value="">All maps</option></select>
+          <select id="fType" aria-label="Mode"><option value="">All modes</option></select>
+          <select id="fKills" aria-label="Kills">
+            <option value="0">Any kills</option><option value="2">2+ kills</option><option value="3">3+ kills</option>
+            <option value="4">4+ kills</option><option value="5">5+ kills</option><option value="6">Team wipe (6)</option>
+          </select>
+          <select id="fRating" aria-label="Rating">
+            <option value="0">Any rating</option><option value="3">3★ and up</option><option value="4">4★ and up</option><option value="5">5★ only</option>
+          </select>
+          <button id="clearFilters" class="link">Clear</button>
+        </div>
+        <div class="list-head">
           <h2>Library <span id="count" class="muted"></span></h2>
-          <div class="filters">
-            <input id="q" type="search" placeholder="Search hero, map, tag…">
-            <select id="fHero"><option value="">All heroes</option></select>
-            <select id="fMap"><option value="">All maps</option></select>
-            <select id="fType"><option value="">All modes</option></select>
-            <select id="fKills">
-              <option value="0">Any kills</option><option value="2">2+ kills</option><option value="3">3+ kills</option>
-              <option value="4">4+ kills</option><option value="5">5+ kills</option><option value="6">Team wipe (6)</option>
-            </select>
-            <select id="fRating">
-              <option value="0">Any rating</option><option value="3">3★ and up</option><option value="4">4★ and up</option><option value="5">5★ only</option>
-            </select>
+          <div id="tagChips" class="chips"></div>
+          <span class="spacer"></span>
+          <label class="sort">Sort
             <select id="sort">
               <option value="new">Newest</option><option value="score">Best score</option>
               <option value="kills">Most kills</option><option value="rating">My rating</option>
             </select>
-            <button id="clearFilters" class="link">Clear</button>
-            <button id="aiTagAll" class="ai-all">AI-tag untagged clips</button>
-          </div>
-          <div id="tagChips" class="chips"></div>
-          <p id="emptyLibrary" class="muted hidden"></p>
-          <ul id="clipList"></ul>
+          </label>
+          <button id="aiTagAll" class="ai-all"><svg><use href="#i-spark"/></svg><span>AI-tag untagged clips</span></button>
         </div>
+        <div id="emptyLibrary" class="empty hidden">
+          <svg><use href="#i-clips"/></svg>
+          <p id="emptyText"></p>
+        </div>
+        <ul id="clipList" class="clip-grid"></ul>
       </section>
 
       <!-- The Studio module mounts here. See docs/studio-interface.md -->
@@ -81,98 +123,114 @@
 
       <section id="tab-settings" class="view hidden">
         <div class="settings-grid">
-          <div class="panel">
-            <h2>Recording</h2>
-            <label>Library folder
-              <span class="row"><input id="rootFolder" readonly><button id="pickFolder">Change</button><button id="openFolder">Open</button></span>
-            </label>
-            <label>Resolution
-              <select id="resolution">
-                <option value="native">Match my monitor (recommended)</option>
-                <option value="1080p">1080p</option>
-                <option value="1440p">1440p</option>
-                <option value="2160p">4K</option>
-              </select>
-            </label>
-            <label>Frame rate
-              <select id="fps"><option value="60">60 fps</option><option value="120">120 fps (smooth slow-mo)</option></select>
-            </label>
-            <label>Game audio
-              <select id="gameAudio">
-                <option value="game-only">Marvel Rivals only (no Discord or music)</option>
-                <option value="desktop">Everything I hear</option>
-              </select>
-            </label>
-            <label class="check"><input type="checkbox" id="recordMic"> Record my mic on its own track</label>
-            <label>Mic
-              <select id="micDeviceId"><option value="default">Windows default</option></select>
-            </label>
-            <label class="check"><input type="checkbox" id="useMicInReelsByDefault"> Use mic in reels by default</label>
-            <label class="check"><input type="checkbox" id="clipAssists"> Clip my assists too, not just my final hits</label>
-            <label class="check"><input type="checkbox" id="clipPractice"> Also auto-clip in the Practice Range</label>
-            <label class="check"><input type="checkbox" id="aiTagging"> After each match, let my AI tag new clips (sends a few frames to your Claude or ChatGPT)</label>
-            <label>Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="4"></label>
-            <label>Seconds to keep after the last kill <input type="number" id="postRollSeconds" min="3" max="4"></label>
-            <label>Kills this many seconds apart join one clip <input type="number" id="chainSeconds" min="4" max="20"></label>
-            <label>Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>
-            <button id="save" class="primary">Save settings</button>
+          <div class="settings-col">
+            <div class="panel card">
+              <h2 class="card-title"><span class="ico gold"><svg><use href="#i-folder"/></svg></span>Recording</h2>
+              <label class="field">Library folder
+                <span class="row"><input id="rootFolder" readonly><button id="pickFolder">Change</button><button id="openFolder">Open</button></span>
+              </label>
+
+              <h3 class="group"><svg><use href="#i-video"/></svg>Video</h3>
+              <div class="pair">
+                <label class="field">Resolution
+                  <select id="resolution">
+                    <option value="native">Match my monitor (recommended)</option>
+                    <option value="1080p">1080p</option>
+                    <option value="1440p">1440p</option>
+                    <option value="2160p">4K</option>
+                  </select>
+                </label>
+                <label class="field">Frame rate
+                  <select id="fps"><option value="60">60 fps</option><option value="120">120 fps (smooth slow-mo)</option></select>
+                </label>
+              </div>
+
+              <h3 class="group"><svg><use href="#i-audio"/></svg>Audio</h3>
+              <label class="field">Game audio
+                <select id="gameAudio">
+                  <option value="game-only">Marvel Rivals only (no Discord or music)</option>
+                  <option value="desktop">Everything I hear</option>
+                </select>
+              </label>
+              <label class="check"><input type="checkbox" id="recordMic"><span>Record my mic on its own track</span></label>
+              <label class="field">Mic
+                <select id="micDeviceId"><option value="default">Windows default</option></select>
+              </label>
+              <label class="check"><input type="checkbox" id="useMicInReelsByDefault"><span>Use mic in reels by default</span></label>
+
+              <h3 class="group"><svg><use href="#i-target"/></svg>What gets clipped</h3>
+              <label class="check"><input type="checkbox" id="clipAssists"><span>Clip my assists too, not just my final hits</span></label>
+              <label class="check"><input type="checkbox" id="clipPractice"><span>Also auto-clip in the Practice Range</span></label>
+              <label class="check"><input type="checkbox" id="aiTagging"><span>After each match, let my AI tag new clips <small class="muted">(sends a few frames to your Claude or ChatGPT)</small></span></label>
+
+              <h3 class="group"><svg><use href="#i-timer"/></svg>Timing</h3>
+              <label class="inline">Seconds before first kill <input type="number" id="preRollSeconds" min="3" max="4"></label>
+              <label class="inline">Seconds to keep after the last kill <input type="number" id="postRollSeconds" min="3" max="4"></label>
+              <label class="inline">Kills this many seconds apart join one clip <input type="number" id="chainSeconds" min="4" max="20"></label>
+              <label class="inline">Manual clip hotkey <input id="manualClipHotkey" placeholder="F9"></label>
+              <button id="save" class="primary">Save settings</button>
+            </div>
           </div>
-          <div class="panel">
-            <h2>Updates</h2>
-            <p id="updateText" class="muted">Checking the installed version…</p>
-            <div id="updateBar" class="update-bar hidden"><span></span></div>
-            <span class="row">
-              <button id="updateCheck">Check for updates</button>
-              <button id="updateInstall" class="primary hidden">Update</button>
-              <button id="updateCancel" class="hidden">Don't install yet</button>
-            </span>
-            <p class="muted small update-note">Your clips, reels and settings stay where they are. The update waits until Marvel Rivals is closed, then the app restarts on the new version.</p>
-          </div>
-          <div class="panel">
-            <h2>Account</h2>
-            <p class="muted">AI features use whichever account is active.</p>
-            <div id="accountList"></div>
-          </div>
-          <div class="panel">
-            <h2>Kill detection</h2>
-            <p class="muted">Built-in mode finds your kills by watching the screen (kill feed, KO list, streak banners) and records with your graphics card. It never touches the game, so it's safe with anti-cheat, and it doesn't need Overwolf.</p>
-            <label>How kills are detected
-              <select id="engine">
-                <option value="local">Built-in screen detection (no account or ads)</option>
-              </select>
-            </label>
-            <label>Your in-game name
-              <input id="playerName" placeholder="Leave empty to learn it from the kill feed" maxlength="40">
-            </label>
-            <p id="learnedName" class="muted small hidden"></p>
-            <label>In-game HUD scale
-              <input type="number" id="hudScale" min="0.5" max="1.5" step="0.05" data-number>
-            </label>
-            <p class="muted small">1 means 100%. Change it only if you changed the HUD size in the game's settings.</p>
-            <label class="check"><input type="checkbox" id="readScreenText"> Read names, streaks, map and match result from the screen</label>
-            <label>Checks per second
-              <select id="detectionFps" data-number>
-                <option value="5">5 (lightest)</option>
-                <option value="10">10 (recommended)</option>
-                <option value="15">15</option>
-              </select>
-            </label>
-            <p class="muted small">Video capture follows the Marvel Rivals game window. Recording waits while the window is unavailable.</p>
-            <label>Game picture aspect ratio
-              <input type="number" id="hudAspect" min="0" max="5" step="0.01" data-number>
-            </label>
-            <p class="muted small">Use 0 for the whole game window. For black bars on both sides, enter the width of the picture divided by its height.</p>
-            <label>Video encoder
-              <select id="localEncoder">
-                <option value="auto">Automatic (picks the best one)</option>
-                <option value="nvenc">NVIDIA NVENC</option>
-                <option value="amf">AMD AMF</option>
-                <option value="qsv">Intel Quick Sync</option>
-                <option value="x264">CPU (slowest, up to 1080p)</option>
-              </select>
-            </label>
-            <div id="detectionStatus" class="muted small"></div>
-            <button id="saveDetection" class="primary">Save settings</button>
+          <div class="settings-col">
+            <div class="panel card">
+              <h2 class="card-title"><span class="ico green"><svg><use href="#i-update"/></svg></span>Updates</h2>
+              <p id="updateText" class="muted">Checking the installed version…</p>
+              <div id="updateBar" class="update-bar hidden"><span></span></div>
+              <span class="row">
+                <button id="updateCheck">Check for updates</button>
+                <button id="updateInstall" class="primary hidden">Update</button>
+                <button id="updateCancel" class="hidden">Don't install yet</button>
+              </span>
+              <p class="muted small update-note">Your clips, reels and settings stay where they are. The update waits until Marvel Rivals is closed, then the app restarts on the new version.</p>
+            </div>
+            <div class="panel card">
+              <h2 class="card-title"><span class="ico blue"><svg><use href="#i-user"/></svg></span>Account</h2>
+              <p class="muted">AI features use whichever account is active.</p>
+              <div id="accountList"></div>
+            </div>
+            <div class="panel card">
+              <h2 class="card-title"><span class="ico pink"><svg><use href="#i-eye"/></svg></span>Kill detection</h2>
+              <p class="muted">Built-in mode finds your kills by watching the screen (kill feed, KO list, streak banners) and records with your graphics card. It never touches the game, so it's safe with anti-cheat, and it doesn't need Overwolf.</p>
+              <div id="detectionStatus" class="detect-live small"></div>
+              <label class="field">How kills are detected
+                <select id="engine">
+                  <option value="local">Built-in screen detection (no account or ads)</option>
+                </select>
+              </label>
+              <label class="field">Your in-game name
+                <input id="playerName" placeholder="Leave empty to learn it from the kill feed" maxlength="40">
+              </label>
+              <p id="learnedName" class="muted small hidden"></p>
+              <div class="pair">
+                <label class="field">In-game HUD scale
+                  <input type="number" id="hudScale" min="0.5" max="1.5" step="0.05" data-number>
+                </label>
+                <label class="field">Checks per second
+                  <select id="detectionFps" data-number>
+                    <option value="5">5 (lightest)</option>
+                    <option value="10">10 (recommended)</option>
+                    <option value="15">15</option>
+                  </select>
+                </label>
+              </div>
+              <p class="muted small">HUD scale 1 means 100%. Change it only if you changed the HUD size in the game's settings.</p>
+              <label class="check"><input type="checkbox" id="readScreenText"><span>Read names, streaks, map and match result from the screen</span></label>
+              <p class="muted small">Video capture follows the Marvel Rivals game window. Recording waits while the window is unavailable.</p>
+              <label class="field">Game picture aspect ratio
+                <input type="number" id="hudAspect" min="0" max="5" step="0.01" data-number>
+              </label>
+              <p class="muted small">Use 0 for the whole game window. For black bars on both sides, enter the width of the picture divided by its height.</p>
+              <label class="field">Video encoder
+                <select id="localEncoder">
+                  <option value="auto">Automatic (picks the best one)</option>
+                  <option value="nvenc">NVIDIA NVENC</option>
+                  <option value="amf">AMD AMF</option>
+                  <option value="qsv">Intel Quick Sync</option>
+                  <option value="x264">CPU (slowest, up to 1080p)</option>
+                </select>
+              </label>
+              <button id="saveDetection" class="primary">Save settings</button>
+            </div>
           </div>
         </div>
       </section>
@@ -180,10 +238,13 @@
   </div>
 
   <dialog id="clipPlayer" aria-label="Watch clip">
+    <div class="player-head">
+      <strong id="clipTitle">Clip</strong>
+      <button id="closeClipPlayer" class="icon-btn" aria-label="Close">✕</button>
+    </div>
     <video id="clipVideo" controls preload="metadata"></video>
     <p id="clipPlaybackStatus" role="status"></p>
     <div id="clipMarkers" aria-label="Detected kills"></div>
-    <button id="closeClipPlayer">Close</button>
   </dialog>
   <script src="renderer.js"></script>
 </body>
