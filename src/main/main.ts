@@ -366,6 +366,8 @@ async function checkSavedClip(clip: ClipSidecar): Promise<ClipSidecar | undefine
         if (fs.existsSync(f)) await shell.trashItem(f).catch(() => undefined);
       }
       matchClips = matchClips.filter((f) => f !== clip.videoFile);
+      // A Library view may have listed it while it was checked (or when the match result came): both re-read on this.
+      sendIfOpen(win, 'clip-saved', { removed: clip.videoFile });
       status('Dropped a clip whose kills were in your death replay (moved to the Recycle Bin)');
       return undefined;
     }
