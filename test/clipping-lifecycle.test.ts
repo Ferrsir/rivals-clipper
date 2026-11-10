@@ -152,12 +152,14 @@ test('a misread hero name is stored as the real hero, and junk keeps the last go
   assert.equal(s.myHero, 'Deadpool');
 });
 
-test('a new match forgets the last hero, and a clip takes the hero recognised while it records', async () => {
+test('match_start keeps the hero, and a clip takes the hero recognised while it records', async () => {
   const h = harness();
   h.ctx.state.onInfoUpdate('game_info', 'local_hero', 'Deadpool', 0);
+  // 2026-11-10 04:34: match_start fired again mid-match and the clips came out "Unknown hero".
   h.ctx.onGameEvent('screen', 'match_start', undefined, 99000);
-  assert.equal(h.ctx.state.myHero, undefined);
+  assert.equal(h.ctx.state.myHero, 'Deadpool');
   h.ctx.handleKill(100000); await Promise.resolve();
+  assert.equal(h.ctx.pending.hero, 'Deadpool');
   h.ctx.onInfoUpdate('game_info', 'local_hero', 'Magik');
   assert.equal(h.ctx.pending.hero, 'Magik');
 });
