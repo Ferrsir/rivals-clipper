@@ -26,6 +26,7 @@ import { registerStudio } from './studio/register';
 import { findFfmpeg } from './studio/ffmpeg-bin';
 import { AiTagger, untagged } from './ai-tagger';
 import { installGracefulShutdown, sendIfOpen } from './shutdown';
+import { judgeClip, scanDeathScreen, trimClipFile } from './clip-check';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -37,6 +38,8 @@ interface PendingClip {
   hero?: string;
   ultUsedBeforeKills: boolean;
   firstKillAt?: number;
+  /** When you died during the clip (its footage was cut there). */
+  diedAt?: number;
   match: ClipSidecar['match'];
   matchSource: ClipSidecar['match'];
   bufferInfo: BufferInfo;
@@ -95,6 +98,10 @@ let quitting = false;
 let shutdownStudio: (() => Promise<void>) | undefined;
 /** Between match_start and match_end. AI tagging waits until this is false. */
 let inMatch = false;
+/** Your last death (screen or Overwolf), so a clip started by a KO right after it still ends there. */
+let lastDeathAt = -Infinity;
+/** Since when the match bar has been gone (a round change or the end of the match), or undefined while it shows. */
+let hudGoneAt: number | undefined;
 let lastStatus = 'Waiting for Marvel Rivals';
 /** Set when Overwolf's game events or recorder never loaded, so the window can say why instead of "waiting". */
 let packagesProblem: string | undefined;
@@ -228,6 +235,31 @@ async function beginClip(trigger: 'auto' | 'manual', now: number, pastMs: number
   }
 }
 
+/** Footage kept after your death, and the most a KO right after it can stretch that. */
+const DEATH_TAIL_MS = 1000;
+const DEATH_GRACE_MS = 2000;
+
+/** You died at `at`: an auto clip ends just after (Ferris: no death screens in clips). Manual clips are left alone. */
+function cutAtDeath(at: number) {
+  if (!pending || pending.trigger !== 'auto' || !streak.isActive) return;
+  pending.diedAt = Math.min(pending.diedAt ?? Infinity, at);
+  const stopAt = streak.cut(at, DEATH_TAIL_MS, DEATH_GRACE_MS);
+  if (stopAt !== undefined) scheduleStop(stopAt);
+}
+
+/**
+ * Where an auto clip should end: the streak's end, but not into a round change or the match ending
+ * (the match bar gone, as in the 2026-11-09 18:42 clip that ran on into "CONTROL KRAKOA"). A kill
+ * keeps at least a second after it.
+ */
+function clipEnd(endAt: number | undefined): number | undefined {
+  if (!pending || pending.trigger !== 'auto' || hudGoneAt === undefined) return endAt;
+  const lastKill = Math.max(...pending.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => e.at), -Infinity);
+  if (hudGoneAt <= lastKill) return endAt;
+  const cut = Math.max(hudGoneAt + 300, lastKill + 1000);
+  return endAt === undefined ? cut : Math.min(endAt, cut);
+}
+
 function scheduleStop(stopAt: number) {
   if (stopTimer) clearTimeout(stopTimer);
   stopTimer = setTimeout(endStreak, Math.max(0, stopAt - Date.now()));
@@ -248,7 +280,7 @@ function stopCapture(until?: number) {
 
 /** The streak's wait is over: save the clip, trimmed to just after its last kill. */
 function endStreak() {
-  stopCapture(streak.isActive ? streak.currentEndAt : undefined);
+  stopCapture(clipEnd(streak.isActive ? streak.currentEndAt : undefined));
 }
 
 function onClipSaved(video: SavedVideo, clip: PendingClip) {
@@ -257,8 +289,6 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     status(video.recoveryFolder ? `Clip failed to save. Recovery files are in ${video.recoveryFolder}` : 'Clip failed to save', video.error);
     return;
   }
-  const kills = clip.events.filter((e) => e.type === 'kill').length;
-  const assists = clip.events.filter((e) => e.type === 'assist').length;
   const info = clip.bufferInfo;
   // The local recorder says which tracks it wrote; Overwolf clips follow the buffer settings.
   const tracks = video.audioTracks ?? (info.micRecorded ? ['game', 'mic'] : ['game']);
@@ -279,9 +309,47 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     useMic: tracks.includes('mic') && settings.useMicInReelsByDefault,
   });
   if (clip.matchSource === state.context) matchClips.push(saved.videoFile);
-  status(`Saved ${kills}-kill${assists ? `, ${assists}-assist` : ''} clip (score ${saved.score})`);
-  pushClip(saved);
-  tagger.enqueue(saved.videoFile);
+  void checkSavedClip(saved).then((final) => {
+    if (!final) return;
+    const k = final.events.filter((e) => e.type === 'kill').length;
+    const a = final.events.filter((e) => e.type === 'assist').length;
+    status(`Saved ${k}-kill${a ? `, ${a}-assist` : ''} clip (score ${final.score})`);
+    pushClip(final);
+    tagger.enqueue(final.videoFile);
+  });
+}
+
+/**
+ * Looks at the saved footage for the death screen: cuts the clip just after your death, or drops it when
+ * every kill in it happened while you were dead. Returns the clip as it ends up, or undefined if dropped.
+ * Any problem leaves the clip as it was.
+ */
+async function checkSavedClip(clip: ClipSidecar): Promise<ClipSidecar | undefined> {
+  if (clip.trigger !== 'auto' || engine !== 'local') return clip;
+  try {
+    const ff = await localFfmpeg();
+    const samples = await scanDeathScreen(ff, clip.videoFile);
+    const times = clip.events.filter((e) => e.type === 'kill' || e.type === 'assist').map((e) => (e.at - clip.startTimeEpoch) / 1000);
+    const verdict = judgeClip(samples, times, clip.durationMs / 1000);
+    if (verdict.action === 'keep') return clip;
+    log.write('skip', { reason: 'death screen', action: verdict.action, why: verdict.reason, clip: clip.id });
+    if (verdict.action === 'reject') {
+      // The Recycle Bin, so a wrong call can be undone. If that fails, the clip stays.
+      await shell.trashItem(clip.videoFile);
+      for (const f of [sidecarPath(clip.videoFile), clip.videoFile.replace(/\.mp4$/i, '.cover.jpg')]) {
+        if (fs.existsSync(f)) await shell.trashItem(f).catch(() => undefined);
+      }
+      matchClips = matchClips.filter((f) => f !== clip.videoFile);
+      status('Dropped a clip whose kills were in your death replay (moved to the Recycle Bin)');
+      return undefined;
+    }
+    await trimClipFile(ff, clip.videoFile, verdict.untilSec);
+    const end = clip.startTimeEpoch + verdict.untilSec * 1000;
+    return updateSidecar(clip.videoFile, { durationMs: Math.round(verdict.untilSec * 1000), events: clip.events.filter((e) => e.at <= end) }) ?? clip;
+  } catch (err) {
+    log.write('skip', { reason: 'clip check failed', error: (err as Error).message, clip: clip.id });
+    return clip;
+  }
 }
 
 let practiceNoticeShown = false;
@@ -313,8 +381,11 @@ function handleMoment(type: 'kill' | 'assist', now: number, total?: number, vict
       endStreak();
       action = streak.onKill(now);
     }
-    if (action.type === 'start') void beginClip('auto', now, action.pastDurationMs, action.stopAt);
-    else if (action.type === 'extend') scheduleStop(action.stopAt);
+    if (action.type === 'start') {
+      void beginClip('auto', now, action.pastDurationMs, action.stopAt);
+      // A KO in the moment after your death (a projectile landing): its clip still ends at the death.
+      if (now - lastDeathAt <= DEATH_GRACE_MS) cutAtDeath(lastDeathAt);
+    } else if (action.type === 'extend') scheduleStop(action.stopAt);
   }
   // Still record the kill into a clip that is already recording (e.g. a manual one in practice).
   // Wait briefly so the matching kill_feed line (with the victim) has arrived.
@@ -358,7 +429,13 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     }
     case 'death':
       state.onDeath(now);
+      lastDeathAt = now;
       pending?.events.push({ type: 'death', at: now, myHero: state.myHero });
+      cutAtDeath(now);
+      break;
+    case 'hud':
+      // The match bar went away (round change, match end) or came back.
+      hudGoneAt = value === false ? now : undefined;
       break;
     case 'kill_feed':
       state.onKillFeed(value, now);
@@ -371,6 +448,8 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     }
     case 'match_start':
       inMatch = true;
+      hudGoneAt = undefined;
+      lastDeathAt = -Infinity;
       state.onMatchStart();
       matchClips = [];
       practiceNoticeShown = false;
@@ -382,7 +461,7 @@ function onGameEvent(feature: string, key: string, value: unknown, at = Date.now
     case 'match_end':
       inMatch = false;
       tagger.kick();
-      if (pending) stopCapture();
+      if (pending) stopCapture(clipEnd(streak.isActive ? streak.currentEndAt : undefined));
       status('Match ended');
       break;
   }

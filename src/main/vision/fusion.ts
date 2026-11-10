@@ -17,7 +17,13 @@
 //     yours, so for a while after you die only KOs with your own name in the feed row count;
 //   - a light kill-feed row with two names and neither is yours means the game is showing someone
 //     else's view (spectating, a replay): the same rule applies for a while;
-//   - SPECTATING / REPLAY / RESPAWN text on screen means the same.
+//   - SPECTATING / REPLAY / RESPAWN text on screen means the same;
+//   - the respawn countdown (top left) or the "DEFEATED BY" card (death-screen.ts) means you are dead,
+//     whatever the kill feed says: the replay of your death shows your killer's view, with your name in
+//     their KO list and feed rows. When the countdown is the first sign (you died right there), a KO
+//     in the next 1.5 s still counts (a projectile landing, or the feed being slow); otherwise none do.
+// The countdown is also the fastest sign of your own death (the feed row can be read seconds late),
+// so it emits the death event, which ends the clip there.
 // Pure logic: time comes in with the observations, so it is unit-tested with recorded sequences.
 
 import type { Observation } from './detectors';
@@ -25,7 +31,7 @@ import type { RegionId } from './layout';
 
 export interface EventSink {
   /** Same keys as GEP's match_info events. `at` is when it happened on screen (epoch ms). */
-  gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end' | 'streak', value: unknown, at: number): void;
+  gameEvent(key: 'kill' | 'death' | 'assist' | 'kill_feed' | 'match_start' | 'match_end' | 'streak' | 'hud', value: unknown, at: number): void;
   infoUpdate(feature: 'game_info' | 'match_info', key: string, value: unknown): void;
 }
 
@@ -86,6 +92,10 @@ const DEATH_GRACE_MS = 1500;
 const DEAD_MS = 10_000;
 /** How long one sign of watching someone else (their feed row) holds. */
 const WATCH_MS = 8000;
+/** Death-screen spans less than this far apart are one death (the Tab scoreboard hides the countdown for a few seconds). */
+const DEATH_SCREEN_BRIDGE_MS = 3000;
+/** How long after the countdown was last seen you still count as dead (it can be hidden by the scoreboard). */
+const DEATH_SCREEN_HOLD_MS = 2000;
 /** Text the game shows when you are not the one playing. */
 const NOT_PLAYING_WORDS = /\b(SPECTATING|SPECTATOR|SPECTATE|OBSERVING|OBSERVER|REPLAY|RESPAWNING|RESPAWN\s+IN)\b/i;
 
@@ -178,6 +188,14 @@ export class ScreenFusion {
   private deadAt = -Infinity;
   /** Until when the screen is showing someone else's view. */
   private watchingUntil = -Infinity;
+  /** The death screen (respawn countdown or "DEFEATED BY" card) seen now: since when, last seen, and whether you died right there. */
+  private deathScreen?: { since: number; lastSeen: number; fresh: boolean };
+  private deathSignRun = 0;
+  private deathSignFirst?: { t: number; countdown: boolean; card: boolean };
+  private lastClearAt = -Infinity;
+  /** Last frame the match bar was on screen, and where the bar's current absence started. */
+  private hudRawSeenAt = -Infinity;
+  private hudGoneReported = false;
   private nextStatusAt = 0;
   private nextMapPollAt = 0;
   /** The map label said Practice Range: stay in practice even if something looks like a match bar. */
@@ -235,6 +253,7 @@ export class ScreenFusion {
         if (this.o.ocr) this.cb.requestOcr?.({ id: o.id, kind: 'banner' });
         break;
       case 'hud':
+        this.onDeathScreen(o.t, !!o.countdown, !!o.deathCard);
         this.onHud(o.t, o.matchHud);
         break;
       case 'crop':
@@ -351,7 +370,7 @@ export class ScreenFusion {
       if (!ready) continue;
       k.done = true;
       if (k.assist) {
-        if (this.notPlaying(k.t)) this.ignore(k.t, 'assist', k.victim);
+        if (this.notPlaying(k.t) || this.deadOnScreen(k.t)) this.ignore(k.t, 'assist', k.victim);
         else this.emitAssist(k.t, k.victim);
         continue;
       }
@@ -373,6 +392,11 @@ export class ScreenFusion {
         this.ignore(k.t, 'kill', k.victim);
         continue;
       }
+      // The death screen beats the feed: in the replay of your death your name is on your killer's KO.
+      if (this.deadOnScreen(k.t)) {
+        this.ignore(k.t, 'kill', k.victim, 'death screen (you were dead)');
+        continue;
+      }
       const mine = !!row && this.sidesOf(row)?.mine === 'attacker';
       if (mine) this.playing(k.t);
       else if (this.notPlaying(k.t)) {
@@ -392,6 +416,7 @@ export class ScreenFusion {
         // Same KO as a KO-list name that had no row of its own (e.g. it was paired with a death).
         const k = this.kos.find((x) => !x.feed && !x.assist && Math.abs(x.t - f.t) <= this.o.pairWindowMs);
         if (k) this.pair(k, f);
+        else if (this.deadOnScreen(f.t)) this.ignore(f.t, 'kill', sides.victim, 'death screen (you were dead)');
         else {
           this.playing(f.t);
           this.emitKill(f.t, sides.victim);
@@ -408,7 +433,7 @@ export class ScreenFusion {
         continue;
       }
       b.done = true;
-      if (this.notPlaying(b.t)) continue;
+      if (this.notPlaying(b.t) || this.deadOnScreen(b.t)) continue;
       // The game says the streak is still going: the clipper keeps the clip open for the next kill.
       if (b.count >= 2) this.sink.gameEvent('streak', b.count, b.t);
       // A banner always comes with a KO. If none was seen just before it, the KO was missed.
@@ -476,6 +501,9 @@ export class ScreenFusion {
   }
 
   private emitDeath(at: number, attacker: string | undefined): void {
+    // Already reported from the death screen (the feed row is often read later, or not at all).
+    const ds = this.deathScreen;
+    if (ds && at >= ds.since - DEATH_SCREEN_BRIDGE_MS && at <= ds.lastSeen + DEATH_SCREEN_BRIDGE_MS) return;
     this.deadAt = Math.max(this.deadAt, at);
     this.deaths++;
     this.sink.gameEvent('kill_feed', { attacker: attacker || undefined, victim: this.me, attacker_is_teammate: false, victim_is_teammate: true }, at);
@@ -485,7 +513,50 @@ export class ScreenFusion {
   /** True when the screen at `t` is probably not your own view: you're dead, spectating or watching a replay. */
   notPlaying(t: number): boolean {
     if (t > this.deadAt + DEATH_GRACE_MS && t < this.deadAt + DEAD_MS) return true;
-    return t < this.watchingUntil;
+    return t < this.watchingUntil || this.deadOnScreen(t);
+  }
+
+  /**
+   * True when the respawn countdown or the "DEFEATED BY" card says you were dead at `t`. A KO in the first
+   * 1.5 s of a death seen as it happened still counts; one during a death that was already under way doesn't.
+   */
+  deadOnScreen(t: number): boolean {
+    const ds = this.deathScreen;
+    if (!ds) return false;
+    const from = ds.fresh ? ds.since + DEATH_GRACE_MS : ds.since - 250;
+    return t > from && t <= Math.max(ds.lastSeen + DEATH_SCREEN_HOLD_MS, ds.since + DEAD_MS);
+  }
+
+  /** Called every frame with whether the countdown and the card are on screen. */
+  private onDeathScreen(t: number, countdown: boolean, card: boolean): void {
+    if (!countdown && !card) {
+      this.deathSignRun = 0;
+      this.deathSignFirst = undefined;
+      this.lastClearAt = t;
+      return;
+    }
+    this.deathSignRun++;
+    if (this.deathSignRun === 1) this.deathSignFirst = { t, countdown, card };
+    const ds = this.deathScreen;
+    if (ds && t - ds.lastSeen <= DEATH_SCREEN_BRIDGE_MS) {
+      if (this.deathSignRun >= 2) ds.lastSeen = t;
+      return;
+    }
+    // One frame could be a fluke: wait for the second.
+    if (this.deathSignRun < 2 || !this.deathSignFirst) return;
+    const first = this.deathSignFirst;
+    // You died right there: the countdown appeared (without the replay's card) just after a clear frame.
+    const fresh = first.countdown && !first.card && first.t - this.lastClearAt <= 1000;
+    const known = t - this.deadAt < DEAD_MS && first.t - this.deadAt >= -DEATH_SCREEN_BRIDGE_MS;
+    this.deathScreen = { since: first.t, lastSeen: t, fresh };
+    this.sink.infoUpdate('match_info', 'not_playing', fresh ? 'respawn countdown (you died)' : 'death screen');
+    // The feed may already have reported this death; otherwise this is the first (and fastest) sign of it.
+    if (!known) {
+      this.deadAt = first.t;
+      this.deaths++;
+      this.sink.gameEvent('kill_feed', { attacker: undefined, victim: this.me, attacker_is_teammate: false, victim_is_teammate: true }, first.t);
+      this.sink.gameEvent('death', this.deaths, first.t);
+    }
   }
 
   private markWatching(t: number, ms: number, why: string): void {
@@ -569,12 +640,15 @@ export class ScreenFusion {
   }
 
   private onHud(t: number, visible: boolean): void {
+    if (visible) this.hudRawSeenAt = t;
     this.hudWindow.push({ t, v: visible });
     while (this.hudWindow.length && this.hudWindow[0].t < t - 3000) this.hudWindow.shift();
     const share = this.hudWindow.filter((h) => h.v).length / this.hudWindow.length;
     const present = this.hudWindow.length >= 3 && share >= 0.4;
     if (present) {
       this.hudSeenAt = t;
+      if (this.hudGoneReported && this.inMatch) this.sink.gameEvent('hud', true, t);
+      this.hudGoneReported = false;
       if (!this.hudVerified) {
         this.hudVerified = true;
         this.cb.onHudVerified?.();
@@ -586,6 +660,10 @@ export class ScreenFusion {
       // The bar just went away: the match may be over. Check for the result screen for a while.
       this.hudLostAt = t;
       this.outcomeUntil = t + 20_000;
+      // A round change or the end of the match (2026-11-09 18:42: a clip ran on into "CONTROL KRAKOA").
+      // Reported from the first frame without the bar, so a clip can end there.
+      this.hudGoneReported = true;
+      this.sink.gameEvent('hud', false, Math.min(t, this.hudRawSeenAt + 1));
     }
   }
 

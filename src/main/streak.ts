@@ -32,6 +32,8 @@ export class StreakTracker {
   private clipStart = 0; // epoch ms the clip's footage begins
   private stopAt = 0;
   private endAt = 0;
+  /** Set when you died during the clip: footage can't run past this. */
+  private ceiling = Infinity;
 
   constructor(private cfg: StreakConfig) {}
 
@@ -53,11 +55,12 @@ export class StreakTracker {
   }
 
   private get cap(): number {
-    return this.clipStart + this.cfg.maxClipMs;
+    return Math.min(this.clipStart + this.cfg.maxClipMs, this.ceiling);
   }
 
   begin(now: number, pastMs: number, stopAt: number, endAt = stopAt): void {
     this.active = true;
+    this.ceiling = Infinity;
     this.clipStart = now - Math.min(pastMs, Math.max(0, this.cfg.maxClipMs - this.cfg.postRollMs));
     this.endAt = Math.min(endAt, this.cap);
     this.stopAt = Math.max(this.endAt, Math.min(stopAt, this.cap + (this.cfg.lateMs ?? 0)));
@@ -74,7 +77,9 @@ export class StreakTracker {
     if (now > this.cap) return { type: 'restart' };
     const endAt = Math.max(this.endAt, Math.min(now + this.cfg.postRollMs, this.cap));
     // Once the clip is full there is nothing left to wait for.
-    const stopAt = endAt >= this.cap ? Math.max(this.stopAt, this.cap) : Math.max(this.stopAt, now + this.chainMs + late);
+    const wait = endAt >= this.cap ? Math.max(this.stopAt, this.cap) : Math.max(this.stopAt, now + this.chainMs + late);
+    // After a death there is only the short wait for late reports left.
+    const stopAt = Math.min(wait, this.ceiling + late);
     if (endAt === this.endAt && stopAt === this.stopAt) return { type: 'none' };
     this.endAt = endAt;
     this.stopAt = stopAt;
@@ -84,14 +89,31 @@ export class StreakTracker {
   /** The game called a multi-kill at `now`: keep waiting a full chain window for the next kill. */
   hold(now: number): number | undefined {
     if (!this.active || this.endAt >= this.cap) return undefined;
-    const stopAt = Math.max(this.stopAt, now + this.chainMs + (this.cfg.lateMs ?? 0));
-    if (stopAt === this.stopAt) return undefined;
+    const stopAt = Math.min(Math.max(this.stopAt, now + this.chainMs + (this.cfg.lateMs ?? 0)), this.ceiling + (this.cfg.lateMs ?? 0));
+    if (stopAt <= this.stopAt) return undefined;
+    this.stopAt = stopAt;
+    return stopAt;
+  }
+
+  /**
+   * You died at `at`: the footage ends `tailMs` later, and a kill can stretch it to at most `graceMs`
+   * after the death (a projectile landing, or a kill the screen reported late). The recorder keeps
+   * listening for those for `lateMs`. Returns the new stop time, or undefined when nothing changed.
+   */
+  cut(at: number, tailMs = 1000, graceMs = 2000): number | undefined {
+    if (!this.active) return undefined;
+    this.ceiling = Math.min(this.ceiling, Math.max(this.clipStart + 1, at + graceMs));
+    const endAt = Math.min(this.endAt, Math.max(this.clipStart + 1, at + tailMs));
+    const stopAt = Math.max(endAt, Math.min(this.stopAt, this.ceiling + (this.cfg.lateMs ?? 0)));
+    if (endAt === this.endAt && stopAt === this.stopAt) return undefined;
+    this.endAt = endAt;
     this.stopAt = stopAt;
     return stopAt;
   }
 
   /** Call when the clip has actually been stopped (timer fired, match ended, or game closed). */
   finish(): void {
+    this.ceiling = Infinity;
     this.active = false;
     this.clipStart = 0;
     this.stopAt = 0;

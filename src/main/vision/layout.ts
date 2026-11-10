@@ -9,7 +9,7 @@
 // They were measured from gameplay footage at default HUD settings and can be tuned per player with
 // a calibration file (see docs/local-mode.md).
 
-export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome' | 'subtitle' | 'portrait' | 'status';
+export type RegionId = 'feed' | 'ko' | 'banner' | 'top' | 'map' | 'outcome' | 'subtitle' | 'portrait' | 'status' | 'respawn' | 'deathcard';
 export type Anchor = 'left' | 'center' | 'right';
 
 export interface RegionSpec {
@@ -40,6 +40,11 @@ export const DEFAULT_REGIONS: RegionSpec[] = [
   // Lower middle of the screen, where text like SPECTATING, REPLAY or the respawn countdown shows when
   // the view isn't yours. Read once a second during a match; only those words are looked for.
   { id: 'status', anchor: 'center', x: -700, y: 960, w: 1400, h: 340, scale: 0.4 },
+  // The respawn countdown ("10s", top left) and the "DEFEATED BY" card (bottom right): you're dead.
+  // Same boxes as vision/death-screen.ts measures on saved clips (fractions of the height x 1440),
+  // scaled to the 46x26 and 64x12 pixels its thresholds were measured at.
+  { id: 'respawn', anchor: 'left', x: 28.8, y: 14.4, w: 331.2, h: 187.2, scale: 46 / 331.2 },
+  { id: 'deathcard', anchor: 'right', x: -619.2, y: 986.4, w: 280.8, h: 57.6, scale: 64 / 280.8 },
   // VICTORY / DEFEAT.
   { id: 'outcome', anchor: 'center', x: -800, y: 380, w: 1600, h: 520, scale: 0.3 },
 ];

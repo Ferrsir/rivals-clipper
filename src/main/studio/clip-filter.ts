@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { FEED_SAMPLE, feedSamples, slotStats, type FeedSample, type SlotStats } from './feed-rows';
 import { feedCropFilter } from './render';
+import { COUNTDOWN_BOX, DEATH_BOX, DEATH_MIN, DEATH_TEMPLATE, countdownCropFilter, countdownInRgb, deathCropFilter, deathScore, unpad } from '../vision/death-screen';
 
 export interface FrameStats {
   /** Mean luma 0..255. */
@@ -62,67 +63,9 @@ const FH = FEED_SAMPLE.height;
 
 // ---------- death screen ----------
 
-/**
- * The "DEFEATED BY" card's title and frame as yellow pixels, 64x12, averaged over 11 death frames from
- * Ferris's footage. Its box: right edge 0.235 and left edge 0.43 of the frame height in from the
- * right, 0.685-0.725 of the height down (the HUD scales with the height).
- */
-export const DEATH_TEMPLATE = [
-  '#############################################...................',
-  '#####...........................................................',
-  '..##............................................................',
-  '..##..................#..........##.............................',
-  '..##...#..#..#...#...#.....##...##..#....#..#....#.##.#.#.......',
-  '..##...#..#.##...#...#......#...#...#....#..#...##.#..##........',
-  '..#...#...#.###..###.###..#.#...#...###.#...#...####...#........',
-  '.##...#..#..#........#...####...#...#...#..#....#..#..#.........',
-  '.##...####..###.#....###.#...#..#..####.###.....###...#.........',
-  '.##.............................................................',
-  '.#..............................................................',
-  '.#..............................................................',
-];
-export const DEATH_BOX = { w: 64, h: 12 };
-export const deathCropFilter = () => `crop=w=trunc(ih*0.195/2)*2:h=trunc(ih*0.04/2)*2:x=iw-trunc(ih*0.43/2)*2:y=trunc(ih*0.685/2)*2`;
-const tmpl = DEATH_TEMPLATE.map((r) => [...r].map((c) => c === '#'));
-
-const isCardYellow = (r: number, g: number, b: number) => r > 140 && g > 110 && r - b > 70;
-
-/**
- * How well a 64x12 rgb24 crop matches the card (intersection over union of the yellow pixels, best of
- * small shifts). Measured: death frames 0.63-1.0, gameplay 0-0.26.
- */
-export function deathScore(rgb: Uint8Array, width = DEATH_BOX.w, height = DEATH_BOX.h): number {
-  const m: boolean[][] = [];
-  for (let y = 0; y < height; y++) {
-    const row: boolean[] = [];
-    for (let x = 0; x < width; x++) {
-      const o = (y * width + x) * 3;
-      row.push(isCardYellow(rgb[o], rgb[o + 1], rgb[o + 2]));
-    }
-    m.push(row);
-  }
-  let best = 0;
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      let inter = 0;
-      let union = 0;
-      for (let y = 0; y < DEATH_BOX.h; y++) {
-        for (let x = 0; x < DEATH_BOX.w; x++) {
-          const yy = y - dy;
-          const xx = x - dx;
-          const a = yy >= 0 && yy < height && xx >= 0 && xx < width && m[yy][xx];
-          const t = tmpl[y][x];
-          if (a && t) inter++;
-          if (a || t) union++;
-        }
-      }
-      best = Math.max(best, inter / Math.max(1, union));
-    }
-  }
-  return best;
-}
-
-export const DEATH_MIN = 0.45;
+// The card's template and scoring live with the live detector (vision/death-screen.ts).
+export { DEATH_BOX, DEATH_MIN, DEATH_TEMPLATE, deathScore };
+export { countdownCropFilter, deathCropFilter, unpad };
 
 export interface ClipScan {
   /** Times (seconds) where the clip shows the scoreboard, sampled 4 times a second. */
@@ -149,14 +92,17 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
   if (hit) return Promise.resolve(hit);
   const DW = DEATH_BOX.w;
   const DH = DEATH_BOX.h;
-  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=3[a][b][c];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter()},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[full][feed][death]vstack=inputs=3[out]`;
+  const CW = COUNTDOWN_BOX.w;
+  const CH = COUNTDOWN_BOX.h;
+  const graph = `[0:v]fps=${FEED_SAMPLE.fps},split=4[a][b][c][d];[a]scale=${W}:${H}:flags=area,format=rgb24[full];[b]${feedCropFilter()},scale=${W}:${FH}:flags=area,format=rgb24[feed];[c]${deathCropFilter()},scale=${DW}:${DH}:flags=area,format=rgb24,pad=${W}:${DH}:0:0[death];[d]${countdownCropFilter()},scale=${CW}:${CH}:flags=area,format=rgb24,pad=${W}:${CH}:0:0[cd];[full][feed][death][cd]vstack=inputs=4[out]`;
   return new Promise((resolve) => {
     execFile(ffmpeg, ['-v', 'error', '-i', file, '-t', '120', '-filter_complex', graph, '-map', '[out]', '-an', '-f', 'rawvideo', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, windowsHide: true, signal }, (error, out) => {
         if (error) return resolve(EMPTY);
         const full = W * H * 3;
         const feedBytes = W * FH * 3;
-        const size = full + feedBytes + W * DEATH_BOX.h * 3;
+        const deathBytes = W * DEATH_BOX.h * 3;
+        const size = full + feedBytes + deathBytes + W * COUNTDOWN_BOX.h * 3;
         const flags: boolean[] = [];
         const deadFlags: boolean[] = [];
         const slots: SlotStats[][] = [];
@@ -165,10 +111,10 @@ export function scanClip(ffmpeg: string, file: string, signal?: AbortSignal): Pr
           flags.push(isScoreboard(frameStats(frame.subarray(0, full), W, H)));
           slots.push(slotStats(frame.subarray(full, full + feedBytes), W, FH));
           // The card's box sits at the left of a padded strip W wide: take its rows out.
-          const strip = frame.subarray(full + feedBytes);
-          const box = new Uint8Array(DEATH_BOX.w * DEATH_BOX.h * 3);
-          for (let y = 0; y < DEATH_BOX.h; y++) box.set(strip.subarray(y * W * 3, y * W * 3 + DEATH_BOX.w * 3), y * DEATH_BOX.w * 3);
-          deadFlags.push(deathScore(box) >= DEATH_MIN);
+          const card = unpad(frame.subarray(full + feedBytes, full + feedBytes + deathBytes), W, DEATH_BOX.w, DEATH_BOX.h);
+          // The respawn countdown (top left) shows from the moment you die; the card only during the replay.
+          const countdown = unpad(frame.subarray(full + feedBytes + deathBytes), W, COUNTDOWN_BOX.w, COUNTDOWN_BOX.h);
+          deadFlags.push(deathScore(card) >= DEATH_MIN || countdownInRgb(countdown));
         }
         const scan = { scoreboard: heldRuns(flags), feed: feedSamples(slots), dead: heldRuns(deadFlags) };
         if (cache.size > 2000) cache.clear();
