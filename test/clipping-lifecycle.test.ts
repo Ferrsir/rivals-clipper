@@ -32,7 +32,7 @@ function harness() {
     setTimeout: (fn: () => void, ms: number) => { const t = { fn, due: now + ms, cancelled: false }; timers.push(t); return t; },
     clearTimeout: (t: typeof timers[number]) => { t.cancelled = true; },
     isPracticeMode, parseMaybeJson, log: { write() {} }, status() {}, writeSidecar: (c: any) => { saved.push(c); return { ...c, score: 0 }; },
-    matchClips: [], pushClip() {}, tagger: { enqueue() {}, kick() {} }, inMatch: false,
+    matchClips: [], pushClip() {}, tagger: { enqueue() {}, kick() {} }, updater: { idle() {} }, inMatch: false,
     lastDeathAt: -Infinity, hudGoneAt: undefined, engine: 'overwolf',
     fs, paths: () => ({ heroRoles: path.join(require('node:os').tmpdir(), 'rc-test-hero-roles.json') }), sidecarPath: (f: string) => f, updateSidecar: () => undefined,
   });

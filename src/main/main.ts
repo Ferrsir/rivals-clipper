@@ -27,6 +27,7 @@ import { findFfmpeg } from './studio/ffmpeg-bin';
 import { AiTagger, untagged } from './ai-tagger';
 import { installGracefulShutdown, sendIfOpen } from './shutdown';
 import { judgeClip, scanDeathScreen, trimClipFile } from './clip-check';
+import { Updater } from './updater';
 
 const MARVEL_RIVALS = 24890; // Overwolf game id
 const GEP_FEATURES = ['gep_internal', 'game_info', 'match_info'];
@@ -110,6 +111,17 @@ const readyPackages = new Set<string>();
 export const ai = createAiClient(() => settings.aiProvider);
 /** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
 export const library = new Library(() => paths(settings.rootFolder).clips);
+/** Check for updates / Update: pulls the latest GitHub release and installs it once nothing is recording. */
+const updater = new Updater({
+  currentVersion: app.getVersion(),
+  downloadDir: path.join(app.getPath('temp'), 'rivals-clipper-update'),
+  installDir: path.dirname(app.getPath('exe')),
+  libraryFolder: () => settings.rootFolder,
+  busy: () => ({ gameRunning, clipping: !!pending || clipChecks.size > 0 }),
+  quit: () => app.quit(),
+  onChange: (s) => sendIfOpen(win, 'update-status', s),
+  packaged: app.isPackaged,
+});
 /** Any ffmpeg that works: the running recorder's copy, else Overwolf's or the bundled one (see localFfmpeg). */
 async function anyFfmpeg(): Promise<string | undefined> {
   if (recorder.ffmpegPath) return recorder.ffmpegPath;
@@ -336,7 +348,10 @@ function onClipSaved(video: SavedVideo, clip: PendingClip) {
     status(`Saved ${k}-kill${a ? `, ${a}-assist` : ''} clip (score ${final.score})`);
     pushClip(final);
     tagger.enqueue(final.videoFile);
-  }).finally(() => clipChecks.delete(check));
+  }).finally(() => {
+    clipChecks.delete(check);
+    updater.idle();
+  });
   clipChecks.add(check);
 }
 
@@ -551,7 +566,10 @@ function setupGep() {
     inMatch = false;
     tagger.kick();
     stopCapture();
-    void recorder.stop().then(() => status('Marvel Rivals closed'));
+    void recorder.stop().then(() => {
+      status('Marvel Rivals closed');
+      updater.idle();
+    });
   });
   gep.on('error', (_e, _gameId, err) => status('GEP error', err));
 }
@@ -675,6 +693,7 @@ function setupLocalMode() {
     void Promise.all([detector.shutdown(), localRecorder.stop()]).then(() => {
       status('Marvel Rivals closed');
       tagger.kick();
+      updater.idle();
     });
   });
 }
@@ -784,6 +803,10 @@ function setupIpc() {
   });
   ipcMain.handle('ai:ask', (_e, opts: Parameters<typeof ai.ask>[0]) => ai.ask(opts));
   ipcMain.handle('app:paths', () => paths(settings.rootFolder));
+  ipcMain.handle('update:status', () => updater.status);
+  ipcMain.handle('update:check', () => updater.check());
+  ipcMain.handle('update:install', () => updater.install());
+  ipcMain.handle('update:cancel', () => updater.cancel());
 }
 
 function registerHotkey() {
@@ -840,6 +863,9 @@ app.whenReady().then(() => {
   setupLocalMode();
   status(lastStatus);
   applyEngine();
+  // Look for a new version shortly after start and every 6 hours. Only checks: installing is your call.
+  setTimeout(() => void updater.check(), 15_000);
+  setInterval(() => void updater.check(), 6 * 60 * 60_000).unref();
 });
 
 installGracefulShutdown(app, async () => {

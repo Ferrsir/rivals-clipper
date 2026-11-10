@@ -33,6 +33,8 @@ F:\RivalsClips\
 
 Download `RivalsClipper-Setup-x.y.z.exe` from the [Releases page](../../releases) (or the latest "Build Windows installer" run under Actions), run it, and open Rivals Clipper from the Start menu or desktop.
 
+**Updating:** Settings, Updates, **Check for updates**, then **Update**. The app downloads the newest release's installer from GitHub (checked against GitHub's SHA-256), waits until Marvel Rivals is closed and no clip is saving, closes itself, installs silently into the same folder and reopens. Clips, reels and settings live in your library folder (F:\RivalsClips by default), which the installer never touches. It checks by itself at start and every 6 hours and puts a dot on the Settings tab when there is a new version, but it only installs when you press Update. A Windows permission prompt can appear if you installed for all users.
+
 On first launch it asks you to sign in with **Claude** or **ChatGPT**. That runs through the official Claude Code or Codex app on your PC: you log in on Anthropic's or OpenAI's own page, and Rivals Clipper never sees your password. If the helper app isn't installed yet, the button installs it in a visible PowerShell window. You can skip sign-in; clipping works without it.
 
 The app has three tabs: **Clipper** (live status and your ranked clips), **Studio** (the reel editor), and **Settings** (recording options and your account).
@@ -52,7 +54,7 @@ The app has three tabs: **Clipper** (live status and your ranked clips), **Studi
 
 Built-in screen detection is the default. Set your in-game name under Settings, Kill detection, and select the monitor where you play. The installer includes the audio helper; source builds need `npm run build:native` with Visual Studio C++ tools.
 
-To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main`, and publishes a Release when you push a tag like `v0.2.0`. The installer uses standard Electron and can be shared without Overwolf registration. Windows signing and reputation are separate distribution concerns.
+To build an installer locally: `npm run dist` (output in `release/`). GitHub Actions builds it on every push to `main` and publishes a Release named after `package.json`'s version when that version has no Release yet, so bump the version to ship an update to the in-app updater. The installer uses standard Electron and can be shared without Overwolf registration. Windows signing and reputation are separate distribution concerns.
 
 ## The Studio (reel maker)
 

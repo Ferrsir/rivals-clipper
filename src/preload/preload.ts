@@ -27,6 +27,13 @@ contextBridge.exposeInMainWorld('clipper', {
     onStatus: (cb: (s: unknown) => void) => ipcRenderer.on('ai-status', (_e, s) => cb(s)),
   },
   paths: () => ipcRenderer.invoke('app:paths'),
+  update: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    cancel: () => ipcRenderer.invoke('update:cancel'),
+    onStatus: (cb: (s: unknown) => void) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
+  },
   onStatus: (cb: (s: unknown) => void) => ipcRenderer.on('status', (_e, s) => cb(s)),
   onClip: (cb: (c: unknown) => void) => ipcRenderer.on('clip-saved', (_e, c) => cb(c)),
 });
