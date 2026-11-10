@@ -12,7 +12,8 @@ import {
 
 /** The middle of the frame, 1.8 frame heights wide (the scoreboard is 1.46 wide), at this size. */
 export const BOARD_BOX = { w: 72, h: 40 };
-export const boardCropFilter = () => 'crop=w=min(iw\\,trunc(ih*0.9)*2):h=ih:x=(iw-ow)/2:y=0';
+// Narrower pictures (16:9, 4:3) are padded with black to the same width, so the boxes below stay put.
+export const boardCropFilter = () => 'crop=w=min(iw\\,trunc(ih*0.9)*2):h=ih:x=(iw-ow)/2:y=0,pad=w=trunc(ih*0.9)*2:h=ih:x=(ow-iw)/2:y=0';
 
 /**
  * True when a BOARD_BOX crop (packed rgb24) shows the Tab scoreboard or the blank loading screen.
@@ -45,6 +46,7 @@ export function scoreboardInRgb(rgb: Uint8Array, w = BOARD_BOX.w, h = BOARD_BOX.
   };
   let lum = 0;
   let lumSq = 0;
+  let blue = 0;
   let outside = 0;
   let outN = 0;
   const xa = X(-0.8);
@@ -55,6 +57,7 @@ export function scoreboardInRgb(rgb: Uint8Array, w = BOARD_BOX.w, h = BOARD_BOX.
       const l = 0.299 * rgb[o] + 0.587 * rgb[o + 1] + 0.114 * rgb[o + 2];
       lum += l;
       lumSq += l * l;
+      blue += rgb[o + 2] - rgb[o];
       if (x < xa || x >= xb || y < top) {
         outside += l;
         outN++;
@@ -64,10 +67,12 @@ export function scoreboardInRgb(rgb: Uint8Array, w = BOARD_BOX.w, h = BOARD_BOX.
   const n = w * h;
   const mean = lum / n;
   const sd = Math.sqrt(Math.max(0, lumSq / n - mean * mean));
-  if (sd < 9 && mean < 45) return true; // the loading screen
+  // The loading screen: flat, dark and navy (a black fade or a dark wall is not blue).
+  const tint = blue / n;
+  if (sd < 9 && mean < 45 && tint > 8 && tint < 30) return true;
   const left = panel(-0.45, -0.05, 1);
   const right = panel(0.05, 0.45, -1);
-  return left.mean > 12 && right.mean > 10 && left.sd < 22 && outside / Math.max(1, outN) < 36;
+  return left.mean > 12 && right.mean > 10 && left.sd < 22 && right.sd < 34 && outside / Math.max(1, outN) < 36;
 }
 
 /** Keep only flagged samples that have a flagged neighbour (the scoreboard is held, not a single dark frame). */

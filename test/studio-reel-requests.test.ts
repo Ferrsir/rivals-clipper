@@ -185,6 +185,7 @@ test('the scoreboard is found from its blue and red team panels, not from a dark
   const board = frame((x, y) => (!panel(x, y) ? [18, 20, 26] : x < w / 2 ? [40, 55, 105] : [105, 55, 45]));
   assert.ok(scoreboardInRgb(board));
   assert.ok(scoreboardInRgb(frame(() => [26, 28, 40])), 'the blank loading screen');
+  assert.ok(!scoreboardInRgb(frame(() => [12, 12, 12])), 'a black fade is not the loading screen');
   // A dark map: dim, textured and colourful, but no blue/red panels (2026-11-09 22:31 was flagged by the old test).
   const darkMap = frame((x, y) => [10 + ((x * 7 + y * 13) % 70), 15 + ((x * 3) % 50), 20 + ((y * 11) % 60)]);
   assert.ok(!scoreboardInRgb(darkMap));
