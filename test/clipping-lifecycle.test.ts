@@ -33,9 +33,10 @@ function harness() {
     clearTimeout: (t: typeof timers[number]) => { t.cancelled = true; },
     isPracticeMode, parseMaybeJson, log: { write() {} }, status() {}, writeSidecar: (c: any) => { saved.push(c); return { ...c, score: 0 }; },
     matchClips: [], pushClip() {}, tagger: { enqueue() {}, kick() {} }, inMatch: false,
+    fs, paths: () => ({ heroRoles: path.join(require('node:os').tmpdir(), 'rc-test-hero-roles.json') }), sidecarPath: (f: string) => f, updateSidecar: () => undefined,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/main/main.ts'), 'utf8');
-  const code = source.slice(source.indexOf('async function beginClip'), source.indexOf('function onInfoUpdate'));
+  const code = source.slice(source.indexOf('async function beginClip'), source.indexOf('function setupGep'));
   vm.runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, ctx);
   const advance = (to: number) => {
     now = to;
@@ -149,4 +150,14 @@ test('a misread hero name is stored as the real hero, and junk keeps the last go
   assert.equal(s.myHero, 'Deadpool');
   s.onInfoUpdate('game_info', 'local_hero', 'R CAA', 0);
   assert.equal(s.myHero, 'Deadpool');
+});
+
+test('a new match forgets the last hero, and a clip takes the hero recognised while it records', async () => {
+  const h = harness();
+  h.ctx.state.onInfoUpdate('game_info', 'local_hero', 'Deadpool', 0);
+  h.ctx.onGameEvent('screen', 'match_start', undefined, 99000);
+  assert.equal(h.ctx.state.myHero, undefined);
+  h.ctx.handleKill(100000); await Promise.resolve();
+  h.ctx.onInfoUpdate('game_info', 'local_hero', 'Magik');
+  assert.equal(h.ctx.pending.hero, 'Magik');
 });

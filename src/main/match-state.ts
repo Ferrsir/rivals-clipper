@@ -203,6 +203,8 @@ export class MatchState {
 
   onMatchStart(): void {
     this.lastDeathAt = -Infinity;
+    // A new match can be a new hero: don't carry the last match's hero into its clips.
+    this.detectedHero = undefined;
     this.context = { round: 0 };
     this.ultHistory = [];
     this.recentFeed = [];
