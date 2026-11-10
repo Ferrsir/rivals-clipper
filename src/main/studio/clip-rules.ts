@@ -107,6 +107,12 @@ export function canonicalHero(name: string | undefined | null): string | undefin
     const hit = ALIAS_TO_HERO.get(squash(words.slice(-n).join(' ')));
     if (hit && squash(words.slice(-n).join(' ')).length >= 4) return hit;
   }
+  // The first words on their own, when the rest is misread: "ELSA BLOODS ZED E".
+  for (let n = Math.min(3, words.length - 1); n >= 1; n--) {
+    const head = squash(words.slice(0, n).join(' '));
+    const hit = ALIAS_TO_HERO.get(head);
+    if (hit && head.length >= 4) return hit;
+  }
   // One or two letters misread in a long name.
   let best: { name: string; d: number } | undefined;
   for (const h of FULL_NAMES) {
