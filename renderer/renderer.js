@@ -256,6 +256,46 @@ $('openFolder').addEventListener('click', () => clipper.openFolder());
 $('sort').addEventListener('change', runQuery);
 
 clipper.onStatus(renderStatus);
+
+// ---------- updates ----------
+function renderUpdate(u) {
+  if (!u) return;
+  const text = $('updateText'), install = $('updateInstall'), check = $('updateCheck'), cancel = $('updateCancel'), bar = $('updateBar');
+  const lines = {
+    idle: `You have version ${u.current}.`,
+    checking: `You have version ${u.current}. Checking GitHub…`,
+    'up-to-date': u.message ? `You have version ${u.current}. ${u.message}` : `You have the latest version (${u.current}).`,
+    available: `Version ${u.latest} is out (you have ${u.current}).`,
+    downloading: `Downloading version ${u.latest}…${u.progress != null ? ` ${Math.round(u.progress * 100)}%` : ''}`,
+    ready: `Version ${u.latest} is downloaded and ready to install.`,
+    waiting: `Version ${u.latest} is ready. ${u.message ?? ''}`,
+    installing: u.message ?? 'Installing…',
+    error: u.message ?? 'Something went wrong.',
+  };
+  text.textContent = lines[u.phase] ?? '';
+  const busy = ['checking', 'downloading', 'installing'].includes(u.phase);
+  check.disabled = busy;
+  const canInstall = ['available', 'ready'].includes(u.phase) || (u.phase === 'error' && u.latest && u.latest !== u.current);
+  install.classList.toggle('hidden', !canInstall);
+  install.textContent = `Update to ${u.latest ?? 'latest'}`;
+  cancel.classList.toggle('hidden', u.phase !== 'waiting');
+  bar.classList.toggle('hidden', u.phase !== 'downloading');
+  bar.firstElementChild.style.width = `${Math.round((u.progress ?? 0) * 100)}%`;
+  // A dot on the Settings tab when there is something new.
+  const tab = document.querySelector('.tab[data-tab="settings"]');
+  const show = ['available', 'ready', 'waiting'].includes(u.phase);
+  let dot = tab.querySelector('.dot');
+  if (show && !dot) { dot = document.createElement('span'); dot.className = 'dot'; dot.title = 'Update available'; tab.append(dot); }
+  if (!show && dot) dot.remove();
+}
+$('updateCheck').addEventListener('click', async () => renderUpdate(await clipper.update.check()));
+$('updateInstall').addEventListener('click', async () => {
+  if (!confirm('Install the update now? Rivals Clipper closes, installs the new version and opens again. Your clips stay where they are. A Studio export that is still running gets stopped.')) return;
+  renderUpdate(await clipper.update.install());
+});
+$('updateCancel').addEventListener('click', async () => renderUpdate(await clipper.update.cancel()));
+clipper.update.onStatus(renderUpdate);
+clipper.update.status().then(renderUpdate).catch(() => {});
 clipper.onClip(replace);
 
 // ---------- tabs ----------
