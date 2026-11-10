@@ -25,6 +25,8 @@ export interface DetectorMemory {
   portraits?: Record<string, string[]>;
   /** Screen size the memory was learned at. A different size clears hudVerified. */
   screen?: string;
+  /** Every screen size (and HUD setting) the match bar was recognised at, so switching back and forth keeps it. */
+  verifiedScreens?: string[];
 }
 
 export interface DetectorStatus {
@@ -102,7 +104,10 @@ export class ScreenDetector {
     }
     this.memory = this.loadMemory();
     const screenKey = `${size.width}x${size.height}@${opts.hudScale}/${opts.hudAspect}`;
-    if (this.memory.screen && this.memory.screen !== screenKey) this.memory.hudVerified = false;
+    const verified = new Set(this.memory.verifiedScreens ?? []);
+    if (this.memory.hudVerified && this.memory.screen) verified.add(this.memory.screen);
+    this.memory.verifiedScreens = [...verified];
+    this.memory.hudVerified = verified.has(screenKey);
     this.memory.screen = screenKey;
     this.saveMemory();
 
@@ -146,6 +151,9 @@ export class ScreenDetector {
         onHudVerified: () => {
           if (stale() || this.stopping) return;
           this.memory.hudVerified = true;
+          if (this.memory.screen && !this.memory.verifiedScreens?.includes(this.memory.screen)) {
+            this.memory.verifiedScreens = [...(this.memory.verifiedScreens ?? []), this.memory.screen];
+          }
           this.saveMemory();
         },
         onNameLearned: (name) => {

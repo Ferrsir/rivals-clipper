@@ -10,7 +10,7 @@ import path from 'node:path';
 import { Settings, localOptions } from '../settings';
 import { wavHeader } from './audio-buffer';
 import { AUDIO_FORMAT, AudioCapture, helperPath, listAudioDevices } from './audio-helper';
-import { ENCODER_LABEL, describeProbe, muxArgs, planRecording, probeCapture, recordArgs, type EncoderId, type ProbeResult } from './encoder';
+import { ENCODER_LABEL, describeProbe, muxArgs, planRecording, probeCapture, probeScreenSize, recordArgs, type EncoderId, type ProbeResult } from './encoder';
 import { TsReplayBuffer, type CaptureHandle } from './ts-buffer';
 import { CaptureWatchdog } from './watchdog';
 import type { BufferInfo, ClipRecorder, GameProcess, MicDevice, SavedVideo } from './types';
@@ -39,6 +39,16 @@ export interface LocalRecorderOptions {
   ffmpeg: () => Promise<string>;
   /** Main process owns recovery, including restarting detection for a changed resolution. */
   onInterrupted?: () => void;
+  /**
+   * The game window changed size mid-session (a new resolution or aspect ratio, e.g. 16:9 to stretched 4:3).
+   * Windows Graphics Capture keeps recording at the starting size and crops or pads the new picture, so the
+   * main process restarts recording and kill detection at the new size.
+   */
+  onResized?: (size: { width: number; height: number }) => void;
+  /** Reads the game window's current size (defaults to a one-frame capture). */
+  probeSize?: (ffmpeg: string) => Promise<{ width: number; height: number } | undefined>;
+  /** How long a new window size must hold before recording restarts. Resolution switches flicker through sizes. */
+  resizeSettleMs?: number;
   /** Injectable capture boundary for deterministic tests with synthetic encoded video. */
   probe?: typeof probeCapture;
   spawnVideo?: (bin: string, args: string[]) => ChildProcessWithoutNullStreams;
@@ -62,6 +72,9 @@ export class LocalRecorder implements ClipRecorder {
   /** Bumped by every start() and stop(), so a start that is still probing knows it was overtaken. */
   private gen = 0;
   private tearingDown?: Promise<void>;
+  /** The game window size this capture started at (before any HUD-aspect crop). */
+  private captureSize?: { width: number; height: number };
+  private resizeTimer?: NodeJS.Timeout;
 
   constructor(private log: Log, private opts: LocalRecorderOptions) {}
 
@@ -110,6 +123,7 @@ export class LocalRecorder implements ClipRecorder {
 
     const width = probe.width ?? 1920;
     const height = probe.height ?? 1080;
+    this.captureSize = probe.width && probe.height ? { width, height } : undefined;
     const aspect = localOptions(settings).hudAspect;
     const crop = aspect > 0 ? Math.max(0, Math.floor((width - height * aspect) / 4) * 2) : 0;
     const pictureWidth = width - crop * 2;
@@ -183,6 +197,8 @@ export class LocalRecorder implements ClipRecorder {
 
   private async teardownNow(): Promise<void> {
     this.stopping = true;
+    if (this.resizeTimer) clearTimeout(this.resizeTimer);
+    this.resizeTimer = undefined;
     if (this.active) this.stopClip();
     // Let a clip that is being saved finish before the buffers are torn down.
     await Promise.all([...this.saving]);
@@ -253,9 +269,13 @@ export class LocalRecorder implements ClipRecorder {
       buffer.push(d); // bytes from an older process must not enter a replacement replay buffer
     });
     proc.stderr.on('data', (d: Buffer) => {
-      for (const line of d.toString('utf8').split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        this.stderrTail.push(line.trim());
+      for (const raw of d.toString('utf8').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        // ffmpeg runs at verbose level only to hear about window resizes; keep those lines out of error reports.
+        if (/Capture size changed to \d+x\d+/.test(line)) this.onCaptureSizeChanged(proc);
+        if (/^(\[[^\]]*\]\s*)*\[(verbose|info|debug)\]/.test(line)) continue;
+        this.stderrTail.push(line);
         if (this.stderrTail.length > 30) this.stderrTail.shift();
       }
     });
@@ -273,6 +293,34 @@ export class LocalRecorder implements ClipRecorder {
       if (this.active) this.stopClip();
       if (wasRunning) this.opts.onInterrupted?.();
     });
+  }
+
+  /**
+   * gfxcapture reports every size the window passes through. Wait until it settles, then read the real
+   * picture size (client area, without borders) and restart only if it differs from what is being recorded.
+   * A minimised game shrinks to nothing, so that is ignored until the window comes back.
+   */
+  private onCaptureSizeChanged(proc: ChildProcessWithoutNullStreams): void {
+    if (!this.opts.onResized || this.stopping) return;
+    if (this.resizeTimer) clearTimeout(this.resizeTimer);
+    this.resizeTimer = setTimeout(() => {
+      this.resizeTimer = undefined;
+      void this.checkResize(proc);
+    }, this.opts.resizeSettleMs ?? 2000);
+  }
+
+  private async checkResize(proc: ChildProcessWithoutNullStreams): Promise<void> {
+    const gen = this.gen;
+    const current = () => gen === this.gen && this.ff === proc && !this.stopping && !!this.info;
+    if (!current() || !this.ffBin || !this.captureSize) return;
+    const monitor = this.lastStart ? localOptions(this.lastStart.settings).captureMonitor : 0;
+    const read = this.opts.probeSize ?? ((bin: string) => probeScreenSize(bin, monitor));
+    const size = await read(this.ffBin).catch(() => undefined);
+    if (!current() || !size || !this.captureSize) return;
+    if (size.width < 640 || size.height < 360) return;
+    if (size.width === this.captureSize.width && size.height === this.captureSize.height) return;
+    this.log(`Game resolution changed from ${this.captureSize.width}x${this.captureSize.height} to ${size.width}x${size.height}`);
+    this.opts.onResized?.(size);
   }
 
   private waitForVideo(timeoutMs: number, check: () => void): Promise<void> {

@@ -1,6 +1,6 @@
 // Picks the GPU encoder for the local recorder and builds its ffmpeg command line.
 //
-// Capture uses Windows Desktop Duplication through ffmpeg's ddagrab filter. ddagrab hands frames over as
+// Capture uses Windows Graphics Capture of the game window through ffmpeg's gfxcapture filter. It hands frames over as
 // GPU textures on the graphics card that drives the monitor, so the best encoder is the one on that same
 // card: NVENC when the monitor is plugged into the GeForce, AMF when it is plugged into the motherboard
 // (AMD graphics). Encoding on the card that already holds the frame avoids copying every frame through
@@ -179,7 +179,9 @@ export function recordArgs(o: RecordOptions): string[] {
   // CPU encoding at 4K60 would eat the game's CPU time, so the CPU path is capped at 1080p.
   const kbps = o.bitrateKbps;
   return [
-    '-hide_banner', '-nostdin', '-loglevel', 'warning',
+    // Verbose so gfxcapture's "Capture size changed" line reaches the recorder (a resolution switch mid-game).
+    // `level` tags each line, so the recorder can keep verbose lines out of error messages.
+    '-hide_banner', '-nostdin', '-nostats', '-loglevel', 'level+verbose',
     '-f', 'lavfi', '-i', gameWindowSource(o.fps) + (o.cropLeft ? `:crop_left=${o.cropLeft}:crop_right=${o.cropRight}` : ''),
     ...(vf ? ['-vf', vf] : []),
     ...encoderArgs(o.encoder, o.fps, kbps),
