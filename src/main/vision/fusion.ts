@@ -663,7 +663,7 @@ export class ScreenFusion {
       // A round change or the end of the match (2026-11-09 18:42: a clip ran on into "CONTROL KRAKOA").
       // Reported from the first frame without the bar, so a clip can end there.
       this.hudGoneReported = true;
-      this.sink.gameEvent('hud', false, Math.min(t, this.hudRawSeenAt + 1));
+      this.sink.gameEvent('hud', false, Number.isFinite(this.hudRawSeenAt) ? Math.min(t, this.hudRawSeenAt + 1) : t);
     }
   }
 
