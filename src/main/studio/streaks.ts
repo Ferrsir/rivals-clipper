@@ -31,8 +31,10 @@ export function joinStreaks(items: TimedClip[], gap = STREAK_GAP): ReelClip[] {
   let lastKill = -Infinity;
   for (const t of sorted) {
     const ks = killsAt(t);
+    // A clip without a kill of yours is left as it is and doesn't break a streak around it.
+    if (!ks.length) continue;
     const g = groups[groups.length - 1];
-    if (g && ks.length && ks[0] - lastKill <= gap) g.push(t);
+    if (g && ks[0] - lastKill <= gap) g.push(t);
     else groups.push([t]);
     if (ks.length) lastKill = Math.max(lastKill, ks[ks.length - 1]);
   }

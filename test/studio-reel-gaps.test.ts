@@ -228,3 +228,41 @@ test('the new clip facts survive saving', () => {
   assert.equal(back.clips[0].songSync, true);
   assert.equal(back.clips[0].shotOf, 'z');
 });
+
+test('an enemy who kills you again and again is not learned as your name', () => {
+  const rows = [
+    ...['a', 'b', 'c', 'd', 'e', 'f'].map((clip, i) => ({ clip, names: { left: 'yaomingdiesel', right: ['Phasma242', 'Tired02', 'Naolin', 'Demarquees', 'MedLee', 'Bruffle'][i] } })),
+    ...['a', 'b', 'c', 'd'].map((clip) => ({ clip, names: { left: 'T1GRE510', right: 'yaomingdiesel' } })),
+  ];
+  assert.deepEqual(learnNames(rows), ['yaomingdiesel']);
+  // A second account shows on rows without the first.
+  const two = [...rows, ...['g', 'h', 'i'].map((clip) => ({ clip, names: { left: 'Ferrsir', right: 'Zyronik' } }))];
+  assert.deepEqual(learnNames(two), ['yaomingdiesel', 'Ferrsir']);
+});
+
+test('a clip without kills does not split a streak around it', () => {
+  const a = clip('a', [2], 10, 8);
+  const empty = clip('b', [], 0, 8);
+  const c = clip('c', [3], 10, 8);
+  const out = joinStreaks([{ clip: a, start: 1000 }, { clip: empty, start: 1002 }, { clip: c, start: 1005 }]);
+  assert.deepEqual(out.map((x) => x.uid), ['a', 'c', 'b']); // the streak plays together
+  assert.equal(out.find((x) => x.uid === 'a')!.streak?.kills, 2);
+  assert.equal(out.find((x) => x.uid === 'c')!.streak?.kills, 2);
+});
+
+test('a passing mention of a triple is not a kill rule', () => {
+  assert.equal(readClipRules('just make a deadpool reel and end on the triple').minKills, undefined);
+  assert.equal(readClipRules('only doubles triples and quads').minKills, 2);
+  assert.equal(readClipRules('doubles or better').minKills, 2);
+  assert.equal(readClipRules('triples only').minKills, 3);
+});
+
+test('a cutaway far past the gameplay is not reached with a long freeze', () => {
+  const an = song(96, 90, [60, 66]);
+  const style = { ...getStyle('montage'), slowmo: { ...getStyle('montage').slowmo, on: false } };
+  const anime: ReelClip = { ...clip('anime', [], 0, 90), external: true, songSync: true, in: 60, out: 66, muteGame: true };
+  const tl = plan({ clips: [clip('g1', [3], 10, 8), clip('g2', [3], 10, 8), anime, clip('g3', [3], 10, 8)], style, fps: 60, analysis: an, musicStart: 'auto' });
+  const holds = tl.segments.filter((s) => s.kind === 'hold').reduce((sum, s) => sum + s.out[1] - s.out[0], 0);
+  assert.ok(holds < 1.5, `held ${holds} s`);
+  assert.ok(tl.musicStart > 30, `song starts at ${tl.musicStart}`);
+});

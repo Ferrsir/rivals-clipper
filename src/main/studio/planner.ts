@@ -458,7 +458,9 @@ function layoutSynced(c: ReelClip, idx: number, T: number, M: number, pieces: Pi
           pieces.push({ kind: 'hold', clip: prev.clip, src0: Math.max(prevClip.in, prev.src1 - 0.04), src1: prev.src1, out0: prev.out1, out1: fixed });
         }
       }
-      score -= Math.min(4, fixed - T);
+      // A beat or so of stretch is fine; much more is a long freeze or crawl, and the song start that keeps the
+      // cutaway in sync must win over one that only lands the drop.
+      score -= 3 * Math.max(0, fixed - T - 0.7) + Math.min(1, fixed - T);
       start = fixed;
     } else {
       // Nothing before it: enter the clip earlier so its moment still lines up with the song.

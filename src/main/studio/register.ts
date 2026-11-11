@@ -529,7 +529,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // A white row is your kill only when your name is on its LEFT: your own death is a white row too.
     const feedNames = feedReadable ? await readFeedNames(ff0, scans, signal) : { reads: new Map<string, OnsetRead[]>(), names: [] as string[] };
     const broke = { hero: 0, kills: 0, bots: 0 };
-    const prepareRaw = (c: ReelClip) => {
+    const prepareRaw = (c: ReelClip, picked = true) => {
       if (c.external) return c;
       const src = sources.get(c.clipId);
       const hero = src ? heroOf(src, allowed.heroes) : c.hero;
@@ -538,7 +538,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       const judged = judgeHits(read.hits, feedNames.reads.get(c.videoFile) ?? [], feedNames.names);
       // Games against bots ("THOR-Normal") stay out unless you asked for them.
       if (judged.bots && !project.clipRules?.bots) {
-        broke.bots++;
+        if (picked) broke.bots++;
         return null;
       }
       // Kills while you're dead (the "DEFEATED BY" card is up) are spectating, and your death row looks like a kill.
@@ -554,10 +554,10 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       // Score what's really in the clip: kills only count when they're yours (feed rows) and inside the trim.
       return rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);
     };
-    const follows = (c: ReelClip) => {
+    const follows = (c: ReelClip, count = true) => {
       if (c.external || !project.clipRules) return true;
       const check = checkClip(project.clipRules, c);
-      if (!check.ok) {
+      if (!check.ok && count) {
         if (check.reason === 'kills' || check.reason === 'tag') broke.kills++;
         else broke.hero++;
       }
@@ -567,9 +567,9 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // only" sees the whole streak. Your picks and the rest of the library are joined together.
     const startOf = (c: ReelClip) => (sources.get(c.clipId)?.startTimeEpoch ?? NaN) / 1000;
     const before = project.clips.length;
-    const picked = project.clips.map(prepareRaw).filter((c): c is ReelClip => !!c);
+    const picked = project.clips.map(c => prepareRaw(c)).filter((c): c is ReelClip => !!c);
     const pickedFiles = new Set(picked.map(c => c.videoFile));
-    const spare = pool.filter(c => !pickedFiles.has(c.videoFile) && fs.existsSync(c.videoFile)).map(source => ({ source, clip: prepareRaw(reelClipFromSidecar(source)) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip);
+    const spare = pool.filter(c => !pickedFiles.has(c.videoFile) && fs.existsSync(c.videoFile)).map(source => ({ source, clip: prepareRaw(reelClipFromSidecar(source), false) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip);
     const joined = joinStreaks([...picked, ...spare.map(x => x.clip)].filter(c => !c.external).map(clip => ({ clip, start: startOf(clip) })));
     const byUid = new Map(joined.map(c => [c.uid, c]));
     // Your picks, with the other clips of their streaks pulled in beside them.
@@ -578,10 +578,10 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     project.clips = keepStreaksTogether([
       ...picked.map(c => (c.external ? c : byUid.get(c.uid))).filter((c): c is ReelClip => !!c),
       ...joined.filter(c => !pickedUids.has(c.uid) && c.streak && streakIds.has(c.streak.id)),
-    ]).filter(follows);
+    ]).filter(c => follows(c));
     const joinedCount = project.clips.filter(c => c.streak).length;
     if (joinedCount) notes.push(`Joined ${joinedCount} clips back into the multi-kills the clipper had split up.`);
-    const ready = spare.map(x => ({ source: x.source, clip: byUid.get(x.clip.uid) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip && !project.clips.some(c => c.uid === x.clip!.uid) && follows(x.clip!));
+    const ready = spare.map(x => ({ source: x.source, clip: byUid.get(x.clip.uid) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip && !project.clips.some(c => c.uid === x.clip!.uid) && follows(x.clip!, false));
     const ruled = broke.hero + broke.kills;
     const dropped = Math.max(0, before - project.clips.length - ruled - broke.bots);
     if (ruled) notes.push(`Took out ${ruled} clip${ruled === 1 ? '' : 's'} that broke your rules (${describeRules(project.clipRules!)}).`);
@@ -624,14 +624,13 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       let cut = project.clips.find(c => c.external && c.videoFile === project.music!.file);
       if (!cut && track) {
         const info = await probeMedia(ff, track.file);
-        if (info.width && info.durationSec) {
-          const brk = an ? songBreak(an, 3) : undefined;
+        // Its quiet break is where the cutaway goes. No break found: don't guess (the whole video would go in).
+        const brk = an ? songBreak(an, 3) : undefined;
+        if (info.width && info.durationSec && brk) {
           cut = externalClip({ id: newId(), kind: 'video', file: track.file, name: track.title, durationSec: info.durationSec, width: info.width, height: info.height, hasAudio: info.hasAudio });
           cut.hits = [];
-          if (brk) {
-            cut.in = brk[0];
-            cut.out = Math.min(info.durationSec, brk[1]);
-          }
+          cut.in = brk[0];
+          cut.out = Math.min(info.durationSec, brk[1]);
         }
       }
       if (cut) {
@@ -654,7 +653,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
         if (k === 0 && game.length) k = Math.ceil(game.length / 2);
         project.clips = [...game.slice(0, k), cut, ...game.slice(k)];
         notes.push(`The ${cut.videoFile === project.music.file ? "song's own video" : 'clip'} plays from ${cut.in.toFixed(1)} s to ${cut.out.toFixed(1)} s of the song, in sync with it, between the gameplay.`);
-      } else notes.push('Add the video you want in the middle (or use a song that came from a video) and make the reel again.');
+      } else notes.push("Couldn't find the clip for the middle: add the video (or use a song that came from a video, with a quiet break in it) and make the reel again.");
     }
     // Your own clips (a hook, a cutaway) are split at their scene cuts: each shot gets its own crop and pictures.
     {

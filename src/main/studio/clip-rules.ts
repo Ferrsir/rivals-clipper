@@ -211,7 +211,9 @@ export function readClipRules(text: string | undefined): ClipRules {
   if (atLeast) rules.minKills = Number(atLeast[1]) + (/\b(over|more than)\b/.test(atLeast[0]) ? 1 : 0);
   else {
     // "only doubles/triples/quads": the smallest streak named is the floor (not the biggest).
-    const qualifier = /\b(only|just|or better|or more|and up|\+)\b/.test(t);
+    // The qualifier must sit on the streak words ("only doubles/triples", "triples or better"), not anywhere ("just ... end on the triple").
+    const S = String.raw`(?:doubles?|triples?|quads?|quadras?|pentas?|hexas?|(?:two|three|four|five|six|[2-6]) ?kills?)`;
+    const qualifier = new RegExp(String.raw`\b(?:only|just)\s+(?:the\s+)?` + S + '|' + S + String.raw`(?:[\s/,&+]+(?:and\s+|or\s+)?` + S + String.raw`)*\s*(?:only|or better|or more|and up|\+)`).test(t);
     const named = [
       [2, /\bdoubles?\b|\btwo ?kills?\b|\b2 ?kills?\b/],
       [3, /\btriples?\b|\bthree ?kills?\b|\b3 ?kills?\b/],

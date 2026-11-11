@@ -204,11 +204,20 @@ export function learnNames(rows: Array<{ clip: string; names: RowNames }>, known
       entry.spellings.set(n, (entry.spellings.get(n) ?? 0) + 1);
     }
   }
+  // Every row has you on it once. Take the most common name first; a second name (another account) counts only
+  // on rows that don't already show one of yours, so an enemy who kills you again and again isn't learned as you.
+  const spelling = (e: { spellings: Map<string, number> }) => [...e.spellings].sort((a, b) => b[1] - a[1])[0][0];
   const total = rows.length;
-  for (const e of counts.values()) {
-    // The spelling read most often is the right one ("yaomingdiesel", not "vaomingdiesel").
-    const name = [...e.spellings].sort((a, b) => b[1] - a[1])[0][0];
-    if (total >= 5 && e.rows >= total * 0.2 && e.clips.size >= 3 && !isMine(name, out)) out.push(name);
+  if (total < 5) return out;
+  let left = rows.filter((r) => !isMine(r.names.left, out) && !isMine(r.names.right, out));
+  for (const e of [...counts.values()].sort((a, b) => b.rows - a.rows)) {
+    const name = spelling(e);
+    if (isMine(name, out)) continue;
+    const hits = left.filter((r) => isMine(r.names.left, [name]) || isMine(r.names.right, [name]));
+    if (hits.length >= Math.max(3, total * 0.2) && new Set(hits.map((r) => r.clip)).size >= 3) {
+      out.push(name);
+      left = left.filter((r) => !hits.includes(r));
+    }
   }
   return out;
 }
