@@ -73,6 +73,14 @@ const localRecorder = new LocalRecorder((msg, extra) => status(msg, extra), {
     void detector.stop();
     retryBuffer('Screen recording interrupted');
   },
+  // A new resolution or aspect ratio mid-game (e.g. stretched 4:3): save the clip in progress, then record
+  // and detect at the new size straight away. startBuffer restarts the detector with a new HUD layout.
+  onResized: ({ width, height }) => {
+    if (engine !== 'local' || !gameRunning) return;
+    status(`Game resolution is now ${width}x${height}. Restarting recording and kill detection at the new size.`);
+    void detector.stop();
+    void startBuffer();
+  },
 });
 const gameWatcher = new GameWatcher();
 const detector = new ScreenDetector({

@@ -93,8 +93,16 @@ Play in **borderless** or **fullscreen** on the monitor set in *Monitor to recor
 
 If screen recording cannot start, it retries while the game is running, backing off to one attempt
 every 30 seconds. An unexpected recorder exit uses the same recovery path and restarts detection
-after the replay buffer is ready, so resolution changes get a fresh HUD layout. Closing the game,
-switching engines or quitting cancels pending recovery.
+after the replay buffer is ready. Closing the game, switching engines or quitting cancels pending recovery.
+
+**Changing resolution or aspect ratio mid-game** (for example 16:9 to stretched 4:3): Windows Graphics
+Capture keeps going at the size it started at and would crop or pad the new picture, so the recorder
+watches for ffmpeg's "Capture size changed" message. Once the new size has held for 2 seconds, it reads
+the window size again and, if it really changed, saves any clip in progress and restarts recording and
+kill detection at the new size with a fresh HUD layout. A minimised game is ignored. Recordings keep the
+game's own pixels: stretched 1440x1080 is recorded as 1440x1080 (4:3), not stretched. The detector
+remembers the match bar for each size it has seen, so switching back and forth keeps Practice Range
+recognition.
 
 A recorder process that stays alive but emits no encoded video for 15 seconds is also restarted.
 The check uses a monotonic clock and runs every two seconds. Any footage already buffered is saved
