@@ -203,7 +203,8 @@ export function sanitizeStyle(input: unknown, base: StyleRecipe = velocity): Sty
     beatSync: bool(s.beatSync, base.beatSync),
     speedRange: range(s.speedRange, 0.25, 4, base.speedRange),
     cruiseSpeed: num(s.cruiseSpeed, 0.5, 3, base.cruiseSpeed),
-    leadIn: range(s.leadIn, 0.3, 8, base.leadIn),
+    leadIn: range(s.leadIn, 0.15, 8, base.leadIn),
+    ...(Number(s.cutLead) > 0 ? { cutLead: num(s.cutLead, 0, 0.5, 0) } : {}),
     tail: range(s.tail, 0.1, 5, base.tail),
     slowmo: {
       on: bool(sm.on, base.slowmo.on),

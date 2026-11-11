@@ -57,7 +57,7 @@ export interface FitResult {
  * or remove the weakest clips (never the closing one) until it fits under it.
  * Clips the user added by hand (external media) are never removed.
  */
-export function fitToTarget(project: ReelProject, library: ClipSidecar[], analysis: MusicAnalysis | null, opts: { maxAdd?: number; prepare?: (clip: ReelClip) => ReelClip | null } = {}): FitResult {
+export function fitToTarget(project: ReelProject, library: ClipSidecar[], analysis: MusicAnalysis | null, opts: { maxAdd?: number; prepare?: (clip: ReelClip) => ReelClip | null; ready?: Array<{ source: ClipSidecar; clip: ReelClip }> } = {}): FitResult {
   const target = project.targetSeconds;
   let p: ReelProject = { ...project, clips: [...project.clips] };
   let seconds = duration(p, analysis);
@@ -77,21 +77,28 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
     const maxAdd = opts.maxAdd ?? 20;
     // Prepare first, then go best-first by what each clip really holds (its own kills, its trim),
     // keeping your star ratings and the reel's heroes ahead.
-    const ready = pool
+    const ready = (opts.ready ? opts.ready.filter((x) => !used.has(x.clip.videoFile)) : pool
       .map((source) => ({ source, clip: opts.prepare ? opts.prepare(reelClipFromSidecar(source)) : reelClipFromSidecar(source) }))
-      .filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip)
+      .filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip))
       .sort((a, b) => (heroes.get(b.clip.hero ?? '') ?? 0) - (heroes.get(a.clip.hero ?? '') ?? 0) || (b.source.rating ?? 0) - (a.source.rating ?? 0) || b.clip.score - a.clip.score);
+    const taken = new Set<string>();
     for (const { source, clip } of ready) {
       if (added.length >= maxAdd || seconds >= target - under) break;
+      if (taken.has(clip.uid)) continue;
+      // A multi-kill split over clips goes in whole, its clips back to back.
+      const group = clip.streak ? ready.filter((x) => x.clip.streak?.id === clip.streak!.id).sort((a, b) => (a.clip.streak!.part ?? 0) - (b.clip.streak!.part ?? 0)) : [{ source, clip }];
       // Keep the closing clip (the best play, on the drop) last.
       const clips = [...p.clips];
-      clips.splice(Math.max(0, clips.length - 1), 0, clip);
+      clips.splice(Math.max(0, clips.length - 1), 0, ...group.map((x) => x.clip));
       const trial = { ...p, clips };
       const d = duration(trial, analysis);
       if (d > target + over) continue;
       p = trial;
       seconds = d;
-      added.push(source.id);
+      for (const x of group) {
+        taken.add(x.clip.uid);
+        added.push(x.source.id);
+      }
     }
   }
 
@@ -111,10 +118,12 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
 
   for (let guard = 0; seconds > target + over && p.clips.length > 1 && guard < 40; guard++) {
     const last = p.clips[p.clips.length - 1];
-    const candidates = p.clips.filter((c) => c !== last && !c.external);
+    // The closing clip, and every clip of its streak, stay.
+    const candidates = p.clips.filter((c) => c !== last && !c.external && !(last.streak && c.streak?.id === last.streak.id));
     if (!candidates.length) break;
     const weakest = candidates.reduce((a, b) => (b.score < a.score ? b : a));
-    p = { ...p, clips: p.clips.filter((c) => c !== weakest) };
+    // A streak comes out whole, or not at all.
+    p = { ...p, clips: p.clips.filter((c) => c !== weakest && !(weakest.streak && c.streak?.id === weakest.streak.id)) };
     seconds = duration(p, analysis);
     removed.push(weakest.clipId);
   }

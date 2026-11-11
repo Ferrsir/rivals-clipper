@@ -254,7 +254,18 @@ function sanitizeClip(c: any): ReelClip | null {
     cropY: num(c.cropY, 0, 1, 0.5),
     cropZoom: num(c.cropZoom, 1, 3, 1),
     ...clipEdits(c),
+    ...clipFacts(c),
   };
+}
+
+/** What the Studio found out about a clip (streak, bot game, song sync, shot); unset fields stay unset. */
+export function clipFacts(c: any): Pick<ReelClip, 'streak' | 'bots' | 'songSync' | 'shotOf'> {
+  const out: ReturnType<typeof clipFacts> = {};
+  if (c.streak && typeof c.streak.id === 'string' && Number.isFinite(c.streak.kills)) out.streak = { id: c.streak.id.slice(0, 40), kills: num(c.streak.kills, 0, 20, 0), ...(Number.isFinite(c.streak.part) ? { part: num(c.streak.part, 0, 20, 0) } : {}) };
+  if (c.bots === true) out.bots = true;
+  if (c.songSync === true) out.songSync = true;
+  if (typeof c.shotOf === 'string' && c.shotOf) out.shotOf = c.shotOf.slice(0, 40);
+  return out;
 }
 
 /** The hand edits on a clip (music bed, gain, hold, fades, jump cuts); unset fields stay unset. */

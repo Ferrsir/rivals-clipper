@@ -1392,6 +1392,9 @@ function editControls(c) {
     slider({ label: 'Fade in', min: 0, max: 1.5, step: 0.05, value: opt(c.fadeIn, 0), format: (v) => (v ? `${v.toFixed(2)} s` : 'off'), onInput: (v) => set((x) => (v ? (x.fadeIn = v) : delete x.fadeIn), []) }),
     slider({ label: 'Fade out', min: 0, max: 1.5, step: 0.05, value: opt(c.fadeOut, 0), format: (v) => (v ? `${v.toFixed(2)} s` : 'off'), onInput: (v) => set((x) => (v ? (x.fadeOut = v) : delete x.fadeOut), []) }),
     toggle({ label: 'Cut out the wait between kills', checked: c.jumpCut !== false, onChange: (on) => set((x) => (on ? delete x.jumpCut : (x.jumpCut = false))), hint: 'A slow double becomes two quick cuts instead of speeding through the walk between them' }),
+    c.external ? toggle({ label: 'Play in sync with the song', checked: !!c.songSync, onChange: (on) => set((x) => (on ? (x.songSync = true) : delete x.songSync)), hint: "Second t of this clip plays when the song is at second t. For the song's own video (an anime edit), cut in mid-song: the gameplay before it is fitted to meet it." }) : null,
+    c.streak ? h('p', { class: 'st-hint' }, `Part of a ${c.streak.kills}-kill streak the clipper split over clips; its clips play back to back.`) : null,
+    c.bots ? h('p', { class: 'st-hint' }, 'From a game against bots.') : null,
     toggle({ label: 'Keep my trim exactly', checked: !!c.manualTrim, onChange: (on) => set((x) => (on ? (x.manualTrim = true) : delete x.manualTrim)), hint: 'On after you drag an edge on the timeline. Off lets the style pick the lead-in and tail.' }),
   );
 }
