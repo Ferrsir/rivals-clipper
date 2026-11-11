@@ -309,9 +309,11 @@ function renderUpdate(u) {
   text.textContent = lines[u.phase] ?? '';
   const busy = ['checking', 'downloading', 'installing'].includes(u.phase);
   check.disabled = busy;
-  const canInstall = ['available', 'ready'].includes(u.phase) || (u.phase === 'error' && u.latest && u.latest !== u.current);
+  const canInstall = ['available', 'ready', 'waiting'].includes(u.phase) || (u.phase === 'error' && u.latest && u.latest !== u.current);
   install.classList.toggle('hidden', !canInstall);
-  install.textContent = `Update to ${u.latest ?? 'latest'}`;
+  // Waiting on the game or a clip: you can still install right away (e.g. the game is already closed).
+  install.textContent = u.phase === 'waiting' ? 'Install now anyway' : `Update to ${u.latest ?? 'latest'}`;
+  install.dataset.force = u.phase === 'waiting' ? '1' : '';
   cancel.classList.toggle('hidden', u.phase !== 'waiting');
   bar.classList.toggle('hidden', u.phase !== 'downloading');
   bar.firstElementChild.style.width = `${Math.round((u.progress ?? 0) * 100)}%`;
@@ -325,7 +327,7 @@ function renderUpdate(u) {
 $('updateCheck').addEventListener('click', async () => renderUpdate(await clipper.update.check()));
 $('updateInstall').addEventListener('click', async () => {
   if (!confirm('Install the update now? Rivals Clipper closes, installs the new version and opens again. Your clips stay where they are. A Studio export that is still running gets stopped.')) return;
-  renderUpdate(await clipper.update.install());
+  renderUpdate(await clipper.update.install($('updateInstall').dataset.force === '1'));
 });
 $('updateCancel').addEventListener('click', async () => renderUpdate(await clipper.update.cancel()));
 clipper.update.onStatus(renderUpdate);

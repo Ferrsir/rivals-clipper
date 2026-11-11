@@ -120,13 +120,19 @@ export const ai = createAiClient(() => settings.aiProvider);
 /** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
 export const library = new Library(() => paths(settings.rootFolder).clips);
 /** Check for updates / Update: pulls the latest GitHub release and installs it once nothing is recording. */
+/** Windows is logging off or shutting down: a queued update must not start an installer now. */
+let sessionEnding = false;
 const updater = new Updater({
   currentVersion: app.getVersion(),
   downloadDir: path.join(app.getPath('temp'), 'rivals-clipper-update'),
   installDir: path.dirname(app.getPath('exe')),
   libraryFolder: () => settings.rootFolder,
-  busy: () => ({ gameRunning, clipping: !!pending || clipChecks.size > 0 }),
+  // In built-in mode the process watcher is the truth: gameRunning alone can be left set when a recorder
+  // retry or a start races the game closing, and an update then waits forever.
+  busy: () => ({ gameRunning: gameRunning && (engine !== 'local' || !!gameWatcher.game), clipping: !!pending || clipChecks.size > 0 }),
   quit: () => app.quit(),
+  // Into the app's event log (in the library's logs folder), with everything else worth diagnosing.
+  log: (line) => log?.write('update', { line }),
   onChange: (s) => sendIfOpen(win, 'update-status', s),
   packaged: app.isPackaged,
 });
@@ -718,6 +724,8 @@ function createWindow() {
   });
   void win.loadFile(path.join(__dirname, '../../renderer/index.html'));
   win.once('closed', () => { win = undefined; });
+  // Windows only: logoff or shutdown is closing the app.
+  win.on('session-end', () => { sessionEnding = true; });
 }
 
 function setupIpc() {
@@ -813,7 +821,7 @@ function setupIpc() {
   ipcMain.handle('app:paths', () => paths(settings.rootFolder));
   ipcMain.handle('update:status', () => updater.status);
   ipcMain.handle('update:check', () => updater.check());
-  ipcMain.handle('update:install', () => updater.install());
+  ipcMain.handle('update:install', (_e, force?: unknown) => updater.install(force === true));
   ipcMain.handle('update:cancel', () => updater.cancel());
 }
 
@@ -874,6 +882,8 @@ app.whenReady().then(() => {
   // Look for a new version shortly after start and every 6 hours. Only checks: installing is your call.
   setTimeout(() => void updater.check(), 15_000);
   setInterval(() => void updater.check(), 6 * 60 * 60_000).unref();
+  // A queued update also re-checks now and then, in case the moment the game closed was missed.
+  setInterval(() => updater.idle(), 30_000).unref();
 });
 
 installGracefulShutdown(app, async () => {
@@ -890,6 +900,8 @@ installGracefulShutdown(app, async () => {
   // A clip saved just now may still be under its death-screen check (a trim or a move to the Recycle Bin).
   await Promise.race([Promise.allSettled([...clipChecks]), new Promise((r) => setTimeout(r, 15_000))]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
+  // An update that was waiting for the game or a clip installs now that everything has stopped.
+  updater.onQuit({ sessionEnding });
   log?.flushSync();
 }, error => {
   log?.write('shutdown-error', String(error));
