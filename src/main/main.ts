@@ -125,8 +125,17 @@ const updater = new Updater({
   downloadDir: path.join(app.getPath('temp'), 'rivals-clipper-update'),
   installDir: path.dirname(app.getPath('exe')),
   libraryFolder: () => settings.rootFolder,
-  busy: () => ({ gameRunning, clipping: !!pending || clipChecks.size > 0 }),
+  // In built-in mode the process watcher is the truth: gameRunning alone can be left set when a recorder
+  // retry or a start races the game closing, and an update then waits forever.
+  busy: () => ({ gameRunning: gameRunning && (engine !== 'local' || !!gameWatcher.game), clipping: !!pending || clipChecks.size > 0 }),
   quit: () => app.quit(),
+  log: (line) => {
+    try {
+      fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'), `${new Date().toISOString()} ${line}\n`);
+    } catch {
+      /* best effort */
+    }
+  },
   onChange: (s) => sendIfOpen(win, 'update-status', s),
   packaged: app.isPackaged,
 });
@@ -813,7 +822,7 @@ function setupIpc() {
   ipcMain.handle('app:paths', () => paths(settings.rootFolder));
   ipcMain.handle('update:status', () => updater.status);
   ipcMain.handle('update:check', () => updater.check());
-  ipcMain.handle('update:install', () => updater.install());
+  ipcMain.handle('update:install', (_e, force?: unknown) => updater.install(force === true));
   ipcMain.handle('update:cancel', () => updater.cancel());
 }
 
@@ -890,6 +899,8 @@ installGracefulShutdown(app, async () => {
   // A clip saved just now may still be under its death-screen check (a trim or a move to the Recycle Bin).
   await Promise.race([Promise.allSettled([...clipChecks]), new Promise((r) => setTimeout(r, 15_000))]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
+  // An update that was waiting for the game or a clip installs now that everything has stopped.
+  updater.onQuit();
   log?.flushSync();
 }, error => {
   log?.write('shutdown-error', String(error));

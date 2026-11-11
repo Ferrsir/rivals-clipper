@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('clipper', {
   update: {
     status: () => ipcRenderer.invoke('update:status'),
     check: () => ipcRenderer.invoke('update:check'),
-    install: () => ipcRenderer.invoke('update:install'),
+    install: (force?: boolean) => ipcRenderer.invoke('update:install', force === true),
     cancel: () => ipcRenderer.invoke('update:cancel'),
     onStatus: (cb: (s: unknown) => void) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
   },

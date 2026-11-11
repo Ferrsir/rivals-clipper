@@ -148,3 +148,45 @@ test('refuses when the clips folder is inside the app folder', async () => {
   assert.match(s.message!, /inside the app folder/);
   assert.equal(t.spawned.length, 0);
 });
+
+test('an install waiting on the game runs when the app closes instead of being lost', async () => {
+  const t = setup({ rel: release('0.3.0'), busy: { gameRunning: true, clipping: false } });
+  assert.equal((await t.u.install()).phase, 'waiting');
+  assert.equal(t.spawned.length, 0);
+  assert.equal(t.u.onQuit(), true);
+  assert.equal(t.spawned.length, 1);
+  assert.equal(t.quits(), 0, 'already quitting: does not ask to quit again');
+  assert.equal(t.u.onQuit(), false, 'only once');
+  // Nothing queued: closing the app installs nothing.
+  const idle = setup({ rel: release('0.3.0') });
+  assert.equal(idle.u.onQuit(), false);
+});
+
+test('"Install now anyway" skips the wait when the app wrongly thinks the game is open', async () => {
+  const t = setup({ rel: release('0.3.0'), busy: { gameRunning: true, clipping: false } });
+  assert.equal((await t.u.install()).phase, 'waiting');
+  assert.equal((await t.u.install(true)).phase, 'installing');
+  assert.equal(t.spawned.length, 1);
+  assert.equal(t.quits(), 1);
+});
+
+test('a newer release replaces a queued install instead of leaving it stuck', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rc-update-'));
+  let rel = release('0.3.0');
+  const lines: string[] = [];
+  const u = new Updater({
+    currentVersion: '0.2.9', downloadDir: dir, installDir: 'F:\\App', libraryFolder: () => 'F:\\RivalsClips',
+    busy: () => ({ gameRunning: true, clipping: false }), quit: () => {}, onChange: () => {}, pid: 1, platform: 'win32', packaged: true,
+    fetch: (async (url: string) => fakeFetch(rel)(url)) as never, spawn: () => {}, log: (l) => lines.push(l),
+  });
+  assert.equal((await u.install()).phase, 'waiting');
+  rel = release('0.3.1');
+  const s = await u.check();
+  assert.equal(s.phase, 'available');
+  assert.equal(s.latest, '0.3.1');
+  assert.equal(u.onQuit(), false, 'the old queued install is dropped');
+  assert.equal((await u.install()).phase, 'waiting');
+  assert.ok(u.onQuit());
+  assert.ok(lines.some((l) => l.startsWith('waiting 0.3.1')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.startsWith('started installer')));
+});

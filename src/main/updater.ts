@@ -118,6 +118,8 @@ export interface UpdaterDeps {
   spawn?: (cmd: string, args: string[]) => void;
   /** Packaged build? Running from source can't update itself. */
   packaged?: boolean;
+  /** One line per step (check, download, wait, launch), so a stuck update can be explained. */
+  log?: (line: string) => void;
 }
 
 export class Updater {
@@ -138,8 +140,18 @@ export class Updater {
   }
 
   private set(patch: Partial<UpdateState>) {
+    const before = this.state.phase;
     this.state = { ...this.state, ...patch };
+    if (patch.phase && patch.phase !== before) this.note(`${patch.phase}${this.state.latest ? ` ${this.state.latest}` : ''}${patch.message ? `: ${patch.message}` : ''}`);
     this.deps.onChange(this.status);
+  }
+
+  private note(line: string) {
+    try {
+      this.deps.log?.(line);
+    } catch {
+      /* logging never breaks an update */
+    }
   }
 
   private get fetch(): FetchLike {
@@ -169,11 +181,15 @@ export class Updater {
         return this.status;
       }
       if (!asset) throw new Error(`Version ${latest} is out but has no Windows installer attached yet.`);
-      if (this.release?.tag_name !== release.tag_name) this.setupPath = undefined;
+      if (this.release && this.release.tag_name !== release.tag_name) {
+        // A newer version replaced the one that was downloaded (and maybe queued): start over with it.
+        this.setupPath = undefined;
+        this.queued = false;
+      }
       this.release = release;
       this.asset = asset;
       this.set({
-        phase: keep && this.setupPath ? keep : 'available',
+        phase: keep && this.setupPath ? (keep === 'waiting' && !this.queued ? 'ready' : keep) : 'available',
         latest,
         notes: (release.body ?? '').slice(0, 2000),
         releaseUrl: release.html_url,
@@ -187,8 +203,11 @@ export class Updater {
     return this.status;
   }
 
-  /** Download (if needed) and install. Waits for the game to close when it is recording. */
-  async install(): Promise<UpdateState> {
+  /**
+   * Download (if needed) and install. Waits for the game to close when it is recording, unless `force`
+   * ("Install now anyway": the app thinks the game is open but you know it isn't).
+   */
+  async install(force = false): Promise<UpdateState> {
     if ((this.deps.platform ?? process.platform) !== 'win32') return this.fail('Updates install on Windows only.');
     if (this.deps.packaged === false) return this.fail('This copy runs from source. Use git pull instead.');
     const library = this.deps.libraryFolder();
@@ -204,13 +223,25 @@ export class Updater {
     } catch (err) {
       return this.fail(`Download failed: ${(err as Error).message}`);
     }
-    const why = busyReason(this.deps.busy());
+    const why = force ? undefined : busyReason(this.deps.busy());
     if (why) {
       this.queued = true;
-      this.set({ phase: 'waiting', message: `${why} The update installs by itself when you close the game.` });
+      this.set({ phase: 'waiting', message: `${why} The update installs by itself when you close the game or this app.` });
       return this.status;
     }
+    if (force) this.note('installing now (asked to install anyway)');
     return this.launch();
+  }
+
+  /**
+   * The app is closing. A queued install runs now: everything has stopped recording and saving, and
+   * waiting for the next launch would throw it away. Returns true when the installer was started.
+   */
+  onQuit(): boolean {
+    if (!this.queued || !this.setupPath || !fs.existsSync(this.setupPath)) return false;
+    this.queued = false;
+    this.note('app closing with an install queued: installing now');
+    return this.start();
   }
 
   /** Called when the game closes or a clip finishes saving: runs a queued install if it is now safe. */
@@ -289,16 +320,27 @@ export class Updater {
     this.set({ phase: 'ready', progress: 1 });
   }
 
-  private launch(): UpdateState {
+  /** Starts the PowerShell that waits for this app to exit and then runs the installer. */
+  private start(): boolean {
     const setup = this.setupPath!;
     const run = this.deps.spawn ?? ((cmd: string, args: string[]) => {
-      nodeSpawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      const child = nodeSpawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+      // A spawn failure arrives later as an event: without a listener it would crash the app.
+      child.on('error', (err) => this.note(`installer start failed: ${err.message}`));
+      child.unref();
     });
     try {
       run('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', installerCommand(this.deps.pid ?? process.pid, setup)]);
+      this.note(`started installer ${setup}`);
+      return true;
     } catch (err) {
-      return this.fail(`Could not start the installer: ${(err as Error).message}`);
+      this.fail(`Could not start the installer: ${(err as Error).message}`);
+      return false;
     }
+  }
+
+  private launch(): UpdateState {
+    if (!this.start()) return this.status;
     this.set({ phase: 'installing', message: 'Closing to install. The app reopens by itself in about a minute.' });
     this.deps.quit();
     return this.status;
