@@ -152,7 +152,7 @@ export function heroOf(c: Pick<ClipSidecar, 'hero' | 'events'> & Partial<Pick<Cl
 
 export const NO_RULES: ClipRules = { heroes: [], notHeroes: [] };
 
-export const hasRules = (r: ClipRules | undefined): r is ClipRules => !!r && (r.heroes.length > 0 || r.notHeroes.length > 0 || !!r.minKills || !!r.needTags?.length);
+export const hasRules = (r: ClipRules | undefined): r is ClipRules => !!r && (r.heroes.length > 0 || r.notHeroes.length > 0 || !!r.minKills || !!r.needTags?.length || !!r.bots);
 
 const PICTURE_WORD = /^(icon|picture|pic|image|photo|logo|sticker|emoji|png|face|pfp)$/;
 
@@ -209,11 +209,22 @@ export function readClipRules(text: string | undefined): ClipRules {
   // Kill counts: "at least 3 kills", "3+ kills", "triples or better", "only multi kills", "team wipes only".
   const atLeast = t.match(/\b(?:at least|min(?:imum)?|over|more than)\s+(\d)\s*(?:kills?|elims?|eliminations?)\b/) ?? t.match(/\b(\d)\s*\+\s*(?:kills?|elims?)\b/);
   if (atLeast) rules.minKills = Number(atLeast[1]) + (/\b(over|more than)\b/.test(atLeast[0]) ? 1 : 0);
-  else if (/\b(hexa|six) ?(kills?|frags?)?\b/.test(t) && /\bonly\b/.test(t)) rules.minKills = 6;
-  else if (/\b(penta|five) ?(kills?|frags?)\b|\bpentas?\b/.test(t) && /\b(only|just|or better|or more|and up|\+)\b/.test(t)) rules.minKills = 5;
-  else if (/\bquads?\b|\bquadra|\bfour ?kills?\b/.test(t) && /\b(only|just|or better|or more|and up|\+)\b/.test(t)) rules.minKills = 4;
-  else if (/\btriples?\b|\bthree ?kills?\b|\b3 ?kills?\b/.test(t) && /\b(only|just|or better|or more|and up|\+)\b/.test(t)) rules.minKills = 3;
-  else if (/\bmulti[ -]?(kills?|frags?)\b|\bdoubles? or better\b|\bno single kills?\b|\bno (?:1|one)[ -]?kill/.test(t)) rules.minKills = 2;
+  else {
+    // "only doubles/triples/quads": the smallest streak named is the floor (not the biggest).
+    const qualifier = /\b(only|just|or better|or more|and up|\+)\b/.test(t);
+    const named = [
+      [2, /\bdoubles?\b|\btwo ?kills?\b|\b2 ?kills?\b/],
+      [3, /\btriples?\b|\bthree ?kills?\b|\b3 ?kills?\b/],
+      [4, /\bquads?\b|\bquadra|\bfour ?kills?\b/],
+      [5, /\b(penta|five) ?(kills?|frags?)\b|\bpentas?\b/],
+      [6, /\b(hexa|six) ?(kills?|frags?)?\b/],
+    ] as const;
+    const counts = named.filter(([n, re]) => re.test(t) && (n !== 6 || /\bonly\b/.test(t))).map(([n]) => n as number);
+    if (qualifier && counts.length) rules.minKills = Math.min(...counts);
+    else if (/\bmulti[ -]?(kills?|frags?)\b|\bdoubles? or better\b|\bno single kills?\b|\bno (?:1|one)[ -]?kill/.test(t)) rules.minKills = 2;
+  }
+  // "include bot games", "vs ai is fine": games against AI bots are left out unless you ask for them.
+  if (/\b(include|with|allow|use|keep|fine|ok|okay)\b[^.]{0,20}\b(bots?|bot games?|vs\.? ?ai|ai games?|against (?:the )?ai)\b|\b(bots?|bot games?|vs\.? ?ai)\b[^.]{0,12}\b(fine|ok|okay|allowed|too)\b/.test(t)) rules.bots = true;
   if (/\bteam ?wipes?\b|\bwipes? only\b|\bonly wipes?\b/.test(t) && /\b(only|just)\b/.test(t)) rules.needTags = ['team-wipe'];
   return rules;
 }
@@ -228,6 +239,7 @@ export function mergeRules(saved: ClipRules | undefined, next: ClipRules, text: 
     notHeroes: [...new Set([...(lift ? [] : base.notHeroes.filter((h) => !next.heroes.includes(h))), ...next.notHeroes])],
     minKills: next.minKills ?? base.minKills,
     needTags: next.needTags ?? base.needTags,
+    ...(next.bots ?? base.bots ? { bots: true } : {}),
   };
 }
 
@@ -238,14 +250,15 @@ export interface RuleCheck {
 }
 
 /** Does this clip follow the rules? A clip whose hero can't be told never passes a hero rule. */
-export function checkClip(rules: ClipRules, c: { hero?: string; kills: number; tags: string[] }): RuleCheck {
+export function checkClip(rules: ClipRules, c: { hero?: string; kills: number; tags: string[]; streak?: { kills: number } }): RuleCheck {
   const hero = canonicalHero(c.hero);
   if (rules.heroes.length) {
     if (!hero) return { ok: false, reason: 'unknown-hero' };
     if (!rules.heroes.includes(hero)) return { ok: false, reason: 'hero' };
   }
   if (hero && rules.notHeroes.includes(hero)) return { ok: false, reason: 'hero' };
-  if (rules.minKills && c.kills < rules.minKills) return { ok: false, reason: 'kills' };
+  // A multi-kill split across two clips counts as the whole streak (streaks.ts joins them back up).
+  if (rules.minKills && Math.max(c.kills, c.streak?.kills ?? 0) < rules.minKills) return { ok: false, reason: 'kills' };
   if (rules.needTags?.length && !rules.needTags.some((t) => c.tags.includes(t))) return { ok: false, reason: 'tag' };
   return { ok: true };
 }
@@ -253,9 +266,12 @@ export function checkClip(rules: ClipRules, c: { hero?: string; kills: number; t
 const killCount = (c: ClipSidecar) => c.events.filter((e) => e.type === 'kill').length;
 
 /** Library clips that follow the rules. */
-export function filterLibrary(rules: ClipRules, clips: ClipSidecar[], checked?: Map<string, string | null>): ClipSidecar[] {
+export function filterLibrary(rules: ClipRules, clips: ClipSidecar[], checked?: Map<string, string | null>, opts: { killsChecked?: boolean } = {}): ClipSidecar[] {
   if (!hasRules(rules)) return clips;
-  return clips.filter((c) => checkClip(rules, { hero: heroOf(c, checked), kills: killCount(c), tags: c.tags }).ok);
+  // The clipper's kill counts are often wrong (teammates' kills) and a split multi-kill shows as singles:
+  // when the kill feed is read afterwards (killsChecked), the kill rule waits for that.
+  const r = opts.killsChecked ? { ...rules, minKills: undefined } : rules;
+  return clips.filter((c) => checkClip(r, { hero: heroOf(c, checked), kills: killCount(c), tags: c.tags }).ok);
 }
 
 /** "only Deadpool, no Magik, 3+ kills" for notes and the AI prompt. */
@@ -263,7 +279,8 @@ export function describeRules(r: ClipRules): string {
   const parts: string[] = [];
   if (r.heroes.length) parts.push(`only ${list(r.heroes)} clips`);
   if (r.notHeroes.length) parts.push(`no ${list(r.notHeroes, 'or')} clips`);
-  if (r.minKills) parts.push(`at least ${r.minKills} kills in every clip`);
+  if (r.minKills) parts.push(`at least ${r.minKills} kills in every clip or streak`);
+  if (r.bots) parts.push('bot games allowed');
   if (r.needTags?.includes('team-wipe')) parts.push('team wipes only');
   return parts.join(', ');
 }
@@ -280,6 +297,7 @@ export function sanitizeRules(v: unknown): ClipRules | undefined {
     minKills: Number.isInteger(o.minKills) && (o.minKills as number) >= 1 && (o.minKills as number) <= 6 ? (o.minKills as number) : undefined,
     needTags: Array.isArray(o.needTags) ? o.needTags.filter((t): t is string => typeof t === 'string').map((t) => t.slice(0, 30)).slice(0, 5) : undefined,
   };
+  if (o.bots === true) r.bots = true;
   if (!r.needTags?.length) delete r.needTags;
   if (r.minKills === undefined) delete r.minKills;
   return hasRules(r) ? r : undefined;

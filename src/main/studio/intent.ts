@@ -22,6 +22,11 @@ export interface PromptIntent {
   untilWord?: string;
   /** "let the last clip play out and fade with the music". */
   playOut: boolean;
+  /**
+   * "the anime clip in the middle", "cut to the edit when the music drops out": your clip (or the song's own
+   * video) plays mid-song, in sync with the song, with gameplay before and after it.
+   */
+  cutaway: boolean;
 }
 
 const SAY = String.raw`(?:goes|says|said|say|yells|shouts|screams|is like)`;
@@ -97,6 +102,7 @@ export function readIntent(text: string): PromptIntent {
     voices: /\b(ai voices?|voice ?overs?|voiced|tts|text to speech|dub(bed|bing)?|narrat\w*)\b|\bvoices? for\b|\b(have|make|let) (them|him|her|both|the characters?) (talk|speak|say|argue|trash talk)|\bthem talking\b/.test(t),
     untilWord: untilWord(times.rest),
     playOut: /\b(play(?:s|ing)? (?:it |that |the clip )?out|finish(?:es)? out|let (?:the |that )?(?:last |final )?clip (?:finish|play|run)|(?:last|final) clip (?:fades?|plays? out)|fades? out with the (?:music|song))\b/.test(t),
+    cutaway: /\b(?:in|at|into) the (?:middle|mid ?point|break|breakdown|quiet part)\b|\bmid[- ]?(?:song|way|reel|video)\b|\b(?:cut|cuts|switch|switches|go|goes) (?:away )?(?:to|back to) the (?:anime|video|clip|edit|scene|show|tiktok)\b|\b(?:then|and then) (?:the )?(?:gameplay|clips|montage) (?:again|comes back|resumes?)\b|\bgameplay (?:comes )?back\b/.test(t),
     faceOverlay: /\b(icon|picture|pic|image|photo|logo|sticker|emoji|face ?swap)\b/.test(t) && /\b(on|over)\s+(?!the song|the track|the music)\w+/.test(t),
   };
 }
@@ -194,6 +200,17 @@ export function styleFromPrompt(text: string, style: StyleRecipe): { style: Styl
     s.cruiseSpeed = 1;
     s.motionBlur.on = false;
     changes.push('normal speed');
+  }
+  // "one kill per beat" on a fast song: no slow-mo, short run-ups, and cuts a moment before the beat so each
+  // kill lands on it with its feed row already showing (Ferris's JJK pond edit, 96 BPM).
+  if (/\b(?:one|1|a) kills? (?:per|a|on (?:each|every|the)|every) beat\b|\bkills? on (?:every|each) beat\b|\bevery beat (?:a|one) kill\b/.test(t)) {
+    s.slowmo.on = false;
+    s.cutLead = 0.25;
+    s.leadIn = [0.2, 0.45];
+    s.tail = [0.15, 0.8];
+    s.cruiseSpeed = 1;
+    s.speedRange = [Math.min(s.speedRange[0], 0.9), Math.max(s.speedRange[1], 1.3)];
+    changes.push('one kill per beat (each cut a moment before the beat so the kill lands on it)');
   }
   if (no(String.raw`(?:hit ?sounds?|impact sounds?|sound effects?|sfx)`) && s.impactSound > 0) { s.impactSound = 0; changes.push('no hit sounds'); }
   if (no(String.raw`(?:fade|fade out|fade to black)`) && s.fadeOut > 0) { s.fadeOut = 0; changes.push('no fade at the end'); }

@@ -96,7 +96,8 @@ export function faceAnchors(raw: unknown, times: number[]): FaceAnchor[] {
  * Ask the AI where the face is in frames taken across the overlay's time range, then follow it on
  * every frame in between so the picture stays on the face through fast movement.
  */
-export async function locateFace(ffmpeg: string, ai: AiClient, clip: ReelClip, ov: ImageOverlay, what: string, signal?: AbortSignal): Promise<OverlayKey[]> {
+/** With `requireSeen`, a face the AI never sees gives an empty track (the picture is then left off that shot). */
+export async function locateFace(ffmpeg: string, ai: AiClient, clip: ReelClip, ov: ImageOverlay, what: string, signal?: AbortSignal, requireSeen = false): Promise<OverlayKey[]> {
   const span = Math.max(0.1, ov.to - ov.from);
   const count = Math.min(12, Math.max(3, Math.ceil(span * 2.5)));
   const times = Array.from({ length: count }, (_, i) => Math.min(clip.durationSec - 0.05, ov.from + (span * i) / (count - 1)));
@@ -120,7 +121,7 @@ export async function locateFace(ffmpeg: string, ai: AiClient, clip: ReelClip, o
     });
     const coarse = faceKeys(r.json, times, { x: ov.x, y: ov.y, size: ov.size });
     const anchors = faceAnchors(r.json, times);
-    if (!anchors.length) return coarse;
+    if (!anchors.length) return requireSeen ? [] : coarse;
     try {
       const g = await greyFrames(ffmpeg, clip.videoFile, ov.from, Math.min(clip.durationSec, ov.to), { srcW: clip.width, srcH: clip.height, signal });
       const tracked = simplifyKeys(trackFace(g, anchors));

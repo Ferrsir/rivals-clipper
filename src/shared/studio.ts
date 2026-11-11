@@ -138,6 +138,11 @@ export interface StyleRecipe {
   /** Blend frames on sped-up parts so they smear like a real velocity edit. */
   motionBlur: { on: boolean; minSpeed: number };
   grade: { contrast: number; saturation: number; brightness: number; gamma: number; vignette: number; sharpen: number };
+  /**
+   * Cuts come this many seconds before the beat, so the next clip's kill lands ON the beat with the feed
+   * row already showing (one kill per beat on a fast song). 0 or unset = cuts on the beat.
+   */
+  cutLead?: number;
   /** Afterimage trails ("Sandevistan"). onSlowmo: only during kill slow-mo. */
   echo: { on: boolean; strength: number; onSlowmo: boolean };
   transition: 'cut' | 'flash' | 'dip' | 'whip';
@@ -223,6 +228,17 @@ export interface ReelClip {
   jumpCut?: boolean;
   /** Trimmed by hand on the timeline: the edit uses the clip from `in` to `out` (speeds still flex a little to keep the beat). */
   manualTrim?: boolean;
+  /** Part of a multi-kill the clipper split across clips: the clips of one streak play back to back. kills = the whole streak's. */
+  streak?: { id: string; kills: number };
+  /** A game against AI bots (victims named "THOR-Normal"). Left out of reels unless you ask for them. */
+  bots?: boolean;
+  /**
+   * Plays in sync with the song: second t of this clip plays when the song is at second t. For a sound
+   * that came from a video (an anime edit's audio), this is that video, cut in mid-song at its own moment.
+   */
+  songSync?: boolean;
+  /** One shot of a longer clip, split at its scene cuts so each shot gets its own crop and face picture. */
+  shotOf?: string;
 }
 
 /** One of your rows in the game's kill feed: its slot (0 = top), clip seconds, and plate left edge (0..1 of the feed box). */
@@ -251,6 +267,8 @@ export interface ClipRules {
   minKills?: number;
   /** Every clip needs one of these tags (e.g. "team-wipe"). */
   needTags?: string[];
+  /** Games against AI bots are allowed ("include bot games"). Left out by default. */
+  bots?: boolean;
 }
 
 export interface ReelProject {

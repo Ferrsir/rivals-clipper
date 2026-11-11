@@ -22,7 +22,13 @@ import { createProject, newId, ProjectStore, projectFromIdea, reelClipFromSideca
 import { describeFit, duration as reelSeconds, fitToTarget, requestedSeconds } from './fit';
 import { locateFace } from './overlay';
 import { TRADE_S, scanClip, trimAround, type ClipScan } from './clip-filter';
-import { dropWhileDead, withFeedRows } from './feed-rows';
+import { dropWhileDead, ownRows, rowOnsets, withFeedRows } from './feed-rows';
+import { classifyRow, judgeHits, learnNames, namesFromSetting, readOwnRow, rowAtOnset, type OnsetRead } from './feed-names';
+import { joinStreaks, keepStreaksTogether } from './streaks';
+import { faceTargets, sceneCuts, shotCropX, songBreak, splitIntoShots, targetFor } from './shots';
+import { externalClip } from './projects';
+import { probeMedia } from './assets';
+import { ScreenOcr } from '../vision/ocr';
 import { findSong, readIntent, styleFromPrompt } from './intent';
 import { checkClip, describeRules, filterLibrary, hasRules, heroOf, mergeRules, readClipRules, type ClipRules } from './clip-rules';
 import { HeroChecks, checkHeroes } from './hero-check';
@@ -166,7 +172,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
    * The library clips a set of rules allows. With a hero rule, clips saved without a hero are first
    * looked at by your signed-in AI (cached), and any clip whose hero still can't be told is left out.
    */
-  const allowedLibrary = async (rules: ClipRules | undefined, signal?: AbortSignal): Promise<{ clips: ClipSidecar[]; heroes: Map<string, string | null>; unknown: number }> => {
+  const allowedLibrary = async (rules: ClipRules | undefined, signal?: AbortSignal, opts: { killsChecked?: boolean } = {}): Promise<{ clips: ClipSidecar[]; heroes: Map<string, string | null>; unknown: number }> => {
     const all = listClips(p().clips, 1000).filter((c) => fs.existsSync(c.videoFile) && (c.rating === undefined || c.rating > 2));
     if (!hasRules(rules)) return { clips: all, heroes: new Map(), unknown: 0 };
     let heroes = checks().known(all);
@@ -174,7 +180,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       heroes = await checkHeroes({ ai: ctx.ai, ffmpeg: await ffmpeg().catch(() => undefined), checks: checks(), clips: all, wanted: rules.heroes.length ? rules.heroes : rules.notHeroes, signal });
     }
     const unknown = all.filter((c) => !heroOf(c, heroes) && c.events.some((e) => e.type === 'kill')).length;
-    return { clips: filterLibrary(rules, all, heroes), heroes, unknown };
+    return { clips: filterLibrary(rules, all, heroes, opts), heroes, unknown };
   };
   /** Library clips limited to the ones you can see in the clip list (its filters), when the renderer sends them. */
   const onlyIds = (ids: unknown) => (Array.isArray(ids) && ids.length ? new Set(ids.filter((x): x is string => typeof x === 'string')) : undefined);
@@ -388,7 +394,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     const ff = await ffmpeg();
     const keepLanguage = /\b(original|japanese|native) (language|audio|subtitles?|subs)\b|\bdon'?t translate\b/i.test(request);
     // A hook (your own clip before the gameplay) ends just after its last word, never mid-word.
-    const hook = project.clips[0]?.external && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
+    const hook = project.clips[0]?.external && !project.clips[0].songSync && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
     if (wantSubs || wantVoices || hook) {
       // Only transcribe when the plan has no lines of its own (your words win).
       const sources = [...new Set(project.clips.map(c => c.videoFile))].filter(file => file === hook?.videoFile || !(project.subtitles ?? []).some(t => project.clips.find(c => c.uid === t.clipUid)?.videoFile === file));
@@ -433,6 +439,41 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
       }
     }
   };
+  /**
+   * Reads the names on each of your new feed rows (a kill, or your death: both are white plates) and learns
+   * your names from them. One text read per row; the reads are cached per clip file.
+   */
+  let feedOcr: ScreenOcr | undefined;
+  const readFeedNames = async (ff: string, scans: Map<string, ClipScan>, signal?: AbortSignal): Promise<{ reads: Map<string, OnsetRead[]>; names: string[] }> => {
+    const reads = new Map<string, OnsetRead[]>();
+    const known = namesFromSetting(ctx.getSettings().playerName);
+    feedOcr ??= new ScreenOcr();
+    if (!(await feedOcr.init())) return { reads, names: known };
+    for (const [file, scan] of scans) {
+      if (signal?.aborted) break;
+      const rows = ownRows(scan.feed);
+      const list: OnsetRead[] = [];
+      for (const at of rowOnsets(scan.feed)) {
+        const row = rowAtOnset(rows, at);
+        if (row) list.push({ at, names: await readOwnRow(ff, feedOcr, file, row, known, signal) });
+      }
+      reads.set(file, list);
+    }
+    const names = learnNames([...reads].flatMap(([clip, list]) => list.map((r) => ({ clip, names: r.names }))), known);
+    // With your names known, rows that didn't show one get a second look on another frame (a row still sliding in reads as junk).
+    if (names.length > known.length) {
+      for (const [file, list] of reads) {
+        const scan = scans.get(file)!;
+        const rows = ownRows(scan.feed);
+        for (const r of list) {
+          if (classifyRow(r.names, names) !== 'other') continue;
+          const row = rowAtOnset(rows, r.at);
+          if (row) r.names = await readOwnRow(ff, feedOcr, file, row, names, signal);
+        }
+      }
+    }
+    return { reads, names };
+  };
   const finishPlan = async (project: ReelProject, request: string, signal?: AbortSignal): Promise<{ project: ReelProject; notes: string[] }> => {
     const notes: string[] = [];
     const fmt = getFormat(project.format);
@@ -476,7 +517,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // Never use footage with the Tab scoreboard up: trim around it, or drop the clip.
     const ff0 = await ffmpeg();
     // Never pull Marvel Rivals library clips into an edit of your own footage.
-    const allowed = ownOnly ? { clips: [] as ClipSidecar[], heroes: new Map<string, string | null>(), unknown: 0 } : await allowedLibrary(project.clipRules, signal);
+    const allowed = ownOnly ? { clips: [] as ClipSidecar[], heroes: new Map<string, string | null>(), unknown: 0 } : await allowedLibrary(project.clipRules, signal, { killsChecked: true });
     const sources = new Map(listClips(p().clips, 1000).map(c => [c.id, c]));
     const pool = allowed.clips.filter(c => c.events.some(e => e.type === 'kill')).sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || b.score - a.score).slice(0, 60);
     const scans = new Map<string, ClipScan>();
@@ -485,49 +526,74 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // If no scanned clip shows a single row of yours, the feed is somewhere this build doesn't look
     // (another HUD scale or layout): keep the clipper's kills rather than throw everything away.
     const feedReadable = [...scans.values()].some(s => s.feed.some(f => f.own.some(x => x != null)));
-    const broke = { hero: 0, kills: 0 };
-    const prepare = (c: ReelClip) => {
+    // A white row is your kill only when your name is on its LEFT: your own death is a white row too.
+    const feedNames = feedReadable ? await readFeedNames(ff0, scans, signal) : { reads: new Map<string, OnsetRead[]>(), names: [] as string[] };
+    const broke = { hero: 0, kills: 0, bots: 0 };
+    const prepareRaw = (c: ReelClip) => {
       if (c.external) return c;
       const src = sources.get(c.clipId);
       const hero = src ? heroOf(src, allowed.heroes) : c.hero;
       const scan = scans.get(c.videoFile);
       const read = scan && feedReadable ? withFeedRows(c, scan.feed) : c;
+      const judged = judgeHits(read.hits, feedNames.reads.get(c.videoFile) ?? [], feedNames.names);
+      // Games against bots ("THOR-Normal") stay out unless you asked for them.
+      if (judged.bots && !project.clipRules?.bots) {
+        broke.bots++;
+        return null;
+      }
       // Kills while you're dead (the "DEFEATED BY" card is up) are spectating, and your death row looks like a kill.
-      const alive = dropWhileDead(read.hits, scan?.dead);
-      const own = { ...read, hits: alive, kills: alive.length };
+      const alive = dropWhileDead(judged.hits, scan?.dead);
+      const own = { ...read, hits: alive, kills: alive.length, ...(judged.bots ? { bots: true, tags: [...new Set([...read.tags, 'bots'])] } : {}) };
       // Not your kill, or it opens straight on the kill with no build-up: leave it out.
       const first = own.hits.find(h => h > own.in);
       if (first === undefined || first - own.in < 1) return null;
       // End before your death, unless a kill lands right as you die (then the dead times end it a moment later).
-      const deaths = (scan?.deaths ?? []).filter(d => !alive.some(h => h >= d - 0.25 && h <= d + TRADE_S));
+      const deaths = [...(scan?.deaths ?? []), ...judged.deaths].filter(d => !alive.some(h => h >= d - 0.25 && h <= d + TRADE_S));
       const trimmed = trimAround(own, [...(scan?.scoreboard ?? []), ...(scan?.dead ?? []), ...deaths]);
       if (!trimmed) return null;
       // Score what's really in the clip: kills only count when they're yours (feed rows) and inside the trim.
-      const scored = rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);
-      if (project.clipRules) {
-        const check = checkClip(project.clipRules, scored);
-        if (!check.ok) {
-          if (check.reason === 'kills' || check.reason === 'tag') broke.kills++;
-          else broke.hero++;
-          return null;
-        }
-      }
-      return scored;
+      return rescore({ ...trimmed, hero: hero ?? trimmed.hero }, src);
     };
-    const before = project.clips.length;
-    project.clips = project.clips.map(prepare).filter((c): c is ReelClip => !!c);
-    const ruled = broke.hero + broke.kills;
-    const dropped = before - project.clips.length - ruled;
-    if (ruled) notes.push(`Took out ${ruled} clip${ruled === 1 ? '' : 's'} that broke your rules (${describeRules(project.clipRules!)}).`);
-    if (!project.clips.length) {
-      // Every pick had the scoreboard open: start from the best usable kill clip so fitting can fill the rest.
-      for (const source of pool) {
-        const c = fs.existsSync(source.videoFile) ? prepare(reelClipFromSidecar(source)) : null;
-        if (c) { project.clips = [c]; break; }
+    const follows = (c: ReelClip) => {
+      if (c.external || !project.clipRules) return true;
+      const check = checkClip(project.clipRules, c);
+      if (!check.ok) {
+        if (check.reason === 'kills' || check.reason === 'tag') broke.kills++;
+        else broke.hero++;
       }
+      return check.ok;
+    };
+    // A multi-kill the clipper split into two clips is joined back up by real time, so "doubles and triples
+    // only" sees the whole streak. Your picks and the rest of the library are joined together.
+    const startOf = (c: ReelClip) => (sources.get(c.clipId)?.startTimeEpoch ?? NaN) / 1000;
+    const before = project.clips.length;
+    const picked = project.clips.map(prepareRaw).filter((c): c is ReelClip => !!c);
+    const pickedFiles = new Set(picked.map(c => c.videoFile));
+    const spare = pool.filter(c => !pickedFiles.has(c.videoFile) && fs.existsSync(c.videoFile)).map(source => ({ source, clip: prepareRaw(reelClipFromSidecar(source)) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip);
+    const joined = joinStreaks([...picked, ...spare.map(x => x.clip)].filter(c => !c.external).map(clip => ({ clip, start: startOf(clip) })));
+    const byUid = new Map(joined.map(c => [c.uid, c]));
+    // Your picks, with the other clips of their streaks pulled in beside them.
+    const pickedUids = new Set(picked.map(c => c.uid));
+    const streakIds = new Set(joined.filter(c => pickedUids.has(c.uid) && c.streak).map(c => c.streak!.id));
+    project.clips = keepStreaksTogether([
+      ...picked.map(c => (c.external ? c : byUid.get(c.uid))).filter((c): c is ReelClip => !!c),
+      ...joined.filter(c => !pickedUids.has(c.uid) && c.streak && streakIds.has(c.streak.id)),
+    ]).filter(follows);
+    const joinedCount = project.clips.filter(c => c.streak).length;
+    if (joinedCount) notes.push(`Joined ${joinedCount} clips back into the multi-kills the clipper had split up.`);
+    const ready = spare.map(x => ({ source: x.source, clip: byUid.get(x.clip.uid) })).filter((x): x is { source: ClipSidecar; clip: ReelClip } => !!x.clip && !project.clips.some(c => c.uid === x.clip!.uid) && follows(x.clip!));
+    const ruled = broke.hero + broke.kills;
+    const dropped = Math.max(0, before - project.clips.length - ruled - broke.bots);
+    if (ruled) notes.push(`Took out ${ruled} clip${ruled === 1 ? '' : 's'} that broke your rules (${describeRules(project.clipRules!)}).`);
+    if (broke.bots) notes.push(`Left out ${broke.bots} clip${broke.bots === 1 ? '' : 's'} from games against bots. Say "include bot games" to use them.`);
+    if (feedNames.names.length) notes.push(`Kills are the feed rows that start with your name (${feedNames.names.join(', ')}).`);
+    if (!project.clips.length && ready.length) {
+      // Every pick had the scoreboard open: start from the best usable kill clip (with its streak) so fitting can fill the rest.
+      const first = ready[0].clip;
+      project.clips = first.streak ? ready.map(x => x.clip).filter(c => c.streak?.id === first.streak!.id) : [first];
     }
     if (dropped) notes.push(`Left out ${dropped} clip${dropped === 1 ? '' : 's'} with no kill of yours on screen, the scoreboard open, or you already dead.`);
-    const fit = fitToTarget(project, pool, analysisFor(project), ownOnly ? { maxAdd: 0 } : { prepare });
+    const fit = fitToTarget(project, pool, analysisFor(project), ownOnly ? { maxAdd: 0 } : { ready: ready.filter(x => !project.clips.some(c => c.uid === x.clip.uid)) });
     project = fit.project;
     const fitNote = describeFit(fit, target);
     if (fitNote) notes.push(fitNote.charAt(0).toUpperCase() + fitNote.slice(1));
@@ -549,6 +615,64 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     }
     if (fit.seconds < target - 3) notes.push(ownOnly ? `Your footage gives about ${Math.round(fit.seconds)} s of action; add another clip for a longer reel.` : project.clipRules ? `You only have enough clips that follow your rules (${describeRules(project.clipRules)}) for about ${Math.round(fit.seconds)} s, so the reel is shorter than ${target} s. It never pads with other clips.` : `You only have enough kill clips for about ${Math.round(fit.seconds)} s right now.`);
     if (project.clipRules?.heroes.length && allowed.unknown) notes.push(`${allowed.unknown} clip${allowed.unknown === 1 ? ' has' : 's have'} no hero saved and ${allowed.unknown === 1 ? 'was' : 'were'} skipped${ctx.ai ? ' (your AI couldn\'t tell who you were playing)' : '; sign in to Claude or ChatGPT so the Studio can check them'}.`);
+    // "the anime clip in the middle": a clip that plays mid-song in sync with the song (the song's own video
+    // when the sound came from one), with the gameplay before and after it.
+    if (intent.cutaway && project.music) {
+      const ff = await ffmpeg();
+      const track = music().get(project.music.trackId);
+      const an = analysisFor(project);
+      let cut = project.clips.find(c => c.external && c.videoFile === project.music!.file);
+      if (!cut && track) {
+        const info = await probeMedia(ff, track.file);
+        if (info.width && info.durationSec) {
+          const brk = an ? songBreak(an, 3) : undefined;
+          cut = externalClip({ id: newId(), kind: 'video', file: track.file, name: track.title, durationSec: info.durationSec, width: info.width, height: info.height, hasAudio: info.hasAudio });
+          cut.hits = [];
+          if (brk) {
+            cut.in = brk[0];
+            cut.out = Math.min(info.durationSec, brk[1]);
+          }
+        }
+      }
+      if (cut) {
+        cut.songSync = true;
+        // The song is this clip's own sound: the song keeps playing at full, the clip's copy is muted.
+        if (cut.videoFile === project.music.file) {
+          cut.muteGame = true;
+          delete cut.musicLevel;
+        }
+        delete cut.holdBeats;
+        // Gameplay before it fills the song up to the clip's moment; the rest comes after.
+        const game = project.clips.filter(c => c !== cut);
+        let k = 0;
+        for (let i = 1; i <= game.length; i++) {
+          const before = reelSeconds({ ...project, clips: game.slice(0, i), music: project.music.start === 'auto' ? { ...project.music, start: 0 } : project.music }, an);
+          const startAt = typeof project.music.start === 'number' ? project.music.start : 0;
+          if (before > cut.in - startAt + 0.3) break;
+          k = i;
+        }
+        if (k === 0 && game.length) k = Math.ceil(game.length / 2);
+        project.clips = [...game.slice(0, k), cut, ...game.slice(k)];
+        notes.push(`The ${cut.videoFile === project.music.file ? "song's own video" : 'clip'} plays from ${cut.in.toFixed(1)} s to ${cut.out.toFixed(1)} s of the song, in sync with it, between the gameplay.`);
+      } else notes.push('Add the video you want in the middle (or use a song that came from a video) and make the reel again.');
+    }
+    // Your own clips (a hook, a cutaway) are split at their scene cuts: each shot gets its own crop and pictures.
+    {
+      const ff = await ffmpeg();
+      const ext = project.clips.filter(c => c.external && !c.shotOf && c.songSync);
+      let split = 0;
+      for (const c of ext) {
+        const cuts = await sceneCuts(ff, c.videoFile, c.in, c.out, signal);
+        const r = splitIntoShots(c, cuts, project.overlays ?? [], newId);
+        if (r.clips.length < 2) continue;
+        const at = project.clips.indexOf(c);
+        project.clips.splice(at, 1, ...r.clips);
+        project.overlays = r.overlays;
+        split += r.clips.length;
+      }
+      if (split) notes.push(`Split your clip into ${split} shots at its scene cuts, each with its own crop and face pictures.`);
+    }
+    const targets = faceTargets(request);
     const faces = (project.overlays ?? []).filter(o => o.anchor === 'face' && !o.track?.length);
     if (faces.length && ctx.ai) {
       const ff = await ffmpeg();
@@ -565,19 +689,33 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
         if (to - from < 0.1) continue;
         const key = [clip.videoFile, ov.image, from, to].join('|');
         try {
-          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, { ...ov, from, to }, request.slice(0, 400), signal));
+          // Who this picture goes on ("magik icon on maki"), so each picture finds its own person.
+          // A picture whose file name doesn't say who it is ("download.png") takes the next unclaimed name, in prompt order.
+          const all = project.overlays ?? [];
+          const freeTargets = targets.filter(t => !all.some(o => targetFor(o.image, targets) === t.who));
+          const freeImages = [...new Set(all.filter(o => !targetFor(o.image, targets)).map(o => o.image))];
+          const who = targetFor(ov.image, targets) ?? freeTargets[freeImages.indexOf(ov.image)]?.who;
+          const what = who ? `${who}'s face (the person called ${who}). ${request.slice(0, 300)}` : request.slice(0, 400);
+          if (!found.has(key)) found.set(key, await locateFace(ff, ctx.ai, clip, { ...ov, from, to }, what, signal, !!clip.shotOf));
           ov.track = found.get(key);
           ok++;
         } catch (error) {
           failed = (error as Error).message;
         }
       }
+      // A shot where that person isn't on screen drops the picture; the crop of each shot follows its faces.
+      project.overlays = (project.overlays ?? []).filter(o => !(o.track && !o.track.length));
+      for (const c of project.clips) {
+        if (!c.shotOf) continue;
+        const x = shotCropX(project.overlays, c.uid);
+        if (x !== undefined) c.cropX = x;
+      }
       if (ok) notes.push('Found the face for your picture overlay.');
       if (failed) notes.push(`Couldn't find the face for your picture (${failed}); it sits where the AI first placed it.`);
     }
     // A hook clip before the gameplay (Ferris's style): its own sound levelled up, the song a quiet bed under it,
     // and its last frame held for a beat so the line finishes before the montage hits.
-    const hookClip = project.clips[0]?.external && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
+    const hookClip = project.clips[0]?.external && !project.clips[0].songSync && project.clips.some(c => !c.external) ? project.clips[0] : undefined;
     if (hookClip && project.music) {
       hookClip.musicLevel ??= HOOK.musicLevel;
       hookClip.normalize ??= true;
