@@ -59,9 +59,12 @@ test('judging onsets keeps kills, turns death rows into deaths and drops rows th
 });
 
 test('the row for an onset is the one entering the top slot', () => {
-  const rows = [{ slot: 1, from: 2.25 }, { slot: 0, from: 2.25 }, { slot: 0, from: 6 }];
-  assert.equal(rowAtOnset(rows, 2.125), rows[1]);
-  assert.equal(rowAtOnset(rows, 4), undefined);
+  const rows = [{ slot: 1, from: 2.25, to: 5 }, { slot: 0, from: 2.25, to: 3.5 }, { slot: 0, from: 6, to: 8 }];
+  assert.deepEqual(rowAtOnset(rows, 2.125), { slot: 0, from: 2.25, to: 3.5 });
+  assert.equal(rowAtOnset(rows, 4.5), undefined);
+  // A kill then your death: the top slot stays white as one span, so the death is read from its own onset.
+  const back = [{ slot: 0, from: 2.25, to: 9 }, { slot: 1, from: 6.75, to: 9 }];
+  assert.deepEqual(rowAtOnset(back, 6.625), { slot: 0, from: 6.75, to: 9 });
 });
 
 test('your names are learned from the rows when the setting is empty', () => {
@@ -93,8 +96,8 @@ test('a multi-kill split over two clips is joined back up and counts as a streak
   const out = joinStreaks([{ clip: a, start: 1000 }, { clip: b, start: 1006 }, { clip: lone, start: 1540 }]);
   assert.equal(out.length, 3);
   const [x, y, z] = out;
-  assert.deepEqual(x.streak, { id: '13-41-02', kills: 3 });
-  assert.deepEqual(y.streak, { id: '13-41-02', kills: 3 });
+  assert.deepEqual(x.streak, { id: '13-41-02', kills: 3, part: 0 });
+  assert.deepEqual(y.streak, { id: '13-41-02', kills: 3, part: 1 });
   assert.equal(z.streak, undefined);
   // The second clip picks up where the first stops, without replaying footage.
   assert.ok(1006 + y.in >= 1000 + x.out - 1e-6, 'no footage twice');
@@ -265,4 +268,13 @@ test('a cutaway far past the gameplay is not reached with a long freeze', () => 
   const holds = tl.segments.filter((s) => s.kind === 'hold').reduce((sum, s) => sum + s.out[1] - s.out[0], 0);
   assert.ok(holds < 1.5, `held ${holds} s`);
   assert.ok(tl.musicStart > 30, `song starts at ${tl.musicStart}`);
+});
+
+test('a streak plays in the order it happened, whichever clip was picked first', () => {
+  const a = clip('early', [2], 10, 6);
+  const b = clip('late', [2], 50, 8);
+  const joined = joinStreaks([{ clip: a, start: 1000 }, { clip: b, start: 1005 }]);
+  const [ja, jb] = joined;
+  assert.deepEqual([ja.streak?.part, jb.streak?.part], [0, 1]);
+  assert.deepEqual(keepStreaksTogether([jb, clip('x', [2]), ja]).map((c) => c.uid), ['early', 'late', 'x']);
 });

@@ -722,7 +722,7 @@ export function orderClips(clips: ReelClip[], order: 'manual' | 'build-up'): Ree
   const out: ReelClip[] = [];
   for (const c of sorted) {
     if (out.includes(c)) continue;
-    out.push(...(c.streak ? clips.filter((x) => x.streak?.id === c.streak!.id) : [c]));
+    out.push(...(c.streak ? clips.filter((x) => x.streak?.id === c.streak!.id).sort((a, b) => (a.streak!.part ?? 0) - (b.streak!.part ?? 0)) : [c]));
   }
   return out;
 }

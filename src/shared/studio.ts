@@ -229,7 +229,7 @@ export interface ReelClip {
   /** Trimmed by hand on the timeline: the edit uses the clip from `in` to `out` (speeds still flex a little to keep the beat). */
   manualTrim?: boolean;
   /** Part of a multi-kill the clipper split across clips: the clips of one streak play back to back. kills = the whole streak's. */
-  streak?: { id: string; kills: number };
+  streak?: { id: string; kills: number; part?: number };
   /** A game against AI bots (victims named "THOR-Normal"). Left out of reels unless you ask for them. */
   bots?: boolean;
   /**

@@ -69,7 +69,7 @@ export function joinStreaks(items: TimedClip[], gap = STREAK_GAP): ReelClip[] {
     }
     const total = seen.length;
     const id = run[0]?.uid;
-    for (const c of run) c.streak = { id, kills: total };
+    run.forEach((c, part) => (c.streak = { id, kills: total, part }));
     if (run.length === 1) delete run[0].streak;
     joined.set(g[0].clip, run);
     for (const t of g.slice(1)) joined.set(t.clip, []);
@@ -88,11 +88,16 @@ export function keepStreaksTogether(clips: ReelClip[]): ReelClip[] {
   const placed = new Set<ReelClip>();
   for (const c of clips) {
     if (placed.has(c)) continue;
-    const members = c.streak ? clips.filter((x) => x.streak?.id === c.streak!.id) : [c];
+    const members = c.streak ? streakMembers(clips, c.streak.id) : [c];
     for (const m of members) {
       placed.add(m);
       out.push(m);
     }
   }
   return out;
+}
+
+/** The clips of one streak, in the order they happened (whatever order the list has them in). */
+export function streakMembers<T extends { streak?: { id: string; part?: number } }>(clips: T[], id: string): T[] {
+  return clips.filter((x) => x.streak?.id === id).sort((a, b) => (a.streak!.part ?? 0) - (b.streak!.part ?? 0));
 }

@@ -575,6 +575,7 @@ export function registerStudio(ctx: StudioContext): () => Promise<void> {
     // Your picks, with the other clips of their streaks pulled in beside them.
     const pickedUids = new Set(picked.map(c => c.uid));
     const streakIds = new Set(joined.filter(c => pickedUids.has(c.uid) && c.streak).map(c => c.streak!.id));
+    // keepStreaksTogether puts each streak's clips in the order they happened, wherever its first pick sits.
     project.clips = keepStreaksTogether([
       ...picked.map(c => (c.external ? c : byUid.get(c.uid))).filter((c): c is ReelClip => !!c),
       ...joined.filter(c => !pickedUids.has(c.uid) && c.streak && streakIds.has(c.streak.id)),

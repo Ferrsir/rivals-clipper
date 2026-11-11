@@ -244,10 +244,17 @@ export interface OnsetRead {
   names: RowNames;
 }
 
-/** The row that entered the feed at an onset: the top slot first (new rows enter there). */
-export function rowAtOnset<T extends { slot: number; from: number }>(rows: T[], onset: number): T | undefined {
-  const near = rows.filter((r) => Math.abs(r.from - (onset + 0.125)) <= 0.3);
-  return near.find((r) => r.slot === 0) ?? near[0];
+/**
+ * The row that entered the feed at an onset, as a span to read from: the top slot at that moment (new rows
+ * enter there). When your rows follow each other, the top slot is one continuous span in ownRows, so the
+ * new row is read from the onset, not from where that span began (the earlier row).
+ */
+export function rowAtOnset<T extends { slot: number; from: number; to: number }>(rows: T[], onset: number): { slot: number; from: number; to: number } | undefined {
+  const at = onset + 0.125;
+  const top = rows.find((r) => r.slot === 0 && r.from <= at + 0.3 && r.to >= at + 0.2);
+  if (top) return { slot: 0, from: Math.max(top.from, at), to: top.to };
+  const near = rows.find((r) => Math.abs(r.from - at) <= 0.3);
+  return near ? { slot: near.slot, from: near.from, to: near.to } : undefined;
 }
 
 /**

@@ -86,7 +86,7 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
       if (added.length >= maxAdd || seconds >= target - under) break;
       if (taken.has(clip.uid)) continue;
       // A multi-kill split over clips goes in whole, its clips back to back.
-      const group = clip.streak ? ready.filter((x) => x.clip.streak?.id === clip.streak!.id) : [{ source, clip }];
+      const group = clip.streak ? ready.filter((x) => x.clip.streak?.id === clip.streak!.id).sort((a, b) => (a.clip.streak!.part ?? 0) - (b.clip.streak!.part ?? 0)) : [{ source, clip }];
       // Keep the closing clip (the best play, on the drop) last.
       const clips = [...p.clips];
       clips.splice(Math.max(0, clips.length - 1), 0, ...group.map((x) => x.clip));
@@ -118,11 +118,12 @@ export function fitToTarget(project: ReelProject, library: ClipSidecar[], analys
 
   for (let guard = 0; seconds > target + over && p.clips.length > 1 && guard < 40; guard++) {
     const last = p.clips[p.clips.length - 1];
-    const candidates = p.clips.filter((c) => c !== last && !c.external);
+    // The closing clip, and every clip of its streak, stay.
+    const candidates = p.clips.filter((c) => c !== last && !c.external && !(last.streak && c.streak?.id === last.streak.id));
     if (!candidates.length) break;
     const weakest = candidates.reduce((a, b) => (b.score < a.score ? b : a));
     // A streak comes out whole, or not at all.
-    p = { ...p, clips: p.clips.filter((c) => c !== weakest && !(weakest.streak && c.streak?.id === weakest.streak.id && c !== last)) };
+    p = { ...p, clips: p.clips.filter((c) => c !== weakest && !(weakest.streak && c.streak?.id === weakest.streak.id)) };
     seconds = duration(p, analysis);
     removed.push(weakest.clipId);
   }
