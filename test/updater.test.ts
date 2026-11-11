@@ -129,6 +129,7 @@ test('while recording, the install waits and runs once the game closes', async (
   t.busy.gameRunning = false;
   t.u.idle();
   assert.equal(t.spawned.length, 1);
+  await new Promise((r) => setImmediate(r));
   assert.equal(t.quits(), 1);
 });
 
@@ -153,6 +154,8 @@ test('an install waiting on the game runs when the app closes instead of being l
   const t = setup({ rel: release('0.3.0'), busy: { gameRunning: true, clipping: false } });
   assert.equal((await t.u.install()).phase, 'waiting');
   assert.equal(t.spawned.length, 0);
+  // The flag that held it was stale (or the game closed first): the app closing installs it.
+  t.busy.gameRunning = false;
   assert.equal(t.u.onQuit(), true);
   assert.equal(t.spawned.length, 1);
   assert.equal(t.quits(), 0, 'already quitting: does not ask to quit again');
@@ -168,15 +171,53 @@ test('"Install now anyway" skips the wait when the app wrongly thinks the game i
   assert.equal((await t.u.install(true)).phase, 'installing');
   assert.equal(t.spawned.length, 1);
   assert.equal(t.quits(), 1);
+  // The app then closes: the install that was queued must not start a second time.
+  assert.equal(t.u.onQuit(), false);
+  t.busy.gameRunning = false;
+  t.u.idle();
+  assert.equal(t.spawned.length, 1);
+});
+
+test('"Install now anyway" still waits for a clip that is being saved', async () => {
+  const t = setup({ rel: release('0.3.0'), busy: { gameRunning: true, clipping: true } });
+  assert.equal((await t.u.install(true)).phase, 'waiting');
+  assert.equal(t.spawned.length, 0);
+});
+
+test('closing the app during a Windows shutdown or mid-game keeps the update for later', async () => {
+  const t = setup({ rel: release('0.3.0'), busy: { gameRunning: false, clipping: true } });
+  assert.equal((await t.u.install()).phase, 'waiting');
+  t.busy.clipping = false;
+  assert.equal(t.u.onQuit({ sessionEnding: true }), false);
+  t.busy.gameRunning = true;
+  assert.equal(t.u.onQuit(), false);
+  t.busy.gameRunning = false;
+  assert.equal(t.u.onQuit(), true);
+  assert.equal(t.spawned.length, 1);
+});
+
+test('the app does not quit when the installer could not be started', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rc-update-'));
+  let quits = 0;
+  const u = new Updater({
+    currentVersion: '0.2.9', downloadDir: dir, installDir: 'F:\\App', libraryFolder: () => 'F:\\RivalsClips',
+    busy: () => ({ gameRunning: false, clipping: false }), quit: () => { quits++; }, onChange: () => {}, pid: 1, platform: 'win32', packaged: true,
+    fetch: fakeFetch(release('0.3.0')) as never, spawn: async () => { throw new Error('spawn powershell.exe ENOENT'); },
+  });
+  const s = await u.install();
+  assert.equal(s.phase, 'error');
+  assert.match(s.message!, /ENOENT/);
+  assert.equal(quits, 0);
 });
 
 test('a newer release replaces a queued install instead of leaving it stuck', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rc-update-'));
   let rel = release('0.3.0');
   const lines: string[] = [];
+  const busy = { gameRunning: true, clipping: false };
   const u = new Updater({
     currentVersion: '0.2.9', downloadDir: dir, installDir: 'F:\\App', libraryFolder: () => 'F:\\RivalsClips',
-    busy: () => ({ gameRunning: true, clipping: false }), quit: () => {}, onChange: () => {}, pid: 1, platform: 'win32', packaged: true,
+    busy: () => busy, quit: () => {}, onChange: () => {}, pid: 1, platform: 'win32', packaged: true,
     fetch: (async (url: string) => fakeFetch(rel)(url)) as never, spawn: () => {}, log: (l) => lines.push(l),
   });
   assert.equal((await u.install()).phase, 'waiting');
@@ -184,9 +225,13 @@ test('a newer release replaces a queued install instead of leaving it stuck', as
   const s = await u.check();
   assert.equal(s.phase, 'available');
   assert.equal(s.latest, '0.3.1');
+  busy.gameRunning = false;
   assert.equal(u.onQuit(), false, 'the old queued install is dropped');
+  busy.gameRunning = true;
   assert.equal((await u.install()).phase, 'waiting');
+  busy.gameRunning = false;
   assert.ok(u.onQuit());
+  await new Promise((r) => setImmediate(r));
   assert.ok(lines.some((l) => l.startsWith('waiting 0.3.1')), lines.join('\n'));
   assert.ok(lines.some((l) => l.startsWith('started installer')));
 });

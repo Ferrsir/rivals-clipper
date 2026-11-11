@@ -120,6 +120,8 @@ export const ai = createAiClient(() => settings.aiProvider);
 /** Clip Library index. The Studio can call library.query({...}) for ranked, filtered clips. */
 export const library = new Library(() => paths(settings.rootFolder).clips);
 /** Check for updates / Update: pulls the latest GitHub release and installs it once nothing is recording. */
+/** Windows is logging off or shutting down: a queued update must not start an installer now. */
+let sessionEnding = false;
 const updater = new Updater({
   currentVersion: app.getVersion(),
   downloadDir: path.join(app.getPath('temp'), 'rivals-clipper-update'),
@@ -129,13 +131,8 @@ const updater = new Updater({
   // retry or a start races the game closing, and an update then waits forever.
   busy: () => ({ gameRunning: gameRunning && (engine !== 'local' || !!gameWatcher.game), clipping: !!pending || clipChecks.size > 0 }),
   quit: () => app.quit(),
-  log: (line) => {
-    try {
-      fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'), `${new Date().toISOString()} ${line}\n`);
-    } catch {
-      /* best effort */
-    }
-  },
+  // Into the app's event log (in the library's logs folder), with everything else worth diagnosing.
+  log: (line) => log?.write('update', { line }),
   onChange: (s) => sendIfOpen(win, 'update-status', s),
   packaged: app.isPackaged,
 });
@@ -727,6 +724,8 @@ function createWindow() {
   });
   void win.loadFile(path.join(__dirname, '../../renderer/index.html'));
   win.once('closed', () => { win = undefined; });
+  // Windows only: logoff or shutdown is closing the app.
+  win.on('session-end', () => { sessionEnding = true; });
 }
 
 function setupIpc() {
@@ -883,6 +882,8 @@ app.whenReady().then(() => {
   // Look for a new version shortly after start and every 6 hours. Only checks: installing is your call.
   setTimeout(() => void updater.check(), 15_000);
   setInterval(() => void updater.check(), 6 * 60 * 60_000).unref();
+  // A queued update also re-checks now and then, in case the moment the game closed was missed.
+  setInterval(() => updater.idle(), 30_000).unref();
 });
 
 installGracefulShutdown(app, async () => {
@@ -900,7 +901,7 @@ installGracefulShutdown(app, async () => {
   await Promise.race([Promise.allSettled([...clipChecks]), new Promise((r) => setTimeout(r, 15_000))]);
   for (const result of results) if (result.status === 'rejected') log?.write('shutdown-error', String(result.reason));
   // An update that was waiting for the game or a clip installs now that everything has stopped.
-  updater.onQuit();
+  updater.onQuit({ sessionEnding });
   log?.flushSync();
 }, error => {
   log?.write('shutdown-error', String(error));
